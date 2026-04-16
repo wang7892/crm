@@ -4,9 +4,8 @@ on:
   push:
     branches: [ master, main ]
   schedule:
-    # 每天北京时间10点自动同步
     - cron: '0 2 * * *'
-  workflow_dispatch: # 允许手动点击运行
+  workflow_dispatch:
 
 jobs:
   mirror:
@@ -21,3 +20,8 @@ jobs:
           static_list: "CordysCRM"
           force_update: true
           debug: true
+          # 【关键修复1】强制全程使用HTTPS，绝对不用SSH
+          clone_style: https
+          # 【关键修复2】明确告诉Action：源和目标都是组织账号，不是个人
+          src_account_type: org
+          dst_account_type: org
