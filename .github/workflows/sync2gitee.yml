@@ -1,15 +1,23 @@
-name: Synchronize to Gitee
-on: [push]
+name: Mirror GitHub to Gitee
+
+on:
+  push:
+    branches: [ master, main ]
+  schedule:
+    # 每天北京时间10点自动同步
+    - cron: '0 2 * * *'
+  workflow_dispatch: # 允许手动点击运行
+
 jobs:
-  repo-sync:
+  mirror:
     runs-on: ubuntu-latest
     steps:
-      - name: Mirror the Github organization repos to Gitee.
+      - name: Mirror the Github repos to Gitee
         uses: Yikun/hub-mirror-action@master
         with:
-          src: 'github/1Panel-dev'
-          dst: 'gitee/fit2cloud-feizhiyun'
-          dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
-          dst_token:  ${{ secrets.GITEE_TOKEN }}
+          src: github/1Panel-dev
+          dst: gitee/fit2cloud-feizhiyun
+          dst_token: ${{ secrets.GITEE_TOKEN }}
           static_list: "CordysCRM"
           force_update: true
+          debug: true
