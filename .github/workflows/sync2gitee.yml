@@ -1,27 +1,16 @@
-name: Mirror GitHub to Gitee
-
-on:
-  push:
-    branches: [ master, main ]
-  schedule:
-    - cron: '0 2 * * *'
-  workflow_dispatch:
-
+name: Synchronize to Gitee
+on: [push]
 jobs:
-  mirror:
+  repo-sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Mirror the Github repos to Gitee
+      - name: Mirror the Github organization repos to Gitee.
         uses: Yikun/hub-mirror-action@master
         with:
-          src: github/1Panel-dev
-          dst: gitee/fit2cloud-feizhiyun
-          dst_token: ${{ secrets.GITEE_TOKEN }}
+          src: 'github/1Panel-dev'
+          dst: 'gitee/fit2cloud-feizhiyun'
+          dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
+          dst_token:  ${{ secrets.GITEE_TOKEN }}
           static_list: "CordysCRM"
           force_update: true
-          debug: true
-          # 【关键修复1】强制全程使用HTTPS，绝对不用SSH
-          clone_style: https
-          # 【关键修复2】明确告诉Action：源和目标都是组织账号，不是个人
-          src_account_type: org
-          dst_account_type: org
+
