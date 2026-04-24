@@ -26,6 +26,7 @@ import cn.cordys.crm.clue.domain.Clue;
 import cn.cordys.crm.customer.domain.Customer;
 import cn.cordys.crm.follow.constants.FollowUpPlanType;
 import cn.cordys.crm.follow.domain.FollowUpRecord;
+import cn.cordys.crm.follow.dto.AttachmentUrlMapping;
 import cn.cordys.crm.follow.dto.CustomerDataDTO;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordAddRequest;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordPageRequest;
@@ -34,6 +35,8 @@ import cn.cordys.crm.follow.dto.request.RecordHomePageRequest;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordDetailResponse;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordListResponse;
 import cn.cordys.crm.follow.mapper.ExtFollowUpRecordMapper;
+import cn.cordys.crm.integration.webhook.domain.EmailWebhookAttachment;
+import cn.cordys.crm.integration.webhook.domain.EmailWebhookEvent;
 import cn.cordys.crm.opportunity.domain.Opportunity;
 import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
 import cn.cordys.crm.system.dto.response.UserResponse;
@@ -44,6 +47,7 @@ import cn.cordys.mybatis.lambda.LambdaQueryWrapper;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Strings;
@@ -54,9 +58,11 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service
+@Slf4j
 @Transactional(rollbackFor = Exception.class)
 public class FollowUpRecordService extends BaseFollowUpService {
     @Resource
@@ -79,6 +85,10 @@ public class FollowUpRecordService extends BaseFollowUpService {
     private ModuleFormService moduleFormService;
     @Resource
     private PermissionCache permissionCache;
+    @Resource
+    private BaseMapper<EmailWebhookEvent> emailWebhookEventMapper;
+    @Resource
+    private BaseMapper<EmailWebhookAttachment> emailWebhookAttachmentMapper;
 
     /**
      * 添加跟进记录
@@ -242,8 +252,12 @@ public class FollowUpRecordService extends BaseFollowUpService {
     }
 
     private void buildListData(List<FollowUpRecordListResponse> list, String orgId) {
+        if (CollectionUtils.isEmpty(list)) {
+            return;
+        }
         List<String> ids = list.stream().map(FollowUpRecordListResponse::getId).toList();
         Map<String, List<BaseModuleFieldValue>> recordCustomFieldMap = followUpRecordFieldService.getResourceFieldMap(ids, true);
+        Map<String, List<String>> attachmentUrlMap = buildAttachmentUrlsMapByFollowRecordIds(ids, orgId);
 
         List<String> createUserIds = list.stream().map(FollowUpRecordListResponse::getCreateUser).toList();
         List<String> updateUserIds = list.stream().map(FollowUpRecordListResponse::getUpdateUser).toList();
@@ -283,6 +297,10 @@ public class FollowUpRecordService extends BaseFollowUpService {
             recordListResponse.setClueName(clueMap.get(recordListResponse.getClueId()));
             recordListResponse.setPhone(contactPhoneMap.get(recordListResponse.getContactId()));
             recordListResponse.setResourceType(recordListResponse.getType());
+            recordListResponse.setAttachmentUrls(attachmentUrlMap.getOrDefault(recordListResponse.getId(), List.of()));
+            log.info("follow record attachment mapping, recordId={}, attachmentCount={}",
+                    recordListResponse.getId(),
+                    recordListResponse.getAttachmentUrls() == null ? 0 : recordListResponse.getAttachmentUrls().size());
 
             UserResponse userResponse = userDeptMap.get(recordListResponse.getOwner());
             if (userResponse != null) {
@@ -290,6 +308,73 @@ public class FollowUpRecordService extends BaseFollowUpService {
                 recordListResponse.setDepartmentName(userResponse.getDepartmentName());
             }
         });
+    }
+
+    private Map<String, List<String>> buildAttachmentUrlsMapByFollowRecordIds(List<String> followRecordIds, String orgId) {
+        if (CollectionUtils.isEmpty(followRecordIds)) {
+            return Map.of();
+        }
+        List<AttachmentUrlMapping> mappings = extFollowUpRecordMapper.selectAttachmentUrlsByFollowRecordIds(followRecordIds);
+        if (CollectionUtils.isEmpty(mappings)) {
+            return buildAttachmentUrlsMapByFollowRecordIdsFallback(followRecordIds);
+        }
+        return toAttachmentMap(mappings);
+    }
+
+    private Map<String, List<String>> buildAttachmentUrlsMapByFollowRecordIdsFallback(List<String> followRecordIds) {
+        LambdaQueryWrapper<EmailWebhookEvent> eventQw = new LambdaQueryWrapper<>();
+        eventQw.in(EmailWebhookEvent::getFollowRecordId, followRecordIds);
+        List<EmailWebhookEvent> events = emailWebhookEventMapper.selectListByLambda(eventQw);
+        if (CollectionUtils.isEmpty(events)) {
+            return Map.of();
+        }
+        List<String> eventIds = events.stream()
+                .map(EmailWebhookEvent::getId)
+                .filter(StringUtils::isNotBlank)
+                .distinct()
+                .toList();
+        if (CollectionUtils.isEmpty(eventIds)) {
+            return Map.of();
+        }
+
+        LambdaQueryWrapper<EmailWebhookAttachment> attQw = new LambdaQueryWrapper<>();
+        attQw.in(EmailWebhookAttachment::getEventId, eventIds);
+        List<EmailWebhookAttachment> attachments = emailWebhookAttachmentMapper.selectListByLambda(attQw);
+        if (CollectionUtils.isEmpty(attachments)) {
+            return Map.of();
+        }
+
+        Map<String, List<String>> urlsByEventId = attachments.stream()
+                .filter(a -> StringUtils.isNotBlank(a.getEventId()) && StringUtils.isNotBlank(a.getDownloadUrl()))
+                .collect(Collectors.groupingBy(
+                        EmailWebhookAttachment::getEventId,
+                        Collectors.mapping(a -> a.getDownloadUrl().trim(),
+                                Collectors.collectingAndThen(Collectors.toList(), urls -> urls.stream().distinct().toList()))
+                ));
+
+        List<AttachmentUrlMapping> mappings = events.stream()
+                .filter(e -> StringUtils.isNotBlank(e.getFollowRecordId()) && StringUtils.isNotBlank(e.getId()))
+                .flatMap(e -> urlsByEventId.getOrDefault(e.getId(), List.of()).stream().map(url -> {
+                    AttachmentUrlMapping m = new AttachmentUrlMapping();
+                    m.setFollowRecordId(e.getFollowRecordId());
+                    m.setDownloadUrl(url);
+                    return m;
+                }))
+                .toList();
+        return toAttachmentMap(mappings);
+    }
+
+    private Map<String, List<String>> toAttachmentMap(List<AttachmentUrlMapping> mappings) {
+        if (CollectionUtils.isEmpty(mappings)) {
+            return Map.of();
+        }
+        return mappings.stream()
+                .filter(m -> StringUtils.isNotBlank(m.getFollowRecordId()) && StringUtils.isNotBlank(m.getDownloadUrl()))
+                .collect(Collectors.groupingBy(
+                        AttachmentUrlMapping::getFollowRecordId,
+                        Collectors.mapping(m -> m.getDownloadUrl().trim(),
+                                Collectors.collectingAndThen(Collectors.toList(), urls -> urls.stream().distinct().toList()))
+                ));
     }
 
 

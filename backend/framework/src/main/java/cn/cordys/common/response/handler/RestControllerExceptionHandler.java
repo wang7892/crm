@@ -150,10 +150,19 @@ public class RestControllerExceptionHandler {
                         e.getMessage(), getStackTraceAsString(e)));
     }
 
-    @ExceptionHandler({NoResourceFoundException.class, UnavailableSecurityManagerException.class})
-    public ResponseEntity<ResultHolder> handleNoResourceFoundException(NoResourceFoundException e) {
-        log.error("No static resource");
-        return null;
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ResultHolder> handleNoResourceFoundException(HttpServletRequest request, NoResourceFoundException e) {
+        String requestURI = request == null ? "" : request.getRequestURI();
+        log.error("No static resource, uri={}", requestURI);
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ResultHolder.error(HttpStatus.NOT_FOUND.value(), "NOT_FOUND", requestURI));
+    }
+
+    @ExceptionHandler(UnavailableSecurityManagerException.class)
+    public ResponseEntity<ResultHolder> handleUnavailableSecurityManagerException(UnavailableSecurityManagerException e) {
+        log.error("Security manager unavailable", e);
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ResultHolder.error(HttpStatus.UNAUTHORIZED.value(), "UNAUTHORIZED", e.getMessage()));
     }
 
     /**

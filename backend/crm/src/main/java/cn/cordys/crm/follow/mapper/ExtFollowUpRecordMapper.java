@@ -3,6 +3,7 @@ package cn.cordys.crm.follow.mapper;
 import cn.cordys.common.dto.DeptDataPermissionDTO;
 import cn.cordys.crm.customer.dto.request.CustomerMergeRequest;
 import cn.cordys.crm.follow.domain.FollowUpRecord;
+import cn.cordys.crm.follow.dto.AttachmentUrlMapping;
 import cn.cordys.crm.follow.dto.CustomerDataDTO;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordPageRequest;
 import cn.cordys.crm.follow.dto.request.RecordHomePageRequest;
@@ -54,5 +55,7 @@ public interface ExtFollowUpRecordMapper {
      * @return 记录列表
      */
     List<FollowUpRecord> getMergeRecordList(@Param("request") CustomerMergeRequest request, @Param("orgId") String orgId);
+
+    List<AttachmentUrlMapping> selectAttachmentUrlsByFollowRecordIds(@Param("followRecordIds") List<String> followRecordIds);
 
 }

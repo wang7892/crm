@@ -92,4 +92,7 @@ public class FollowUpRecordListResponse {
 
     @Schema(description = "自定义字段集合")
     private List<BaseModuleFieldValue> moduleFields;
+
+    @Schema(description = "邮件附件下载链接列表")
+    private List<String> attachmentUrls;
 }

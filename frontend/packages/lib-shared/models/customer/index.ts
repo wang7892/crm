@@ -97,6 +97,7 @@ export interface CustomerFollowRecordListItem {
   departmentName: string;
   poolId: string;
   moduleFields: ModuleField[];
+  attachmentUrls?: string[];
 }
 
 export interface SaveCustomerFollowPlanParams extends SaveCustomerFollowRecordParams {

@@ -1,15 +1,19 @@
 package cn.cordys.security;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 用于管理应用程序中过滤器链的工具类。
  * 包含加载基础过滤器链和忽略 CSRF 过滤器链的方法。
  */
 public final class ShiroFilter {
-    private static final Map<String, String> FILTER_CHAIN_DEFINITION_MAP = new ConcurrentHashMap<>();
+    /**
+     * IMPORTANT: Filter chain ordering matters in Shiro.
+     * Use LinkedHashMap to keep deterministic matching precedence.
+     */
+    private static final Map<String, String> FILTER_CHAIN_DEFINITION_MAP = new LinkedHashMap<>();
 
     // 私有构造函数防止实例化
     private ShiroFilter() {
@@ -23,7 +27,10 @@ public final class ShiroFilter {
      * @param rule 过滤规则
      */
     public static void putFilter(String url, String rule) {
-        if (url != null && rule != null) {
+        if (url == null || rule == null) {
+            return;
+        }
+        synchronized (FILTER_CHAIN_DEFINITION_MAP) {
             FILTER_CHAIN_DEFINITION_MAP.put(url, rule);
         }
     }
@@ -35,16 +42,20 @@ public final class ShiroFilter {
      * @return 返回一个不可变Map，包含过滤器链定义，键是 URL 模式，值是关联的过滤规则。
      */
     public static Map<String, String> loadBaseFilterChain() {
-        // 静态资源路径
-        addStaticResourceFilters();
+        synchronized (FILTER_CHAIN_DEFINITION_MAP) {
+            FILTER_CHAIN_DEFINITION_MAP.clear();
 
-        // 认证相关路径
-        addAuthenticationFilters();
+            // 静态资源路径
+            addStaticResourceFilters();
 
-        // 其他公共路径
-        addPublicPathFilters();
+            // 认证相关路径
+            addAuthenticationFilters();
 
-        return Collections.unmodifiableMap(FILTER_CHAIN_DEFINITION_MAP);
+            // 其他公共路径
+            addPublicPathFilters();
+
+            return Collections.unmodifiableMap(new LinkedHashMap<>(FILTER_CHAIN_DEFINITION_MAP));
+        }
     }
 
     /**
@@ -77,6 +88,9 @@ public final class ShiroFilter {
         FILTER_CHAIN_DEFINITION_MAP.put("/get-key", "anon");
         FILTER_CHAIN_DEFINITION_MAP.put("/403", "anon");
         FILTER_CHAIN_DEFINITION_MAP.put("/sso/callback/**", "anon");
+        // Swagger / OpenAPI docs should be accessible for debugging and tooling.
+        FILTER_CHAIN_DEFINITION_MAP.put("/v3/api-docs/**", "anon");
+        FILTER_CHAIN_DEFINITION_MAP.put("/swagger-ui/**", "anon");
     }
 
     /**
@@ -107,6 +121,12 @@ public final class ShiroFilter {
      * @return 返回一个不可变Map，包含应绕过 CSRF 检查的 URL 路径的过滤器链定义。
      */
     public static Map<String, String> ignoreCsrfFilter() {
-        return Map.of("/", "apikey, authc", "/language", "apikey, authc", "/mock", "apikey, authc");
+        return Map.of(
+                "/", "apikey, authc",
+                "/language", "apikey, authc",
+                "/mock", "apikey, authc",
+                // Webhook endpoints should not require CSRF tokens.
+                "/api/webhook/**", "apikey, authc"
+        );
     }
 }

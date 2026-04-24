@@ -7,6 +7,7 @@
     <!-- Console 输出 -->
     <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
+            <charset>UTF-8</charset>
             <pattern>%d %5p %40.40c:%4L - %m%n</pattern>
         </encoder>
     </appender>

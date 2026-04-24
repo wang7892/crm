@@ -10,6 +10,7 @@ import org.apache.shiro.SecurityUtils;
 import org.apache.shiro.authc.UsernamePasswordToken;
 import org.apache.shiro.web.filter.authc.AnonymousFilter;
 import org.apache.shiro.web.util.WebUtils;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 自定义过滤器，用于处理 Web 应用中的 API 密钥认证。
@@ -33,9 +34,28 @@ public class ApiKeyFilter extends AnonymousFilter {
     @Override
     protected boolean onPreHandle(ServletRequest request, ServletResponse response, Object mappedValue) {
         HttpServletRequest httpRequest = WebUtils.toHttp(request);
+        HttpServletResponse httpResponse = WebUtils.toHttp(response);
+        String uri = httpRequest.getRequestURI();
+        boolean isWebhook = uri != null && uri.startsWith("/api/webhook/");
 
-        // 如果不是 API 密钥请求且用户未认证，允许请求继续
-        if (!ApiKeyHandler.isApiKeyCall(httpRequest) && !SecurityUtils.getSubject().isAuthenticated()) {
+        // Webhook endpoints must be API-key protected. If Authorization is missing, fail fast.
+        if (isWebhook && !ApiKeyHandler.isApiKeyCall(httpRequest)) {
+            httpResponse.setHeader(SessionConstants.AUTHENTICATION_STATUS, "invalid");
+            httpResponse.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            httpResponse.setContentType("application/json;charset=UTF-8");
+            try {
+                byte[] bytes = "{\"success\":false,\"code\":\"UNAUTHORIZED\",\"message\":\"missing authorization\"}"
+                        .getBytes(StandardCharsets.UTF_8);
+                httpResponse.getOutputStream().write(bytes);
+                httpResponse.getOutputStream().flush();
+            } catch (Exception ignored) {
+                // ignore
+            }
+            return false;
+        }
+
+        // 如果不是 API 密钥请求且用户未认证，允许请求继续（非 webhook 场景）
+        if (!isWebhook && !ApiKeyHandler.isApiKeyCall(httpRequest) && !SecurityUtils.getSubject().isAuthenticated()) {
             return true;
         }
 
@@ -50,7 +70,21 @@ public class ApiKeyFilter extends AnonymousFilter {
 
         // 如果仍未认证，设置响应头为无效状态
         if (!SecurityUtils.getSubject().isAuthenticated()) {
-            ((HttpServletResponse) response).setHeader(SessionConstants.AUTHENTICATION_STATUS, "invalid");
+            httpResponse.setHeader(SessionConstants.AUTHENTICATION_STATUS, "invalid");
+            // For API key calls, fail fast with 401 instead of letting downstream filters/controllers behave unexpectedly.
+            if (ApiKeyHandler.isApiKeyCall(httpRequest)) {
+                httpResponse.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                httpResponse.setContentType("application/json;charset=UTF-8");
+                try {
+                    byte[] bytes = "{\"success\":false,\"code\":\"UNAUTHORIZED\",\"message\":\"invalid api key signature\"}"
+                            .getBytes(StandardCharsets.UTF_8);
+                    httpResponse.getOutputStream().write(bytes);
+                    httpResponse.getOutputStream().flush();
+                } catch (Exception ignored) {
+                    // ignore
+                }
+                return false;
+            }
         }
 
         return true;

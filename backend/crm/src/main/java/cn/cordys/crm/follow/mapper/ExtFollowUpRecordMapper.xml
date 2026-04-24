@@ -561,4 +561,18 @@
         </foreach>
         and organization_id = #{orgId};
     </select>
+
+    <select id="selectAttachmentUrlsByFollowRecordIds" resultType="cn.cordys.crm.follow.dto.AttachmentUrlMapping">
+        SELECT
+            ewe.follow_record_id AS followRecordId,
+            ewa.download_url AS downloadUrl
+        FROM email_webhook_event ewe
+        JOIN email_webhook_attachment ewa ON ewa.event_id = ewe.id
+        WHERE ewe.follow_record_id IN
+        <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
+          AND ewa.download_url IS NOT NULL
+          AND ewa.download_url != ''
+    </select>
 </mapper>

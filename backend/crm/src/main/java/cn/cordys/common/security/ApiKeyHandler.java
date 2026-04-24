@@ -47,7 +47,12 @@ public class ApiKeyHandler {
             return null;
         }
 
-        return getUser(accessKey, signature);
+        try {
+            return getUser(accessKey, signature);
+        } catch (Throwable e) {
+            // Invalid signature/accessKey should not crash the whole request pipeline.
+            return null;
+        }
     }
 
     /**

@@ -58,11 +58,25 @@
                     <template #trigger> {{ ele.value }} </template>
                   </CrmTableButton>
                 </slot>
+                <template v-else-if="ele.key === 'updateUserName'">
+                  <span>{{ descItem.value }}</span>
+                  <template v-if="hasAttachment(item)">
+                    <span class="attachment-links">
+                      附件：
+                      <template v-for="(url, index) in getAttachmentUrls(item)" :key="url">
+                        <a :href="url" target="_blank" rel="noopener noreferrer">
+                          {{ getAttachmentLabel(index) }}
+                        </a>
+                        <span v-if="index < getAttachmentUrls(item).length - 1">，</span>
+                      </template>
+                    </span>
+                  </template>
+                </template>
                 <slot v-else :name="ele.key" :desc-item="descItem" :item="item"></slot>
               </template>
             </CrmDetailCard>
           </div>
-          <div class="crm-follow-record-content" v-html="item.content.replace(/\n/g, '<br />')"></div>
+          <div class="crm-follow-record-content" v-html="renderFollowContent(getDisplayContent(item.content))"></div>
         </div>
       </div>
     </template>
@@ -153,6 +167,47 @@
       });
     }
   }
+
+  function escapeHtml(input: string) {
+    return input
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderFollowContent(content?: string) {
+    const raw = content ?? '';
+    const escaped = escapeHtml(raw);
+    const withLinks = escaped.replace(
+      /(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+    return withLinks.replace(/\n/g, '<br />');
+  }
+
+  function getAttachmentUrls(item: FollowDetailItem) {
+    const urls = (item.attachmentUrls ?? [])
+      .map((url) => (url ?? '').trim())
+      .filter((url) => !!url);
+    return Array.from(new Set(urls));
+  }
+
+  function hasAttachment(item: FollowDetailItem) {
+    return getAttachmentUrls(item).length > 0;
+  }
+
+  function getAttachmentLabel(index: number) {
+    return `附件${index + 1}`;
+  }
+
+  function getDisplayContent(content?: string) {
+    const text = content ?? '';
+    const lines = text.split(/\r?\n/);
+    const filtered = lines.filter((line) => !/^\s*附件[:：]\s*https?:\/\/\S+/i.test(line));
+    return filtered.join('\n').trim();
+  }
 </script>
 
 <style scoped lang="less">
@@ -190,6 +245,23 @@
       padding: 12px;
       border-radius: var(--border-radius-small);
       background: var(--text-n9);
+    }
+
+    .attachment-links {
+      margin-left: 8px;
+      color: var(--text-n2);
+      white-space: normal;
+      word-break: break-word;
+
+      a {
+        color: #d03050;
+        text-decoration: none;
+        font-weight: 500;
+
+        &:hover {
+          text-decoration: underline;
+        }
+      }
     }
   }
 </style>

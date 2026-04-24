@@ -31,6 +31,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import static jakarta.servlet.DispatcherType.ERROR;
+import static jakarta.servlet.DispatcherType.FORWARD;
+import static jakarta.servlet.DispatcherType.INCLUDE;
+import static jakarta.servlet.DispatcherType.REQUEST;
 import static jakarta.servlet.DispatcherType.ASYNC;
 
 /**
@@ -86,6 +90,11 @@ public class ShiroConfig {
             filters.put("preApikey", preApiKey);
             pattern = "preApikey, " + pattern;
         }
+        // Swagger / OpenAPI docs should be accessible for debugging and tooling.
+        chain.put("/v3/api-docs/**", "anon");
+        chain.put("/swagger-ui/**", "anon");
+        // Webhook endpoints should not require CSRF tokens.
+        chain.put("/api/webhook/**", "apikey, authc");
         chain.put("/**", pattern);
     }
 
@@ -222,7 +231,9 @@ public class ShiroConfig {
         FilterRegistrationBean<DelegatingFilterProxy> registration = new FilterRegistrationBean<>();
         registration.setFilter(proxy);
         registration.setAsyncSupported(true);
-        registration.setDispatcherTypes(ASYNC);
+        // Shiro must apply to normal HTTP requests; limiting to ASYNC will bypass auth/filters
+        // and may cause confusing behaviors like 200 with empty body.
+        registration.setDispatcherTypes(REQUEST, FORWARD, INCLUDE, ERROR, ASYNC);
         return registration;
     }
 

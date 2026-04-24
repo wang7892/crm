@@ -74,3 +74,22 @@ src/main/resources/templates
 ############################
 
 qywx.json
+
+# ---------------- 追加的临时文件/大文件忽略规则 ----------------
+# 临时文件夹
+tmp/
+mail monitoring/
+
+# 运行日志
+*.log
+crm-run.err.log
+crm-run.log
+
+# 临时文本文件
+cp.txt
+
+# 压缩包/大文件（GitHub单文件限制100MB）
+*.zip
+*.rar
+*.7z
+*.tar.gz
