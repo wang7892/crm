@@ -74,6 +74,7 @@ src/main/resources/templates
 ############################
 
 qywx.json
+cordys-crm.properties
 
 # ---------------- 追加的临时文件/大文件忽略规则 ----------------
 # 临时文件夹
