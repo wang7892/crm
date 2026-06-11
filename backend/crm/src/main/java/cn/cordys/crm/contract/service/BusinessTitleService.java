@@ -392,7 +392,7 @@ public class BusinessTitleService {
                 businessTitleMapper.batchInsert(businessTitles);
                 logService.batchAdd(logs);
             };
-            var eventListener = new BusinessTitleImportEventListener(clazz, BusinessTitle.class, getBusinessTitleConfig(orgId), orgId, userId, afterDto, getTemplateHead());
+            var eventListener = new BusinessTitleImportEventListener<BusinessTitle>(clazz, BusinessTitle.class, getBusinessTitleConfig(orgId), orgId, userId, afterDto, getTemplateHead());
             FastExcelFactory.read(file.getInputStream(), eventListener).headRowNumber(1).ignoreEmptyRow(true).sheet().doRead();
             return ImportResponse.builder().errorMessages(eventListener.getErrList())
                     .successCount(eventListener.getSuccessCount()).failCount(eventListener.getErrList().size()).build();

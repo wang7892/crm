@@ -5,8 +5,13 @@ import cn.cordys.crm.customer.dto.request.CustomerMergeRequest;
 import cn.cordys.crm.follow.domain.FollowUpRecord;
 import cn.cordys.crm.follow.dto.AttachmentUrlMapping;
 import cn.cordys.crm.follow.dto.CustomerDataDTO;
+import cn.cordys.crm.follow.dto.WecomMediaMapping;
+import cn.cordys.crm.follow.dto.WecomVoipMapping;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordPageRequest;
+import cn.cordys.crm.follow.dto.request.FollowSpecialistCustomerPageRequest;
 import cn.cordys.crm.follow.dto.request.RecordHomePageRequest;
+import cn.cordys.crm.follow.dto.response.FollowSpecialistCustomerResponse;
+import cn.cordys.crm.follow.dto.response.FollowSpecialistResponse;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordListResponse;
 import cn.cordys.crm.home.dto.request.HomeStatisticSearchWrapperRequest;
 import org.apache.ibatis.annotations.Param;
@@ -35,6 +40,12 @@ public interface ExtFollowUpRecordMapper {
     List<FollowUpRecordListResponse> selectTotalList(@Param("request") RecordHomePageRequest request, @Param("userId") String userId, @Param("orgId") String orgId,
                                                      @Param("clueDataPermission") DeptDataPermissionDTO clueDataPermission, @Param("customerDataPermission") DeptDataPermissionDTO customerDataPermission);
 
+    List<FollowSpecialistResponse> selectSpecialistList(@Param("request") RecordHomePageRequest request, @Param("userId") String userId, @Param("orgId") String orgId,
+                                                        @Param("customerDataPermission") DeptDataPermissionDTO customerDataPermission);
+
+    List<FollowSpecialistCustomerResponse> selectSpecialistCustomerList(@Param("request") FollowSpecialistCustomerPageRequest request, @Param("userId") String userId, @Param("orgId") String orgId,
+                                                                        @Param("customerDataPermission") DeptDataPermissionDTO customerDataPermission);
+
     FollowUpRecord selectRecord(@Param("customerId") String customerId, @Param("opportunityId") String opportunityId, @Param("clueId") String clueId, @Param("orgId") String orgId, @Param("type") String type);
 
     Long getNewContactCount(@Param("request") HomeStatisticSearchWrapperRequest request);
@@ -57,5 +68,9 @@ public interface ExtFollowUpRecordMapper {
     List<FollowUpRecord> getMergeRecordList(@Param("request") CustomerMergeRequest request, @Param("orgId") String orgId);
 
     List<AttachmentUrlMapping> selectAttachmentUrlsByFollowRecordIds(@Param("followRecordIds") List<String> followRecordIds);
+
+    List<WecomMediaMapping> selectWecomMediaByFollowRecordIds(@Param("followRecordIds") List<String> followRecordIds);
+
+    List<WecomVoipMapping> selectWecomVoipByFollowRecordIds(@Param("followRecordIds") List<String> followRecordIds);
 
 }

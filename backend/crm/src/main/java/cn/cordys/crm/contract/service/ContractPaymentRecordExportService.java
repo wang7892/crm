@@ -10,13 +10,11 @@ import cn.cordys.crm.contract.dto.request.ContractPaymentRecordPageRequest;
 import cn.cordys.crm.contract.dto.response.ContractPaymentRecordResponse;
 import cn.cordys.crm.contract.mapper.ExtContractPaymentRecordMapper;
 import cn.cordys.crm.system.dto.field.base.BaseField;
-import cn.cordys.crm.system.dto.field.base.OptionProp;
 import cn.cordys.crm.system.service.ModuleFieldExtService;
 import cn.cordys.registry.ExportThreadRegistry;
 import com.github.pagehelper.PageHelper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.Strings;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -128,16 +126,6 @@ public class ContractPaymentRecordExportService extends BaseExportService {
 	 * @param internalKey 字段内部Key
 	 * @return 名称
 	 */
-	private String processInternalOptions(String value, String formKey, String orgId, String internalKey) {
-		List<OptionProp> options = moduleFieldExtService.getFieldOptions(formKey, orgId, internalKey);
-		for (OptionProp option : options) {
-			if (Strings.CS.equals(option.getValue(), value)) {
-				return option.getLabel();
-			}
-		}
-		return value;
-	}
-
 	/**
 	 * 获取内部日期字符串
 	 * @param timestamp 毫秒

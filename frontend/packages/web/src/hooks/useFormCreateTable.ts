@@ -3,7 +3,6 @@ import dayjs from 'dayjs';
 
 import { PreviewPictureUrl } from '@lib/shared/api/requrls/system/module';
 import { FieldTypeEnum, FormDesignKeyEnum } from '@lib/shared/enums/formDesignEnum';
-import { QuotationStatusEnum } from '@lib/shared/enums/opportunityEnum';
 import { SpecialColumnEnum, TableKeyEnum } from '@lib/shared/enums/tableEnum';
 import { useI18n } from '@lib/shared/hooks/useI18n';
 import { formatNumberValueToString, transformData } from '@lib/shared/method/formCreate';
@@ -18,11 +17,7 @@ import {
 } from '@/components/business/crm-form-create/config';
 import type { FormCreateField } from '@/components/business/crm-form-create/types';
 
-import {
-  contractInvoiceStatusOptions,
-  contractPaymentPlanStatusOptions,
-  contractStatusOptions,
-} from '@/config/contract';
+import { contractInvoiceStatusOptions, contractPaymentPlanStatusOptions } from '@/config/contract';
 import { quotationStatusOptions } from '@/config/opportunity';
 import useApprovalConfig from '@/hooks/useApprovalConfig';
 import useFormCreateAdvanceFilter from '@/hooks/useFormCreateAdvanceFilter';
@@ -811,47 +806,6 @@ export default async function useFormCreateTable(props: FormCreateTableProps) {
         sorter: true,
         render: (row: any) => row.departmentName || '-',
       },
-      {
-        title: t('contract.status'),
-        width: 120,
-        key: 'stage',
-        filterOptions: contractStatusOptions,
-        sortOrder: false,
-        sorter: true,
-        filter: true,
-        render: props.specialRender?.stage,
-      },
-      {
-        title: t('contract.voidReason'),
-        width: 120,
-        key: 'voidReason',
-        ellipsis: {
-          tooltip: true,
-        },
-      },
-      {
-        title: t('contract.alreadyPayAmount'),
-        width: 120,
-        key: 'alreadyPayAmount',
-        sortOrder: false,
-        sorter: true,
-      },
-      ...((dicApprovalEnable.value
-        ? [
-            {
-              title: t('contract.approvalStatus'),
-              width: 120,
-              key: 'approvalStatus',
-              filterOptions: quotationStatusOptions.filter(
-                (item) => ![QuotationStatusEnum.VOIDED].includes(item.value)
-              ),
-              sortOrder: false,
-              sorter: true,
-              filter: true,
-              render: props.specialRender?.approvalStatus,
-            },
-          ]
-        : []) as CrmDataTableColumn[]),
     ],
     [FormDesignKeyEnum.CONTRACT_PAYMENT]: paymentInternalColumns,
     [FormDesignKeyEnum.CONTRACT_CONTRACT_PAYMENT]: paymentInternalColumns,

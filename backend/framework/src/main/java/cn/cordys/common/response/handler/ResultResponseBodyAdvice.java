@@ -55,6 +55,10 @@ public class ResultResponseBodyAdvice implements ResponseBodyAdvice<Object> {
                                   Class<? extends HttpMessageConverter<?>> converterType,
                                   ServerHttpRequest serverHttpRequest,
                                   ServerHttpResponse serverHttpResponse) {
+        if (isEventStream(mediaType, serverHttpResponse.getHeaders().getContentType())) {
+            return body;
+        }
+
         // 处理空值响应，转换为 JSON 格式的成功响应
         if (body == null && StringHttpMessageConverter.class.isAssignableFrom(converterType)) {
             serverHttpResponse.getHeaders().setContentType(MediaType.APPLICATION_JSON);
@@ -77,5 +81,13 @@ public class ResultResponseBodyAdvice implements ResponseBodyAdvice<Object> {
 
         // 如果响应体已经是 ResultHolder 类型，则直接返回
         return body;
+    }
+
+    private boolean isEventStream(MediaType selectedMediaType, MediaType responseMediaType) {
+        return isTextEventStream(selectedMediaType) || isTextEventStream(responseMediaType);
+    }
+
+    private boolean isTextEventStream(MediaType mediaType) {
+        return mediaType != null && MediaType.TEXT_EVENT_STREAM.isCompatibleWith(mediaType);
     }
 }

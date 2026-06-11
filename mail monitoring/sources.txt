@@ -21,6 +21,8 @@ src\mailmonitoring\repository\InMemoryMailEventRepository.java
 src\mailmonitoring\repository\InMemorySyncCursorRepository.java
 src\mailmonitoring\repository\JdbcMailEventRepository.java
 src\mailmonitoring\repository\CrmAttachmentRepository.java
+src\mailmonitoring\repository\DynamicMailboxAccount.java
+src\mailmonitoring\repository\JdbcDynamicMailboxAccountRepository.java
 src\mailmonitoring\repository\JdbcCrmAttachmentRepository.java
 src\mailmonitoring\repository\MailEventRepository.java
 src\mailmonitoring\repository\NoopCrmAttachmentRepository.java

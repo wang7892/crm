@@ -36,6 +36,20 @@
         <n-form-item require-mark-placement="left" label-placement="left" path="email" :label="t('org.userEmail')">
           <n-input v-model:value="form.email" type="text" :placeholder="t('common.pleaseInput')" />
         </n-form-item>
+        <n-form-item label-placement="left" path="emailAuthCode" :label="t('org.emailAuthCode')">
+          <n-input
+            v-model:value="form.emailAuthCode"
+            type="text"
+            :placeholder="t('common.pleaseInput')"
+            :maxlength="255"
+          />
+        </n-form-item>
+        <n-form-item label-placement="left" path="wecomId" :label="t('org.wecomId')">
+          <n-input v-model:value="form.wecomId" type="text" :placeholder="t('common.pleaseInput')" :maxlength="255" />
+        </n-form-item>
+        <n-form-item label-placement="left" path="roomid" :label="t('org.wecomRoomid')">
+          <n-input v-model:value="form.roomid" type="text" :placeholder="t('common.pleaseInput')" :maxlength="1024" />
+        </n-form-item>
         <n-form-item
           require-mark-placement="left"
           label-placement="left"
@@ -250,6 +264,9 @@
     gender: false,
     phone: '',
     email: '',
+    emailAuthCode: '',
+    wecomId: '',
+    roomid: '',
     departmentId: '',
     employeeId: '',
     position: '',
@@ -267,20 +284,22 @@
   const form = ref<MemberParams>(cloneDeep(initUserForm));
 
   function validateUserEmail(rule: FormItemRule, value: string) {
-    if (!value) {
-      return new Error(t('common.notNull', { value: `${t('org.userEmail')}` }));
+    const email = value?.trim();
+    if (!email) {
+      return true;
     }
-    if (!validateEmail(value)) {
+    if (!validateEmail(email)) {
       return new Error(t('common.emailErrTip'));
     }
     return true;
   }
 
   function validateUserPhone(rule: FormItemRule, value: string) {
-    if (!value) {
-      return new Error(t('common.notNull', { value: `${t('common.phoneNumber')}` }));
+    const phone = value?.trim();
+    if (!phone) {
+      return true;
     }
-    if (!validatePhone(value)) {
+    if (!validatePhone(phone)) {
       return new Error(t('common.userPhoneErrTip'));
     }
     return true;
@@ -290,8 +309,8 @@
     name: [
       { required: true, message: t('common.notNull', { value: `${t('org.userName')}` }), trigger: ['input', 'blur'] },
     ],
-    phone: [{ required: true, validator: validateUserPhone, trigger: ['input', 'blur'] }],
-    email: [{ required: true, validator: validateUserEmail, trigger: ['input', 'blur'] }],
+    phone: [{ validator: validateUserPhone, trigger: ['input', 'blur'] }],
+    email: [{ validator: validateUserEmail, trigger: ['input', 'blur'] }],
     departmentId: [{ required: true, message: t('common.pleaseSelect'), trigger: ['input', 'blur'] }],
   };
 
@@ -329,11 +348,27 @@
       if (!error) {
         try {
           loading.value = true;
+          const trimmedPhone = form.value.phone ? form.value.phone.trim() : '';
+          const trimmedEmail = form.value.email ? form.value.email.trim() : '';
+          const trimmedEmailAuthCode = form.value.emailAuthCode ? form.value.emailAuthCode.trim() : '';
+          const trimmedWecomId = form.value.wecomId ? form.value.wecomId.trim() : '';
+          const trimmedRoomid = form.value.roomid ? form.value.roomid.trim() : '';
+          // 兼容后端可能的 snake_case 入参：同时发送 camelCase / snake_case
+          const payload: MemberParams & Record<string, any> = {
+            ...form.value,
+            phone: trimmedPhone,
+            email: trimmedEmail,
+            emailAuthCode: trimmedEmailAuthCode,
+            email_auth_code: trimmedEmailAuthCode,
+            wecomId: trimmedWecomId,
+            wecom_id: trimmedWecomId,
+            roomid: trimmedRoomid,
+          };
           if (form.value.id) {
-            await updateUser(form.value);
+            await updateUser(payload);
             Message.success(t('common.updateSuccess'));
           } else {
-            await addUser(form.value);
+            await addUser(payload);
             Message.success(t('common.addSuccess'));
           }
 
@@ -347,6 +382,8 @@
         } catch (e) {
           // eslint-disable-next-line no-console
           console.log(e);
+          const msg = (e as any)?.message || (e as any)?.msg || t('common.operationFailed');
+          Message.error(String(msg));
         } finally {
           loading.value = false;
         }

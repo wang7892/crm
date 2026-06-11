@@ -1,0 +1,503 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.cordys.crm.aiagent.mapper.AiAgentInternalMapper">
+
+    <sql id="customerPermissionJoin">
+        <if test="dataPermission != null and dataPermission.deptIds != null and dataPermission.deptIds.size() > 0">
+            JOIN sys_organization_user sou_perm ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                CONVERT(sou_perm.user_id USING utf8mb4) COLLATE utf8mb4_general_ci
+             AND sou_perm.organization_id = #{orgId}
+             AND (
+                sou_perm.department_id IN
+                <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
+                    #{deptId}
+                </foreach>
+                <if test="dataPermission.viewId == 'ALL'">
+                    OR sou_perm.user_id = #{userId}
+                </if>
+             )
+        </if>
+        <if test="dataPermission != null and dataPermission.visible">
+            JOIN customer_collaboration cc_perm ON CONVERT(c.id USING utf8mb4) COLLATE utf8mb4_general_ci =
+                CONVERT(cc_perm.customer_id USING utf8mb4) COLLATE utf8mb4_general_ci
+             AND cc_perm.user_id = #{userId}
+        </if>
+    </sql>
+
+    <sql id="customerPermissionWhere">
+        <if test="dataPermission != null and dataPermission.self">
+            AND c.owner = #{userId}
+        </if>
+    </sql>
+
+    <sql id="customerBaseWhere">
+        c.organization_id = #{orgId}
+        AND (c.in_shared_pool IS NULL OR c.in_shared_pool IS FALSE)
+    </sql>
+
+    <select id="findUserNameById" resultType="java.lang.String">
+        SELECT name
+        FROM sys_user
+        WHERE id = #{userId}
+        LIMIT 1
+    </select>
+
+    <select id="findUserNamesByDataPermission" resultType="java.lang.String">
+        SELECT DISTINCT su.name
+        FROM sys_user su
+        JOIN sys_organization_user sou
+          ON sou.user_id = su.id
+         AND sou.organization_id = #{orgId}
+        WHERE su.name IS NOT NULL
+          AND su.name != ''
+        <choose>
+            <when test="dataPermission != null and dataPermission.all">
+            </when>
+            <when test="dataPermission != null and dataPermission.self">
+                AND sou.user_id = #{userId}
+            </when>
+            <when test="dataPermission != null and dataPermission.deptIds != null and dataPermission.deptIds.size() > 0">
+                AND (
+                    sou.department_id IN
+                    <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
+                        #{deptId}
+                    </foreach>
+                    <if test="dataPermission.viewId == 'ALL'">
+                        OR sou.user_id = #{userId}
+                    </if>
+                )
+            </when>
+            <otherwise>
+                AND 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="findCustomersBySpecialist" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentCustomerRow">
+        SELECT c.id,
+               c.name,
+               c.owner,
+               u.name AS ownerName,
+               c.email,
+               c.wecom_external_id AS wecomExternalId,
+               c.roomid,
+               c.full_name AS fullName,
+               c.region,
+               c.phone,
+               c.address,
+               c.remark,
+               c.follow_time AS followTime,
+               c.create_time AS createTime,
+               c.update_time AS updateTime
+        FROM customer c
+        LEFT JOIN sys_user u ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        WHERE <include refid="customerBaseWhere"/>
+        <include refid="customerPermissionWhere"/>
+        <choose>
+            <when test="specialistName != null and specialistName != ''">
+                AND u.name LIKE CONCAT('%', #{specialistName}, '%')
+            </when>
+            <otherwise>
+                AND c.owner = #{userId}
+            </otherwise>
+        </choose>
+        ORDER BY COALESCE(c.follow_time, c.update_time, c.create_time) DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="searchCustomers" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentCustomerRow">
+        SELECT c.id,
+               c.name,
+               c.owner,
+               u.name AS ownerName,
+               c.email,
+               c.wecom_external_id AS wecomExternalId,
+               c.roomid,
+               c.full_name AS fullName,
+               c.region,
+               c.phone,
+               c.address,
+               c.remark,
+               c.follow_time AS followTime,
+               c.create_time AS createTime,
+               c.update_time AS updateTime
+        FROM customer c
+        LEFT JOIN sys_user u ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        WHERE <include refid="customerBaseWhere"/>
+        <include refid="customerPermissionWhere"/>
+        <if test="keyword != null and keyword != ''">
+            AND (
+                c.name LIKE CONCAT('%', #{keyword}, '%')
+                OR c.full_name LIKE CONCAT('%', #{keyword}, '%')
+            )
+        </if>
+        ORDER BY COALESCE(c.follow_time, c.update_time, c.create_time) DESC
+        LIMIT #{limit}
+    </select>
+
+    <sql id="communicationJoins">
+        LEFT JOIN wecom_ingestion_message wm ON CONVERT(wm.organization_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(c.organization_id USING utf8mb4) COLLATE utf8mb4_general_ci
+         AND wm.send_time &gt;= #{startTime}
+         AND wm.send_time &lt; #{endTime}
+         AND (
+            (c.wecom_external_id IS NOT NULL AND c.wecom_external_id != '' AND (
+                CONVERT(wm.external_userid USING utf8mb4) COLLATE utf8mb4_general_ci =
+                    CONVERT(c.wecom_external_id USING utf8mb4) COLLATE utf8mb4_general_ci
+                OR CONVERT(wm.matched_external_userid USING utf8mb4) COLLATE utf8mb4_general_ci =
+                    CONVERT(c.wecom_external_id USING utf8mb4) COLLATE utf8mb4_general_ci
+                OR CONVERT(wm.sender_external_userid USING utf8mb4) COLLATE utf8mb4_general_ci =
+                    CONVERT(c.wecom_external_id USING utf8mb4) COLLATE utf8mb4_general_ci
+            ))
+            OR (
+                c.roomid IS NOT NULL
+                AND c.roomid != ''
+                AND wm.roomid IS NOT NULL
+                AND FIND_IN_SET(
+                    CONVERT(wm.roomid USING utf8mb4) COLLATE utf8mb4_general_ci,
+                    CONVERT(c.roomid USING utf8mb4) COLLATE utf8mb4_general_ci
+                ) &gt; 0
+            )
+         )
+        LEFT JOIN email_webhook_event em ON CONVERT(em.organization_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(c.organization_id USING utf8mb4) COLLATE utf8mb4_general_ci
+         AND em.create_time &gt;= #{startTime}
+         AND em.create_time &lt; #{endTime}
+         AND c.email IS NOT NULL
+         AND c.email != ''
+         AND (
+            CONVERT(em.matched_target_mailbox USING utf8mb4) COLLATE utf8mb4_general_ci =
+                CONVERT(c.email USING utf8mb4) COLLATE utf8mb4_general_ci
+            OR CONVERT(em.from_address USING utf8mb4) COLLATE utf8mb4_general_ci =
+                CONVERT(c.email USING utf8mb4) COLLATE utf8mb4_general_ci
+            OR CONVERT(em.to_addresses USING utf8mb4) COLLATE utf8mb4_general_ci LIKE
+                CONCAT('%', CONVERT(c.email USING utf8mb4) COLLATE utf8mb4_general_ci, '%')
+            OR CONVERT(em.cc_addresses USING utf8mb4) COLLATE utf8mb4_general_ci LIKE
+                CONCAT('%', CONVERT(c.email USING utf8mb4) COLLATE utf8mb4_general_ci, '%')
+         )
+        LEFT JOIN follow_up_record fr ON CONVERT(fr.organization_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(c.organization_id USING utf8mb4) COLLATE utf8mb4_general_ci
+         AND CONVERT(fr.customer_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(c.id USING utf8mb4) COLLATE utf8mb4_general_ci
+         AND fr.follow_time &gt;= #{startTime}
+         AND fr.follow_time &lt; #{endTime}
+    </sql>
+
+    <sql id="communicationColumns">
+        c.id AS customerId,
+        c.name AS customerName,
+        c.owner AS ownerId,
+        u.name AS ownerName,
+        COUNT(DISTINCT wm.id) AS wecomMessageCount,
+        COUNT(DISTINCT em.id) AS emailCount,
+        COUNT(DISTINCT fr.id) AS followRecordCount,
+        GREATEST(
+            COALESCE(MAX(wm.send_time), 0),
+            COALESCE(MAX(em.create_time), 0),
+            COALESCE(MAX(fr.follow_time), 0)
+        ) AS lastCommunicationTime
+    </sql>
+
+    <select id="communicationBySpecialist" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentCommunicationRow">
+        SELECT <include refid="communicationColumns"/>
+        FROM customer c
+        LEFT JOIN sys_user u ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        <include refid="communicationJoins"/>
+        WHERE <include refid="customerBaseWhere"/>
+        <include refid="customerPermissionWhere"/>
+        <choose>
+            <when test="specialistName != null and specialistName != ''">
+                AND u.name LIKE CONCAT('%', #{specialistName}, '%')
+            </when>
+            <otherwise>
+                AND c.owner = #{userId}
+            </otherwise>
+        </choose>
+        GROUP BY c.id, c.name, c.owner, u.name
+        HAVING wecomMessageCount &gt; 0 OR emailCount &gt; 0 OR followRecordCount &gt; 0
+        ORDER BY lastCommunicationTime DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="communicationByCustomer" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentCommunicationRow">
+        SELECT <include refid="communicationColumns"/>
+        FROM customer c
+        LEFT JOIN sys_user u ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        <include refid="communicationJoins"/>
+        WHERE <include refid="customerBaseWhere"/>
+        <include refid="customerPermissionWhere"/>
+        <if test="customerName != null and customerName != ''">
+            AND (
+                c.name LIKE CONCAT('%', #{customerName}, '%')
+                OR c.full_name LIKE CONCAT('%', #{customerName}, '%')
+            )
+        </if>
+        GROUP BY c.id, c.name, c.owner, u.name
+        HAVING wecomMessageCount &gt; 0 OR emailCount &gt; 0 OR followRecordCount &gt; 0
+        ORDER BY lastCommunicationTime DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listVisibleCustomerCommunicationSummary" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentCommunicationRow">
+        SELECT <include refid="communicationColumns"/>
+        FROM customer c
+        LEFT JOIN sys_user u ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        <include refid="communicationJoins"/>
+        WHERE <include refid="customerBaseWhere"/>
+        <include refid="customerPermissionWhere"/>
+        GROUP BY c.id, c.name, c.owner, u.name
+        ORDER BY lastCommunicationTime DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listCustomerFollowRecords" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentFollowRecordRow">
+        SELECT fr.id,
+               fr.customer_id AS customerId,
+               c.name AS customerName,
+               fr.owner AS ownerId,
+               u.name AS ownerName,
+               fr.follow_method AS followMethod,
+               fr.content,
+               fr.follow_time AS followTime
+        FROM follow_up_record fr
+        JOIN customer c ON CONVERT(fr.customer_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(c.id USING utf8mb4) COLLATE utf8mb4_general_ci
+         AND c.organization_id = #{orgId}
+        LEFT JOIN sys_user u ON CONVERT(fr.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        WHERE fr.organization_id = #{orgId}
+        <include refid="customerPermissionWhere"/>
+        <if test="customerName != null and customerName != ''">
+            AND (
+                c.name LIKE CONCAT('%', #{customerName}, '%')
+                OR c.full_name LIKE CONCAT('%', #{customerName}, '%')
+            )
+        </if>
+        ORDER BY fr.follow_time DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listPendingUnansweredQuestions" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentUnansweredQuestionRow">
+        SELECT id,
+               question,
+               miss_reason AS missReason,
+               occur_count AS occurCount,
+               last_ask_time AS lastAskTime
+        FROM ai_agent_unanswered_question
+        WHERE organization_id = #{orgId}
+          AND status = 'PENDING'
+        ORDER BY occur_count DESC, last_ask_time DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listSessions" resultType="cn.cordys.crm.aiagent.dto.response.AiAgentSessionResponse">
+        SELECT id,
+               title,
+               '客户经营智能体' AS agentName,
+               update_time AS updateTime
+        FROM ai_agent_session
+        WHERE organization_id = #{orgId}
+          AND user_id = #{userId}
+        ORDER BY update_time DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listMessages" resultType="cn.cordys.crm.aiagent.domain.AiAgentMessage">
+        SELECT m.id,
+               m.session_id,
+               m.role,
+               m.content,
+               m.intent,
+               m.evidence_json,
+               m.create_user,
+               m.update_user,
+               m.create_time,
+               m.update_time
+        FROM ai_agent_message m
+        JOIN ai_agent_session s ON s.id = m.session_id
+        WHERE m.session_id = #{sessionId}
+          AND s.organization_id = #{orgId}
+          AND s.user_id = #{userId}
+        ORDER BY m.create_time ASC
+    </select>
+
+    <delete id="deleteToolLogsBySession">
+        DELETE l
+        FROM ai_agent_tool_call_log l
+        JOIN ai_agent_message m ON m.id = l.message_id
+        JOIN ai_agent_session s ON s.id = m.session_id
+        WHERE s.id = #{sessionId}
+          AND s.organization_id = #{orgId}
+          AND s.user_id = #{userId}
+    </delete>
+
+    <delete id="deleteFeedbackBySession">
+        DELETE f
+        FROM ai_agent_feedback f
+        JOIN ai_agent_message m ON m.id = f.message_id
+        JOIN ai_agent_session s ON s.id = m.session_id
+        WHERE s.id = #{sessionId}
+          AND s.organization_id = #{orgId}
+          AND s.user_id = #{userId}
+    </delete>
+
+    <delete id="deleteMessagesBySession">
+        DELETE m
+        FROM ai_agent_message m
+        JOIN ai_agent_session s ON s.id = m.session_id
+        WHERE s.id = #{sessionId}
+          AND s.organization_id = #{orgId}
+          AND s.user_id = #{userId}
+    </delete>
+
+    <delete id="deleteSession">
+        DELETE FROM ai_agent_session
+        WHERE id = #{sessionId}
+          AND organization_id = #{orgId}
+          AND user_id = #{userId}
+    </delete>
+
+    <update id="updateAnswerableQuestionHit">
+        UPDATE ai_agent_answerable_question
+        SET hit_count = hit_count + 1,
+            last_hit_time = #{now},
+            question_aliases = CASE
+                WHEN #{question} IS NULL OR #{question} = '' OR question = #{question} THEN question_aliases
+                WHEN question_aliases IS NULL THEN JSON_ARRAY(#{question})
+                WHEN JSON_CONTAINS(question_aliases, JSON_QUOTE(#{question}), '$') THEN question_aliases
+                ELSE JSON_ARRAY_APPEND(question_aliases, '$', #{question})
+            END,
+            update_user = #{userId},
+            update_time = #{now}
+        WHERE organization_id = #{orgId}
+          AND intent = #{intent}
+          AND status = 'ENABLED'
+          AND review_status = 'APPROVED'
+    </update>
+
+    <insert id="insertAnswerableQuestion">
+        INSERT INTO ai_agent_answerable_question (
+            id,
+            organization_id,
+            question,
+            question_aliases,
+            normalized_question,
+            category,
+            tags,
+            answer_type,
+            answer,
+            intent,
+            tool_name,
+            tool_params_json,
+            data_sources,
+            match_threshold,
+            status,
+            review_status,
+            hit_count,
+            last_hit_time,
+            remark,
+            create_user,
+            update_user,
+            create_time,
+            update_time
+        ) VALUES (
+            #{id},
+            #{orgId},
+            #{question},
+            JSON_ARRAY(#{question}),
+            #{normalizedQuestion},
+            '自动学习',
+            JSON_ARRAY('AI Agent', '自动学习'),
+            'TOOL',
+            #{answer},
+            #{intent},
+            #{toolName},
+            NULL,
+            #{dataSources},
+            0.8000,
+            'ENABLED',
+            'APPROVED',
+            1,
+            #{now},
+            'AI Agent 已能回答但问题库未配置时自动创建',
+            #{userId},
+            #{userId},
+            #{now},
+            #{now}
+        )
+    </insert>
+
+    <update id="updateUnansweredQuestion">
+        UPDATE ai_agent_unanswered_question
+        SET question = #{question},
+            session_id = #{sessionId},
+            message_id = #{messageId},
+            miss_reason = #{missReason},
+            occur_count = occur_count + 1,
+            last_ask_time = #{now},
+            update_user = #{userId},
+            update_time = #{now}
+        WHERE organization_id = #{orgId}
+          AND normalized_question = #{normalizedQuestion}
+          AND status = 'PENDING'
+    </update>
+
+    <insert id="insertUnansweredQuestion">
+        INSERT INTO ai_agent_unanswered_question (
+            id,
+            organization_id,
+            user_id,
+            session_id,
+            message_id,
+            question,
+            normalized_question,
+            matched_question_id,
+            match_score,
+            miss_reason,
+            status,
+            resolved_question_id,
+            manual_answer,
+            occur_count,
+            first_ask_time,
+            last_ask_time,
+            remark,
+            create_user,
+            update_user,
+            create_time,
+            update_time
+        ) VALUES (
+            #{id},
+            #{orgId},
+            #{userId},
+            #{sessionId},
+            #{messageId},
+            #{question},
+            #{normalizedQuestion},
+            NULL,
+            NULL,
+            #{missReason},
+            'PENDING',
+            NULL,
+            NULL,
+            1,
+            #{now},
+            #{now},
+            'AI Agent 未命中当前可回答问题库时自动记录',
+            #{userId},
+            #{userId},
+            #{now},
+            #{now}
+        )
+    </insert>
+</mapper>

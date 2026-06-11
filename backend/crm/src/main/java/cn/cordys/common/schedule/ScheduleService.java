@@ -9,6 +9,7 @@ import cn.cordys.mybatis.BaseMapper;
 import jakarta.annotation.Resource;
 import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.quartz.Job;
 import org.quartz.JobKey;
 import org.quartz.SchedulerException;
 import org.quartz.TriggerKey;
@@ -95,7 +96,7 @@ public class ScheduleService {
      * @param triggerKey 触发器标识
      * @param clazz      任务类
      */
-    public void addOrUpdateCronJob(Schedule request, JobKey jobKey, TriggerKey triggerKey, Class clazz) {
+    public void addOrUpdateCronJob(Schedule request, JobKey jobKey, TriggerKey triggerKey, Class<? extends Job> clazz) {
         Boolean enable = request.getEnable();
         String cronExpression = request.getValue();
         if (BooleanUtils.isTrue(enable) && StringUtils.isNotBlank(cronExpression)) {

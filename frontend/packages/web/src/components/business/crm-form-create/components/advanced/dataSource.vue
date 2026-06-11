@@ -31,6 +31,7 @@
       :disabled-selection="props.disabledSelection"
       :hide-child-tag="props.hideChildTag"
       :status="props.feedback ? 'error' : undefined"
+      :manual-input="allowManualInput"
       @delete="emit('delete', $event)"
       @change="($event, source, fields) => emit('change', $event, source, fields)"
     />
@@ -76,6 +77,8 @@
   const value = defineModel<(string | number)[]>('value', {
     default: [],
   });
+
+  const allowManualInput = computed(() => props.fieldConfig.internalKey === 'contractCustomer');
 
   function getParams(): FilterResult {
     const conditions = props.fieldConfig.combineSearch?.conditions

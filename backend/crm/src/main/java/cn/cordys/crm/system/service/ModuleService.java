@@ -20,6 +20,7 @@ import cn.cordys.crm.system.domain.Module;
 import cn.cordys.crm.system.domain.OrganizationConfig;
 import cn.cordys.crm.system.domain.OrganizationConfigDetail;
 import cn.cordys.crm.system.domain.Parameter;
+import cn.cordys.crm.system.domain.User;
 import cn.cordys.crm.system.dto.ModuleDTO;
 import cn.cordys.crm.system.dto.request.ModuleRequest;
 import cn.cordys.crm.system.dto.request.ModuleSortRequest;
@@ -64,6 +65,8 @@ public class ModuleService {
     private BaseMapper<OrganizationConfigDetail> organizationConfigDetailMapper;
     @Resource
     private BaseMapper<Parameter> parameterMapper;
+    @Resource
+    private BaseMapper<User> userMapper;
 
     /**
      * 获取系统模块配置列表
@@ -172,9 +175,38 @@ public class ModuleService {
     public List<DeptUserTreeNode> getDeptUserTree(String orgId) {
         List<DeptUserTreeNode> treeNodes = extDepartmentMapper.selectDeptUserTreeNode(orgId);
         List<DeptUserTreeNode> userNodes = extUserRoleMapper.selectUserDeptForOrg(orgId);
+        appendAdminUserNode(treeNodes, userNodes);
         userNodes = departmentService.sortByCommander(orgId, userNodes);
         userNodes.addAll(treeNodes);
         return BaseTreeNode.buildTree(userNodes);
+    }
+
+    private void appendAdminUserNode(List<DeptUserTreeNode> departmentNodes, List<DeptUserTreeNode> userNodes) {
+        if (CollectionUtils.isEmpty(departmentNodes)
+                || userNodes.stream().anyMatch(node -> Strings.CS.equals(node.getId(), InternalUser.ADMIN.getValue()))) {
+            return;
+        }
+
+        User admin = userMapper.selectByPrimaryKey(InternalUser.ADMIN.getValue());
+        if (admin == null) {
+            return;
+        }
+
+        Optional<String> rootDeptId = departmentNodes.stream()
+                .filter(node -> Strings.CS.equals(node.getParentId(), UserExtendService.ROOT_NODE_PARENT_ID))
+                .map(DeptUserTreeNode::getId)
+                .findFirst();
+        if (rootDeptId.isEmpty()) {
+            return;
+        }
+
+        DeptUserTreeNode adminNode = new DeptUserTreeNode();
+        adminNode.setId(admin.getId());
+        adminNode.setName(Optional.ofNullable(admin.getName()).orElse(InternalUser.ADMIN.getValue()));
+        adminNode.setParentId(rootDeptId.get());
+        adminNode.setNodeType("USER");
+        adminNode.setEnabled(true);
+        userNodes.add(adminNode);
     }
 
     /**

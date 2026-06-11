@@ -20,10 +20,6 @@ public enum DictModule {
      */
     QUOTATION_APPROVAL,
     /**
-     * 合同审批
-     */
-    CONTRACT_APPROVAL,
-    /**
      * 发票审批
      */
     INVOICE_APPROVAL,

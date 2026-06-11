@@ -1,0 +1,2 @@
+ALTER TABLE customer
+    MODIFY COLUMN remark TEXT NULL COMMENT 'Remark';

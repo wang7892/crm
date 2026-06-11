@@ -29,17 +29,11 @@ public class Contract extends BaseModel {
     @Schema(description = "审核状态")
     private String approvalStatus;
 
-    @Schema(description = "合同阶段")
-    private String stage;
-
     @Schema(description = "合同开始时间")
     private Long startTime;
 
     @Schema(description = "合同结束时间")
     private Long endTime;
-
-    @Schema(description = "作废原因")
-    private String voidReason;
 
     @Schema(description = "组织id")
     private String organizationId;

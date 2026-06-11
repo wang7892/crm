@@ -32,6 +32,7 @@ export default {
     'menu.clue': 'Lead',
     'menu.customer': 'Account',
     'menu.contact': 'Contact',
+    'menu.customerWecom': 'WeCom Monitor',
     'menu.dashboard': 'Dashboard',
     'menu.agent': 'Agent',
     'menu.tender': 'Tender',

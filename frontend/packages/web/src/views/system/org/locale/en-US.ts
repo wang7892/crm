@@ -12,6 +12,9 @@ export default {
   'org.userName': 'Name',
   'org.gender': 'Gender',
   'org.userEmail': 'Email',
+  'org.emailAuthCode': 'Email Auth Code',
+  'org.wecomId': 'WeCom ID',
+  'org.wecomRoomid': 'WeCom Room ID',
   'org.department': 'Department',
   'org.directSuperior': 'Direct Superior',
   'org.role': 'Role',
@@ -48,7 +51,7 @@ export default {
   'org.addDepartment': 'Add department',
   'org.resetPassWordTip': 'Confirm reset password for {name}?',
   'org.resetPassWordContent':
-    'After reset, employees log in to the system with the initial password (last 6 digits of phone number)',
+    'After reset, employees log in with the initial password (last 6 digits of phone number, or CordysCRM if no phone number)',
   'org.resetPassWordSuccess': 'Reset successful',
   'org.confirmReset': 'Confirm Reset',
   'org.resetPassWord': 'Reset Password',

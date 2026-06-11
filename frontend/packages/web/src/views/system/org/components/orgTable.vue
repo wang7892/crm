@@ -650,6 +650,30 @@
       width: 120,
     },
     {
+      title: t('org.emailAuthCode'),
+      key: 'emailAuthCode',
+      ellipsis: {
+        tooltip: true,
+      },
+      width: 160,
+    },
+    {
+      title: t('org.wecomId'),
+      key: 'wecomId',
+      ellipsis: {
+        tooltip: true,
+      },
+      width: 140,
+    },
+    {
+      title: t('org.wecomRoomid'),
+      key: 'roomid',
+      ellipsis: {
+        tooltip: true,
+      },
+      width: 160,
+    },
+    {
       title: t('org.department'),
       key: 'departmentName',
       ellipsis: {
@@ -813,6 +837,9 @@
         workCityName: getCityPath(row.workCity) || '-',
         phone: row.phone || '-',
         email: row.email || '-',
+        emailAuthCode: row.emailAuthCode || '-',
+        wecomId: row.wecomId || '-',
+        roomid: row.roomid || '-',
         employeeType: getEmployeeType(row.employeeType ?? ''),
         onboardingDate: row.onboardingDate ? dayjs(row.onboardingDate).format('YYYY-MM-DD') : '-',
       };
@@ -961,6 +988,21 @@
     {
       title: t('org.userEmail'),
       dataIndex: 'email',
+      type: FieldTypeEnum.INPUT,
+    },
+    {
+      title: t('org.emailAuthCode'),
+      dataIndex: 'emailAuthCode',
+      type: FieldTypeEnum.INPUT,
+    },
+    {
+      title: t('org.wecomId'),
+      dataIndex: 'wecomId',
+      type: FieldTypeEnum.INPUT,
+    },
+    {
+      title: t('org.wecomRoomid'),
+      dataIndex: 'roomid',
       type: FieldTypeEnum.INPUT,
     },
     {

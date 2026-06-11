@@ -32,12 +32,13 @@ public class JdbcMailEventRepository implements MailEventRepository {
 
     @Override
     public boolean saveIfAbsent(MailEvent event) {
-        String checkSql = "SELECT id FROM mail_event WHERE organization_id=? AND message_id=?";
+        String checkSql = "SELECT id FROM mail_event WHERE organization_id=? AND message_id=? AND from_address=?";
         String insertSql = "INSERT INTO mail_event(organization_id, message_id, thread_id, from_address, to_addresses, cc_addresses, subject, content_text, send_time, process_status, retry_count) VALUES(?,?,?,?,?,?,?,?,?,?,?)";
         try (Connection connection = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement checkStmt = connection.prepareStatement(checkSql)) {
             checkStmt.setString(1, event.getOrganizationId());
             checkStmt.setString(2, event.getMessageId());
+            checkStmt.setString(3, event.getSourceMailbox());
             try (ResultSet rs = checkStmt.executeQuery()) {
                 if (rs.next()) {
                     return false;
@@ -121,7 +122,7 @@ public class JdbcMailEventRepository implements MailEventRepository {
     }
 
     private void updateStatus(MailEvent event) {
-        String sql = "UPDATE mail_event SET process_status=?, follow_record_id=?, error_message=?, retry_count=?, next_retry_at=? WHERE organization_id=? AND message_id=?";
+        String sql = "UPDATE mail_event SET process_status=?, follow_record_id=?, error_message=?, retry_count=?, next_retry_at=? WHERE organization_id=? AND message_id=? AND from_address=?";
         try (Connection connection = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
              PreparedStatement stmt = connection.prepareStatement(sql)) {
             stmt.setString(1, event.getProcessStatus().name());
@@ -131,6 +132,7 @@ public class JdbcMailEventRepository implements MailEventRepository {
             stmt.setTimestamp(5, event.getNextRetryAt() == null ? null : Timestamp.from(event.getNextRetryAt()));
             stmt.setString(6, event.getOrganizationId());
             stmt.setString(7, event.getMessageId());
+            stmt.setString(8, event.getSourceMailbox());
             stmt.executeUpdate();
         } catch (Exception ex) {
             throw new RuntimeException("update mail event status failed: " + ex.getMessage(), ex);

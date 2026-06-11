@@ -184,7 +184,7 @@ public class ScheduleManager {
      *
      * @throws SchedulerException 如果添加或更新任务失败
      */
-    public void addOrUpdateCronJob(JobKey jobKey, TriggerKey triggerKey, Class jobClass, String cron, JobDataMap jobDataMap)
+    public void addOrUpdateCronJob(JobKey jobKey, TriggerKey triggerKey, Class<? extends Job> jobClass, String cron, JobDataMap jobDataMap)
             throws SchedulerException {
         log.info("AddOrUpdateCronJob: {}", jobKey.getName() + "," + triggerKey.getGroup());
 
@@ -205,7 +205,7 @@ public class ScheduleManager {
      *
      * @throws SchedulerException 如果添加或更新任务失败
      */
-    public void addOrUpdateCronJob(JobKey jobKey, TriggerKey triggerKey, Class jobClass, String cron) throws SchedulerException {
+    public void addOrUpdateCronJob(JobKey jobKey, TriggerKey triggerKey, Class<? extends Job> jobClass, String cron) throws SchedulerException {
         addOrUpdateCronJob(jobKey, triggerKey, jobClass, cron, null);
     }
 

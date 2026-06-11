@@ -1,5 +1,6 @@
 import createAxios from '@lib/shared/api/http';
 import useAgentApi from '@lib/shared/api/modules/agent';
+import useAiAgentApi from '@lib/shared/api/modules/aiAgent';
 import useClueApi from '@lib/shared/api/modules/clue';
 import useContractApi from '@lib/shared/api/modules/contract';
 import useCustomerApi from '@lib/shared/api/modules/customer';
@@ -17,6 +18,7 @@ import useMessageApi from '@lib/shared/api/modules/system/message';
 import useModuleApi from '@lib/shared/api/modules/system/module';
 import useOrgApi from '@lib/shared/api/modules/system/org';
 import useRoleApi from '@lib/shared/api/modules/system/role';
+import useWecomIngestionApi from '@lib/shared/api/modules/wecomIngestion';
 
 import useDiscreteApi from '@/hooks/useDiscreteApi';
 
@@ -35,9 +37,11 @@ const clueApi = useClueApi(CDR);
 const roleApi = useRoleApi(CDR);
 const homeApi = useHomeApi(CDR);
 const loginApi = useLoginApi(CDR);
+const aiAgentApi = useAiAgentApi(CDR);
 const agentApi = useAgentApi(CDR);
 const moduleApi = useModuleApi(CDR);
 const followApi = useFollowApi(CDR);
+const wecomIngestionApi = useWecomIngestionApi(CDR);
 const productApi = useProductApi(CDR);
 const messageApi = useMessageApi(CDR);
 const licenseApi = useLicenseApi(CDR);
@@ -92,6 +96,8 @@ export const {
   dragFollowPlanView,
   getFollowPlanDetail,
   getFollowRecordPage,
+  getFollowSpecialistPage,
+  getFollowSpecialistCustomerPage,
   addFollowRecordView,
   fixedFollowPlanView,
   dragFollowRecordView,
@@ -109,6 +115,8 @@ export const {
   getFollowPlanViewDetail,
   getFollowRecordViewDetail,
 } = followApi;
+
+export const { getWecomSessionPage, getWecomMessagePage, syncWecomToFollow, deleteWecomSession } = wecomIngestionApi;
 
 export const {
   addProduct,
@@ -430,13 +438,12 @@ export const {
   deleteContractView,
   dragContractView,
   addContract,
-  approvalContract,
-  revokeContract,
-  batchApproveContract,
+  preCheckImportContract,
+  downloadContractTemplate,
+  importContract,
   getContractFormSnapshotConfig,
   updateContract,
   deleteContract,
-  changeContractStatus,
   getContractFormConfig,
   getPaymentPlanList,
   getContractPaymentPlanList,
@@ -704,6 +711,9 @@ export const { login, signout, isLogin, getKey, getThirdCallback, getThirdOauthC
 export const { getSystemVersion, changeLocaleBackEnd } = sysApi;
 
 export const { getLicense, addLicense } = licenseApi;
+
+export const { chatAiAgent, deleteAiAgentSession, feedbackAiAgent, getAiAgentSessions, getAiAgentMessages } =
+  aiAgentApi;
 
 export const {
   dashboardAdd,

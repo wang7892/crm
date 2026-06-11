@@ -18,6 +18,8 @@ import {
   GetFollowPlanViewDetailUrl,
   GetFollowPlanViewListUrl,
   GetFollowRecordPageUrl,
+  GetFollowSpecialistCustomerPageUrl,
+  GetFollowSpecialistPageUrl,
   GetFollowRecordTabUrl,
   GetFollowRecordUrl,
   GetFollowRecordViewDetailUrl,
@@ -32,6 +34,12 @@ import {
 } from '@lib/shared/api/requrls/follow';
 import type { CommonList, TableDraggedParams } from '@lib/shared/models/common';
 import type {
+  FollowSpecialistCustomerItem,
+  FollowSpecialistCustomerPageParams,
+  FollowSpecialistItem,
+  FollowSpecialistPageParams,
+} from '@lib/shared/models/follow';
+import type {
   CustomerFollowRecordTableParams,
   CustomerTabHidden,
   FollowDetailItem,
@@ -44,6 +52,17 @@ export default function useFollowApi(CDR: CordysAxios) {
   // 跟进记录列表
   function getFollowRecordPage(data: CustomerFollowRecordTableParams) {
     return CDR.post<CommonList<FollowDetailItem>>({ url: GetFollowRecordPageUrl, data });
+  }
+
+  function getFollowSpecialistPage(data: FollowSpecialistPageParams) {
+    return CDR.post<CommonList<FollowSpecialistItem>>({ url: GetFollowSpecialistPageUrl, data });
+  }
+
+  function getFollowSpecialistCustomerPage(data: FollowSpecialistCustomerPageParams) {
+    return CDR.post<CommonList<FollowSpecialistCustomerItem>>({
+      url: GetFollowSpecialistCustomerPageUrl,
+      data,
+    });
   }
 
   // 跟进记录详情
@@ -170,6 +189,8 @@ export default function useFollowApi(CDR: CordysAxios) {
     getFollowPLanPage,
     getFollowRecordDetail,
     getFollowRecordPage,
+    getFollowSpecialistPage,
+    getFollowSpecialistCustomerPage,
     deleteFollowRecord,
     getFollowRecordTab,
     getFollowPlanTab,

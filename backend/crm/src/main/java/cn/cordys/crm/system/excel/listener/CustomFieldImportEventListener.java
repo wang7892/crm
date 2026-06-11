@@ -185,9 +185,10 @@ public class CustomFieldImportEventListener<T> extends CustomFieldCheckEventList
                     // 除合并的首行外, 其余合并行非子表字段都跳过
                     return;
                 }
-                if (businessFieldMap.containsKey(field.getInternalKey()) && !refSubMap.containsKey(field.getName())) {
+                String businessKey = getBusinessKey(field);
+                if (StringUtils.isNotEmpty(businessKey) && !refSubMap.containsKey(field.getName())) {
                     try {
-                        setPropertyValue(mergedTmpEntity, businessFieldMap.get(field.getInternalKey()).getBusinessKey(), val);
+                        setPropertyValue(mergedTmpEntity, businessKey, val);
                     } catch (Exception e) {
                         log.error("导入错误, 无法设置字段值. {}", e.getMessage());
                         throw new GenericException(e);
@@ -346,7 +347,12 @@ public class CustomFieldImportEventListener<T> extends CustomFieldCheckEventList
     private void setPropertyValue(T instance, String fieldName, Object value) throws Exception {
         Method setter = methodCache.get("set:" + fieldName);
         if (setter != null) {
-            setter.invoke(instance, value);
+            Class<?> parameterType = setter.getParameterTypes()[0];
+            Object propertyValue = value;
+            if (value != null && String.class.equals(parameterType) && !(value instanceof String)) {
+                propertyValue = value.toString();
+            }
+            setter.invoke(instance, propertyValue);
         }
     }
 

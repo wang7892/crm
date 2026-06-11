@@ -1,6 +1,7 @@
 package cn.cordys.crm.system.excel.listener;
 
 import cn.cordys.common.constants.BusinessModuleField;
+import cn.cordys.common.constants.CustomerPromotedField;
 import cn.cordys.common.exception.GenericException;
 import cn.cordys.common.mapper.CommonMapper;
 import cn.cordys.common.util.CommonBeanFactory;
@@ -26,6 +27,9 @@ import java.util.stream.Collectors;
  * @author song-cc-rock
  */
 public class CustomFieldCheckEventListener extends AnalysisEventListener<Map<Integer, String>> {
+
+    private static final int DEFAULT_TEXT_LENGTH_LIMIT = 255;
+    private static final int LONG_TEXT_LENGTH_LIMIT = 3000;
 
     /**
      * 表头字段集合
@@ -158,10 +162,8 @@ public class CustomFieldCheckEventListener extends AnalysisEventListener<Map<Int
     private void cacheUniqueSet() {
         if (!uniques.isEmpty()) {
             uniques.values().forEach(field -> {
-                if (businessFieldMap.containsKey(field.getInternalKey()) && !refSubMap.containsKey(field.getName())) {
-                    // 子表格字段不走业务唯一性校验
-                    BusinessModuleField businessModuleField = businessFieldMap.get(field.getInternalKey());
-                    String fieldName = businessModuleField.getBusinessKey();
+                String fieldName = getBusinessKey(field);
+                if (StringUtils.isNotEmpty(fieldName) && !refSubMap.containsKey(field.getName())) {
                     List<String> valList = commonMapper.getCheckValList(sourceTable, fieldName, currentOrg);
                     uniqueCheckSet.put(field.getName(), new HashSet<>(valList.stream().distinct().toList()));
                 } else {
@@ -286,14 +288,37 @@ public class CustomFieldCheckEventListener extends AnalysisEventListener<Map<Int
         if (field.needRepeatCheck()) {
             uniques.put(field.getName(), field);
         }
+        if (isLongTextField(field)) {
+            fieldLenLimit.put(field.getName(), LONG_TEXT_LENGTH_LIMIT);
+            return;
+        }
         if (Strings.CS.equalsAny(field.getType(), FieldType.INPUT.name(), FieldType.INPUT_NUMBER.name(), FieldType.DATE_TIME.name(),
                 FieldType.MEMBER.name(), FieldType.DEPARTMENT.name(), FieldType.DATA_SOURCE.name(), FieldType.RADIO.name(),
                 FieldType.SELECT.name(), FieldType.PHONE.name(), FieldType.LOCATION.name(), FieldType.INDUSTRY.name())) {
-            fieldLenLimit.put(field.getName(), 255);
+            fieldLenLimit.put(field.getName(), DEFAULT_TEXT_LENGTH_LIMIT);
         }
-        if (Strings.CS.equals(field.getType(), FieldType.TEXTAREA.name())) {
-            fieldLenLimit.put(field.getName(), 3000);
+    }
+
+    private boolean isLongTextField(BaseField field) {
+        return Strings.CS.equals(field.getType(), FieldType.TEXTAREA.name()) || isCustomerRemarkField(field);
+    }
+
+    private boolean isCustomerRemarkField(BaseField field) {
+        return CustomerPromotedField.REMARK.matches(field.getId(), field.getInternalKey(), field.getBusinessKey());
+    }
+
+    protected String getBusinessKey(BaseField field) {
+        CustomerPromotedField promotedField = CustomerPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey());
+        if (promotedField != null) {
+            return promotedField.getBusinessKey();
         }
+        if (StringUtils.isNotEmpty(field.getBusinessKey())) {
+            return field.getBusinessKey();
+        }
+        if (businessFieldMap == null || !businessFieldMap.containsKey(field.getInternalKey())) {
+            return null;
+        }
+        return businessFieldMap.get(field.getInternalKey()).getBusinessKey();
     }
 
     private boolean isInvalidField(BaseField field) {

@@ -6,6 +6,7 @@
         <groupId>cn.cordys</groupId>
         <artifactId>backend</artifactId>
         <version>${revision}</version>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>app</artifactId>

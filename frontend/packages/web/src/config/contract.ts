@@ -2,7 +2,6 @@ import {
   ContractBusinessTitleStatusEnum,
   ContractInvoiceStatusEnum,
   ContractPaymentPlanEnum,
-  ContractStatusEnum,
 } from '@lib/shared/enums/contractEnum';
 import { useI18n } from '@lib/shared/hooks/useI18n';
 import { SaveBusinessTitleParams } from '@lib/shared/models/contract';
@@ -55,37 +54,6 @@ export const contractInvoiceStatus = {
     color: '',
   },
 };
-
-export const contractStatusOptions = [
-  {
-    value: ContractStatusEnum.PENDING_SIGNING,
-    label: t('contract.toBeSigned'),
-  },
-  {
-    value: ContractStatusEnum.SIGNED,
-    label: t('contract.signed'),
-  },
-  {
-    value: ContractStatusEnum.CHANGE,
-    label: t('contract.change'),
-  },
-  {
-    value: ContractStatusEnum.IN_PROGRESS,
-    label: t('contract.inProgress'),
-  },
-  {
-    value: ContractStatusEnum.COMPLETED_PERFORMANCE,
-    label: t('contract.completedPerformance'),
-  },
-  {
-    value: ContractStatusEnum.ARCHIVED,
-    label: t('contract.archive'),
-  },
-  {
-    value: ContractStatusEnum.VOID,
-    label: t('common.voided'),
-  },
-];
 
 export const contractPaymentPlanStatusOptions = Object.entries(contractPaymentPlanStatus).map(([key, value]) => ({
   label: value.label,

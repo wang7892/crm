@@ -18,7 +18,7 @@ export default {
   'module.confirmDeleteCapacity': '确认删除库容吗？',
   'module.confirmDeleteCapacityContent': '删除后成员库容将不受限制',
   'module.customer.openSea': '公海设置',
-  'module.customer.followRecord': '跟进记录',
+  'module.customer.followRecord': '联系专员',
   'module.customer.followPlan': '跟进计划',
   'module.customer.capacitySet': '客户库容设置',
   'module.customer.addOpenSea': '添加公海',

@@ -7,6 +7,7 @@ import {
   downloadBusinessTitleTemplate,
   downloadContactTemplate,
   downloadContractPaymentRecordTemplate,
+  downloadContractTemplate,
   downloadLeadTemplate,
   downloadOptTemplate,
   downloadProductPriceTemplate,
@@ -14,6 +15,7 @@ import {
   importAccount,
   importBusinessTitle,
   importContact,
+  importContract,
   importContractPaymentRecord,
   importLead,
   importOpportunity,
@@ -22,6 +24,7 @@ import {
   preCheckImportAccount,
   preCheckImportBusinessTitle,
   preCheckImportContact,
+  preCheckImportContract,
   preCheckImportContractPaymentRecord,
   preCheckImportLead,
   preCheckImportOpt,
@@ -34,6 +37,7 @@ export type ImportApiType =
   | FormDesignKeyEnum.BUSINESS
   | FormDesignKeyEnum.CUSTOMER
   | FormDesignKeyEnum.CONTACT
+  | FormDesignKeyEnum.CONTRACT
   | FormDesignKeyEnum.PRODUCT
   | FormDesignKeyEnum.CONTRACT_PAYMENT_RECORD
   | FormDesignKeyEnum.PRICE
@@ -60,6 +64,11 @@ export const importApiMap: Record<ImportApiType, importRequestType> = {
     preCheck: preCheckImportContact,
     save: importContact,
     download: downloadContactTemplate,
+  },
+  [FormDesignKeyEnum.CONTRACT]: {
+    preCheck: preCheckImportContract,
+    save: importContract,
+    download: downloadContractTemplate,
   },
   [FormDesignKeyEnum.BUSINESS]: {
     preCheck: preCheckImportOpt,

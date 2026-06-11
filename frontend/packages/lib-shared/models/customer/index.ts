@@ -65,6 +65,9 @@ export interface UpdateCustomerFollowRecordParams extends SaveCustomerFollowReco
 
 export interface CustomerFollowRecordTableParams extends TableQueryParams {
   sourceId: string; // 客户ID/商机ID/线索ID
+  monitorSource?: 'WECOM' | 'MAIL';
+  startTime?: number;
+  endTime?: number;
 }
 
 export interface CustomerOpportunityTableParams extends TableQueryParams {
@@ -98,6 +101,20 @@ export interface CustomerFollowRecordListItem {
   poolId: string;
   moduleFields: ModuleField[];
   attachmentUrls?: string[];
+  wecomMediaList?: WecomFollowMediaItem[];
+}
+
+export interface WecomFollowMediaItem {
+  followRecordId?: string;
+  msgMediaType?: string;
+  mediaIndex?: number;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  durationMs?: number;
+  fetchStatus?: string;
+  crmAssetRef?: string;
+  previewUrl?: string;
 }
 
 export interface SaveCustomerFollowPlanParams extends SaveCustomerFollowRecordParams {

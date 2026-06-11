@@ -1,5 +1,21 @@
 <template>
+  <n-input-group v-if="props.manualInput && !props.multiple" class="crm-data-source-select-manual">
+    <n-input
+      :value="manualInputValue"
+      :placeholder="t('common.pleaseInput')"
+      :disabled="props.disabled"
+      clearable
+      :status="props.status"
+      @update:value="handleManualInputUpdate"
+    />
+    <n-button :disabled="props.disabled" @click="showDataSourcesModal">
+      <template #icon>
+        <CrmIcon type="iconicon_select_data" />
+      </template>
+    </n-button>
+  </n-input-group>
   <n-select
+    v-else
     v-model:value="value"
     filterable
     multiple
@@ -40,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-  import { DataTableRowKey, NSelect, SelectOption } from 'naive-ui';
+  import { DataTableRowKey, NButton, NInput, NInputGroup, NSelect, SelectOption } from 'naive-ui';
   import { cloneDeep } from 'lodash-es';
 
   import { FieldDataSourceTypeEnum } from '@lib/shared/enums/formDesignEnum';
@@ -64,6 +80,7 @@
     fieldConfig?: FormCreateField;
     hideChildTag?: boolean;
     status?: 'error' | 'success' | 'warning';
+    manualInput?: boolean;
   }
 
   const props = withDefaults(defineProps<DataSourceTableProps>(), {
@@ -113,6 +130,12 @@
   const dataSourceFormFields = ref<FormCreateField[]>([]);
   const initialRows = ref<InternalRowData[]>([]);
 
+  const manualInputValue = computed(() => {
+    const currentValue = value.value?.[0];
+    const currentRow = rows.value?.find((item) => item?.id === currentValue);
+    return (currentRow?.name || currentValue || '') as string;
+  });
+
   function handleFormInit(fields: FormCreateField[]) {
     dataSourceFormFields.value = fields;
   }
@@ -127,6 +150,26 @@
       });
     }
     dataSourcesModalVisible.value = false;
+  }
+
+  function handleManualInputUpdate(inputValue: string) {
+    const nextValue = inputValue || '';
+    if (!nextValue) {
+      rows.value = [];
+      value.value = [];
+    } else {
+      const manualRow = {
+        id: nextValue,
+        name: nextValue,
+      } as InternalRowData;
+      rows.value = [manualRow];
+      value.value = [nextValue];
+    }
+    selectedRows.value = cloneDeep(rows.value);
+    selectedKeys.value = value.value;
+    nextTick(() => {
+      emit('change', value.value, rows.value, dataSourceFormFields.value);
+    });
   }
 
   function handleDataSourceCancel() {

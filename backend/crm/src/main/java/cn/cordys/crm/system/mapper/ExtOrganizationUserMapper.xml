@@ -44,6 +44,9 @@
         su.gender,
         su.phone,
         su.email,
+        su.email_auth_code emailAuthCode,
+        su.wecom_id wecomId,
+        su.roomid,
         sou.supervisor_id,
         sou.employee_id,
         sou.position,
@@ -200,6 +203,24 @@
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
                     <property name="column" value="su.email"/>
+                </include>
+            </when>
+            <when test="condition.name == 'emailAuthCode'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="su.email_auth_code"/>
+                </include>
+            </when>
+            <when test="condition.name == 'wecomId'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="su.wecom_id"/>
+                </include>
+            </when>
+            <when test="condition.name == 'roomid'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="su.roomid"/>
                 </include>
             </when>
             <when test="condition.name == 'phoneNumber'">

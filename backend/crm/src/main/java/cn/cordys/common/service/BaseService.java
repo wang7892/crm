@@ -220,6 +220,39 @@ public class BaseService {
         return getUserNameMap(new ArrayList<>(userIds));
     }
 
+    public String resolveUserIdByIdOrName(String value, String orgId) {
+        if (StringUtils.isBlank(value)) {
+            return null;
+        }
+        return resolveUserIdsByIdsOrNames(List.of(value), orgId).get(value);
+    }
+
+    public Map<String, String> resolveUserIdsByIdsOrNames(Collection<String> values, String orgId) {
+        if (CollectionUtils.isEmpty(values)) {
+            return Collections.emptyMap();
+        }
+        List<String> candidates = values.stream()
+                .filter(StringUtils::isNotBlank)
+                .distinct()
+                .toList();
+        if (CollectionUtils.isEmpty(candidates)) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, String> resolvedUserIds = new HashMap<>();
+        extUserMapper.getUserDeptByUserIds(candidates, orgId)
+                .forEach(userDept -> resolvedUserIds.put(userDept.getUserId(), userDept.getUserId()));
+
+        List<String> unresolved = candidates.stream()
+                .filter(candidate -> !resolvedUserIds.containsKey(candidate))
+                .toList();
+        if (CollectionUtils.isNotEmpty(unresolved)) {
+            extUserMapper.selectUserOptionByNames(unresolved, orgId)
+                    .forEach(option -> resolvedUserIds.putIfAbsent(option.getName(), option.getId()));
+        }
+        return resolvedUserIds;
+    }
+
     public Map<String, UserDeptDTO> getUserDeptMapByUserIds(Set<String> ownerIds, String orgId) {
         return getUserDeptMapByUserIds(new ArrayList<>(ownerIds), orgId);
     }

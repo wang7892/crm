@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.cordys.crm.integration.wecom.ingestion.mapper.ExtWecomIngestionMapper">
+
+    <sql id="messageColumns">
+        m.id,
+        m.session_day_id,
+        m.organization_id,
+        m.corp_id,
+        m.wecom_msg_id,
+        m.message_direction,
+        m.sender_userid,
+        m.sender_external_userid,
+        m.peer_userid,
+        m.chat_type,
+        m.external_userid,
+        m.roomid,
+        m.matched_external_userid,
+        m.msg_type,
+        m.content_text,
+        m.send_time,
+        m.extra_json,
+        CASE
+            WHEN m.follow_record_id IS NOT NULL AND TRIM(m.follow_record_id) != '' AND f.id IS NULL THEN 'PENDING'
+            ELSE COALESCE(m.status, 'PENDING')
+        END AS status,
+        CASE
+            WHEN f.id IS NULL THEN NULL
+            ELSE m.follow_record_id
+        END AS follow_record_id,
+        m.error_message,
+        m.create_time,
+        m.update_user,
+        COALESCE(m.update_time, s.update_time) AS update_time
+    </sql>
+
+    <resultMap id="wecomIngestionSessionDayMap"
+               type="cn.cordys.crm.integration.wecom.ingestion.domain.WecomIngestionSessionDay">
+        <id property="id" column="id"/>
+        <result property="organizationId" column="organization_id"/>
+        <result property="corpId" column="corp_id"/>
+        <result property="chatDate" column="chat_date"/>
+        <result property="sessionKey" column="session_key"/>
+        <result property="chatType" column="chat_type"/>
+        <result property="externalUserid" column="external_userid"/>
+        <result property="specialistUserid" column="specialist_userid"/>
+        <result property="roomid" column="roomid"/>
+        <result property="firstSendTime" column="first_send_time"/>
+        <result property="lastSendTime" column="last_send_time"/>
+        <result property="messageCount" column="message_count"/>
+        <result property="mediaCount" column="media_count"/>
+        <result property="mergedContent" column="merged_content"/>
+        <result property="status" column="status"/>
+        <result property="followRecordId" column="follow_record_id"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="createUser" column="create_user"/>
+        <result property="updateUser" column="update_user"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="countSessions" resultType="long">
+        SELECT COUNT(1)
+        FROM wecom_ingestion_session_day
+        WHERE organization_id = #{organizationId}
+    </select>
+
+    <select id="listSessions" resultType="cn.cordys.crm.integration.wecom.ingestion.dto.response.WecomIngestionSessionRow">
+        SELECT id AS sessionKey,
+               chat_type AS chatType,
+               roomid,
+               last_send_time AS lastSendTime
+        FROM wecom_ingestion_session_day
+        WHERE organization_id = #{organizationId}
+        ORDER BY last_send_time DESC, update_time DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countMessagesBySession" resultType="long">
+        SELECT COUNT(1)
+        FROM wecom_ingestion_message
+        WHERE organization_id = #{organizationId}
+          AND session_day_id = #{sessionKey}
+    </select>
+
+    <select id="listMessagesBySession" resultType="cn.cordys.crm.integration.wecom.ingestion.domain.WecomIngestionEvent">
+        SELECT
+        <include refid="messageColumns"/>
+        FROM wecom_ingestion_message m
+        JOIN wecom_ingestion_session_day s ON s.id COLLATE utf8mb4_general_ci = m.session_day_id COLLATE utf8mb4_general_ci
+        LEFT JOIN follow_up_record f
+          ON f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+         AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+        WHERE m.organization_id = #{organizationId}
+          AND m.session_day_id = #{sessionKey}
+        ORDER BY m.send_time DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="listUnsyncedMessagesBySession" resultType="cn.cordys.crm.integration.wecom.ingestion.domain.WecomIngestionEvent">
+        SELECT
+        <include refid="messageColumns"/>
+        FROM wecom_ingestion_message m
+        JOIN wecom_ingestion_session_day s ON s.id COLLATE utf8mb4_general_ci = m.session_day_id COLLATE utf8mb4_general_ci
+        LEFT JOIN follow_up_record f
+          ON f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+         AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+        WHERE m.organization_id = #{organizationId}
+          AND m.session_day_id = #{sessionKey}
+          AND LOWER(COALESCE(m.msg_type, '')) != 'revoke'
+          AND (m.follow_record_id IS NULL OR TRIM(m.follow_record_id) = '' OR f.id IS NULL)
+        ORDER BY m.send_time ASC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="listMessagesByIds" resultType="cn.cordys.crm.integration.wecom.ingestion.domain.WecomIngestionEvent">
+        SELECT
+        <include refid="messageColumns"/>
+        FROM wecom_ingestion_message m
+        JOIN wecom_ingestion_session_day s ON s.id COLLATE utf8mb4_general_ci = m.session_day_id COLLATE utf8mb4_general_ci
+        LEFT JOIN follow_up_record f
+          ON f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+         AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+        WHERE m.organization_id = #{organizationId}
+          AND m.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY m.send_time ASC
+    </select>
+
+    <update id="markMessagesSuccess">
+        UPDATE wecom_ingestion_message
+        SET status = 'SUCCESS',
+            follow_record_id = #{followRecordId},
+            error_message = NULL,
+            update_user = #{operatorUserId},
+            update_time = #{now}
+        WHERE organization_id = #{organizationId}
+          AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </update>
+
+    <insert id="insertMessageFollowRecords">
+        INSERT IGNORE INTO wecom_ingestion_message_follow_record
+            (id, organization_id, message_id, follow_record_id, create_user, create_time)
+        VALUES
+        <foreach collection="messageIds" item="messageId" separator=",">
+            (REPLACE(UUID(), '-', ''), #{organizationId}, #{messageId}, #{followRecordId}, #{operatorUserId}, #{now})
+        </foreach>
+    </insert>
+
+    <update id="refreshSessionDaySyncState">
+        UPDATE wecom_ingestion_session_day s
+        SET s.status = CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM wecom_ingestion_message m
+                    WHERE m.session_day_id COLLATE utf8mb4_general_ci = #{sessionDayId} COLLATE utf8mb4_general_ci
+                      AND m.organization_id = #{organizationId}
+                      AND LOWER(COALESCE(m.msg_type, '')) != 'revoke'
+                      AND (
+                        m.follow_record_id IS NULL
+                        OR TRIM(m.follow_record_id) = ''
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM follow_up_record f
+                            WHERE f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+                              AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+                        )
+                      )
+                ) THEN 'PENDING'
+                ELSE 'SUCCESS'
+            END,
+            s.follow_record_id = CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM wecom_ingestion_message m
+                    WHERE m.session_day_id COLLATE utf8mb4_general_ci = #{sessionDayId} COLLATE utf8mb4_general_ci
+                      AND m.organization_id = #{organizationId}
+                      AND LOWER(COALESCE(m.msg_type, '')) != 'revoke'
+                      AND (
+                        m.follow_record_id IS NULL
+                        OR TRIM(m.follow_record_id) = ''
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM follow_up_record f
+                            WHERE f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+                              AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+                        )
+                      )
+                ) THEN NULL
+                ELSE #{latestFollowRecordId}
+            END,
+            s.error_message = NULL,
+            s.update_user = #{operatorUserId},
+            s.update_time = #{now}
+        WHERE s.id = #{sessionDayId}
+          AND s.organization_id = #{organizationId}
+    </update>
+
+    <delete id="deleteMessageFollowRecordsBySession">
+        DELETE rel
+        FROM wecom_ingestion_message_follow_record rel
+        JOIN wecom_ingestion_message msg
+          ON msg.id COLLATE utf8mb4_general_ci = rel.message_id COLLATE utf8mb4_general_ci
+         AND msg.organization_id COLLATE utf8mb4_general_ci = rel.organization_id COLLATE utf8mb4_general_ci
+        WHERE rel.organization_id = #{organizationId}
+          AND msg.session_day_id = #{sessionDayId}
+    </delete>
+
+    <delete id="deleteMediaBySession">
+        DELETE media
+        FROM wecom_ingestion_media media
+        JOIN wecom_ingestion_message msg
+          ON (media.message_id COLLATE utf8mb4_general_ci = msg.id COLLATE utf8mb4_general_ci
+              OR media.event_id COLLATE utf8mb4_general_ci = msg.id COLLATE utf8mb4_general_ci)
+        WHERE msg.organization_id = #{organizationId}
+          AND msg.session_day_id = #{sessionDayId}
+    </delete>
+
+    <delete id="deleteMessagesBySession">
+        DELETE FROM wecom_ingestion_message
+        WHERE organization_id = #{organizationId}
+          AND session_day_id = #{sessionDayId}
+    </delete>
+
+    <delete id="deleteSessionDay">
+        DELETE FROM wecom_ingestion_session_day
+        WHERE organization_id = #{organizationId}
+          AND id = #{sessionDayId}
+    </delete>
+
+    <select id="listPendingAutoFollowIds" resultType="string">
+        SELECT id
+        FROM wecom_ingestion_session_day
+        WHERE COALESCE(status, 'PENDING') = 'PENDING'
+          AND (follow_record_id IS NULL OR TRIM(follow_record_id) = '')
+          AND EXISTS (
+            SELECT 1
+            FROM wecom_ingestion_message m
+            WHERE m.session_day_id COLLATE utf8mb4_general_ci = wecom_ingestion_session_day.id COLLATE utf8mb4_general_ci
+              AND m.organization_id COLLATE utf8mb4_general_ci = wecom_ingestion_session_day.organization_id COLLATE utf8mb4_general_ci
+              AND LOWER(COALESCE(m.msg_type, '')) != 'revoke'
+              AND (
+                m.follow_record_id IS NULL
+                OR TRIM(m.follow_record_id) = ''
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM follow_up_record f
+                    WHERE f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+                      AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+                )
+              )
+          )
+          <if test="!includeCurrentDay">
+          AND chat_date &lt; DATE_FORMAT(CURRENT_DATE(), '%Y-%m-%d')
+          </if>
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listPendingAutoFollow" resultMap="wecomIngestionSessionDayMap">
+        SELECT id,
+               organization_id,
+               corp_id,
+               chat_date,
+               session_key,
+               chat_type,
+               external_userid,
+               specialist_userid,
+               roomid,
+               first_send_time,
+               last_send_time,
+               message_count,
+               media_count,
+               merged_content,
+               status,
+               follow_record_id,
+               error_message,
+               create_user,
+               update_user,
+               create_time,
+               update_time
+        FROM wecom_ingestion_session_day
+        WHERE COALESCE(status, 'PENDING') = 'PENDING'
+          AND (follow_record_id IS NULL OR TRIM(follow_record_id) = '')
+          AND EXISTS (
+            SELECT 1
+            FROM wecom_ingestion_message m
+            WHERE m.session_day_id COLLATE utf8mb4_general_ci = wecom_ingestion_session_day.id COLLATE utf8mb4_general_ci
+              AND m.organization_id COLLATE utf8mb4_general_ci = wecom_ingestion_session_day.organization_id COLLATE utf8mb4_general_ci
+              AND LOWER(COALESCE(m.msg_type, '')) != 'revoke'
+              AND (
+                m.follow_record_id IS NULL
+                OR TRIM(m.follow_record_id) = ''
+                OR NOT EXISTS (
+                    SELECT 1
+                    FROM follow_up_record f
+                    WHERE f.id COLLATE utf8mb4_general_ci = m.follow_record_id COLLATE utf8mb4_general_ci
+                      AND f.organization_id COLLATE utf8mb4_general_ci = m.organization_id COLLATE utf8mb4_general_ci
+                )
+              )
+          )
+          <if test="!includeCurrentDay">
+          AND chat_date &lt; DATE_FORMAT(CURRENT_DATE(), '%Y-%m-%d')
+          </if>
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+</mapper>

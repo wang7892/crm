@@ -38,29 +38,74 @@ export default function useTableStore() {
     return columns;
   }
 
+  /**
+   * 在保留用户原有列顺序的前提下，把代码里新增的列按「代码定义顺序」插入到相邻列之间，
+   * 避免整列被追加到表格末尾（例如新增「企微id」应紧跟「邮箱授权码」，而非出现在「更新人」后）。
+   */
+  function insertNewKeysByCodeOrder(
+    oldOrderedKeys: (string | number)[],
+    codeBodyCols: CrmDataTableColumn[]
+  ): (string | number)[] {
+    const codeKeys = codeBodyCols.map((c) => c.key).filter((k) => k != null) as (string | number)[];
+    const codeKeySet = new Set(codeKeys);
+    const result = oldOrderedKeys.filter((k) => codeKeySet.has(k));
+
+    for (let i = 0; i < codeKeys.length; i++) {
+      const k = codeKeys[i];
+      if (!result.includes(k)) {
+        let insertAt = 0;
+        let anchored = false;
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = codeKeys[j];
+          const idx = result.indexOf(prev);
+          if (idx >= 0) {
+            insertAt = idx + 1;
+            anchored = true;
+            break;
+          }
+        }
+        if (!anchored) {
+          insertAt = 0;
+        }
+        result.splice(insertAt, 0, k);
+      }
+    }
+    // 新增列若早已写入缓存但排在末尾，上面的插入分支不会执行；将「企微id」固定到「邮箱授权码」之后
+    const emailAuthCodeKey = 'emailAuthCode';
+    const wecomIdKey = 'wecomId';
+    if (result.includes(emailAuthCodeKey) && result.includes(wecomIdKey)) {
+      const withoutWecom = result.filter((x) => x !== wecomIdKey);
+      const emailIdx = withoutWecom.indexOf(emailAuthCodeKey);
+      if (emailIdx >= 0) {
+        withoutWecom.splice(emailIdx + 1, 0, wecomIdKey);
+        return withoutWecom;
+      }
+    }
+    return result;
+  }
+
   function sortByOldOrder(oldArr: CrmDataTableColumn[], newArr: CrmDataTableColumn[]): CrmDataTableColumn[] {
     const mapNew = new Map(newArr.map((item) => [item.key, item]));
-    // 先按 old 顺序排列 new 中存在的项
-    const sorted = oldArr
-      .map((item) => mapNew.get(item.key))
-      .filter(
-        (e) =>
-          e &&
-          e.key !== SpecialColumnEnum.OPERATION &&
-          e.key !== SpecialColumnEnum.DRAG &&
-          e.type !== SpecialColumnEnum.SELECTION &&
-          e.columnSelectorDisabled !== true &&
-          newArr.some((n) => n.key === e.key)
-      ) as CrmDataTableColumn[];
-    // 再把 new 中 old 没有的项追加在最后
-    const extra = newArr.filter(
-      (item) =>
-        !oldArr.some((o) => o.key === item.key) &&
-        item.columnSelectorDisabled !== true &&
-        item.type !== SpecialColumnEnum.SELECTION &&
-        item.key !== SpecialColumnEnum.OPERATION &&
-        item.key !== SpecialColumnEnum.DRAG
-    );
+
+    const isBodyColumnKey = (key: string | number | undefined, col: CrmDataTableColumn | undefined) =>
+      !!col &&
+      !!key &&
+      col.key !== SpecialColumnEnum.OPERATION &&
+      col.key !== SpecialColumnEnum.DRAG &&
+      col.type !== SpecialColumnEnum.SELECTION &&
+      col.columnSelectorDisabled !== true &&
+      newArr.some((n) => n.key === key);
+
+    const oldBodyKeys = oldArr.map((item) => item.key).filter((key) => isBodyColumnKey(key, mapNew.get(key))) as (
+      | string
+      | number
+    )[];
+
+    const codeBodyCols = newArr.filter((item) => isBodyColumnKey(item.key, item));
+
+    const mergedBodyKeys = insertNewKeysByCodeOrder(oldBodyKeys, codeBodyCols);
+    const sorted = mergedBodyKeys.map((key) => mapNew.get(key)).filter(Boolean) as CrmDataTableColumn[];
+
     const operationColumn = oldArr.find((item) => item.key === SpecialColumnEnum.OPERATION);
     const selectionColumn = newArr.find((item) => item.type === SpecialColumnEnum.SELECTION);
     const orderColumn = newArr.find((item) => item.key === SpecialColumnEnum.ORDER);
@@ -77,7 +122,33 @@ export default function useTableStore() {
       // 如果只有选择列，则将其放在最前面
       sorted.unshift(selectionColumn);
     }
-    return [dragColumn, ...sorted, ...extra, operationColumn].filter(Boolean) as CrmDataTableColumn[];
+    return [dragColumn, ...sorted, operationColumn].filter(Boolean) as CrmDataTableColumn[];
+  }
+
+  function buildMergedColumns(
+    storedColumn: CrmDataTableColumn[],
+    codeColumn: CrmDataTableColumn[]
+  ): CrmDataTableColumn[] {
+    return sortByOldOrder(storedColumn, codeColumn).map((e) => {
+      const sameItem = storedColumn.find((item) => item.key === e.key);
+      if (sameItem) {
+        let { width } = sameItem;
+        if (e.key === SpecialColumnEnum.OPERATION) {
+          const operationColumn = codeColumn.find((item) => item.key === SpecialColumnEnum.OPERATION);
+          width = operationColumn?.width;
+        } else if (e.key === SpecialColumnEnum.ORDER) {
+          const orderColumn = codeColumn.find((item) => item.key === SpecialColumnEnum.ORDER);
+          width = orderColumn?.width;
+        }
+        return {
+          ...e,
+          width,
+          showInTable: sameItem.showInTable,
+          fixed: sameItem.fixed || e.fixed,
+        };
+      }
+      return e;
+    });
   }
 
   async function initColumn(tableKey: TableKeyEnum, column: CrmDataTableColumn[]) {
@@ -98,32 +169,47 @@ export default function useTableStore() {
         const isEqual = isArraysEqualWithOrder(oldColumn, column);
         if (!isEqual) {
           // 如果不相等，说明有变动将新的column存入indexDB
-          const newColumns = sortByOldOrder(tableColumnsMap.column, column).map((e) => {
-            const sameItem = tableColumnsMap.column.find((item) => item.key === e.key);
-            if (sameItem) {
-              // 如果是相同的列，则更新除了宽度、显隐、固定以外的属性
-              let { width } = sameItem;
-              if (e.key === SpecialColumnEnum.OPERATION) {
-                const operationColumn = column.find((item) => item.key === SpecialColumnEnum.OPERATION);
-                width = operationColumn?.width;
-              } else if (e.key === SpecialColumnEnum.ORDER) {
-                const orderColumn = column.find((item) => item.key === SpecialColumnEnum.ORDER);
-                width = orderColumn?.width;
-              }
-              return {
-                ...e,
-                width,
-                showInTable: sameItem.showInTable,
-                fixed: sameItem.fixed || e.fixed,
-              };
-            }
-            return e;
-          });
-          setTableColumnsMap(tableKey, {
+          const newColumns = buildMergedColumns(tableColumnsMap.column, column);
+          await setTableColumnsMap(tableKey, {
             ...tableColumnsMap,
             column: newColumns,
             columnBackup: cloneDeep(column),
           });
+        }
+        // 兼容：备份与代码列被误判为「相同」时，IndexedDB 里仍缺少新列 key（如新增字段列），需再合并一次
+        const latestMap = await getTableColumnsMap(tableKey);
+        if (latestMap) {
+          const savedKeys = new Set(latestMap.column.map((c) => c.key).filter(Boolean));
+          const missingCodeColumn = column.some(
+            (c) =>
+              c.key &&
+              c.key !== SpecialColumnEnum.OPERATION &&
+              c.type !== SpecialColumnEnum.SELECTION &&
+              c.key !== SpecialColumnEnum.DRAG &&
+              !savedKeys.has(c.key)
+          );
+          if (missingCodeColumn) {
+            const newColumns = buildMergedColumns(latestMap.column, column);
+            await setTableColumnsMap(tableKey, {
+              ...latestMap,
+              column: newColumns,
+              columnBackup: cloneDeep(column),
+            });
+          }
+          // 合并规则升级后（如新增列按代码顺序插入而非追加到末尾），纠正本地已缓存的错误列顺序
+          const syncedMap = await getTableColumnsMap(tableKey);
+          if (syncedMap) {
+            const reordered = buildMergedColumns(syncedMap.column, column);
+            const oldOrder = syncedMap.column.map((c) => String(c.key)).join(',');
+            const newOrder = reordered.map((c) => String(c.key)).join(',');
+            if (oldOrder !== newOrder) {
+              await setTableColumnsMap(tableKey, {
+                ...syncedMap,
+                column: reordered,
+                columnBackup: cloneDeep(column),
+              });
+            }
+          }
         }
       }
     } catch (e) {

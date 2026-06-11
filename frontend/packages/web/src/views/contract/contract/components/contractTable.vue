@@ -19,6 +19,12 @@
         <n-button v-permission="['CONTRACT:ADD']" type="primary" @click="handleNewClick">
           {{ t('contract.new') }}
         </n-button>
+        <CrmImportButton
+          v-if="hasAnyPermission(['CONTRACT:IMPORT'])"
+          :api-type="FormDesignKeyEnum.CONTRACT"
+          :title="t('module.contract')"
+          @import-success="() => searchData()"
+        />
         <n-button
           v-permission="['CONTRACT:EXPORT']"
           type="primary"
@@ -46,7 +52,9 @@
         v-model:active-tab="activeTab"
         :type="FormDesignKeyEnum.CONTRACT"
         :custom-fields-config-list="customFieldsFilterConfig"
+        :default-active-tab="CustomerSearchTypeEnum.ALL"
         :filter-config-list="filterConfigList"
+        :ignore-cached-active-tabs="[CustomerSearchTypeEnum.SELF]"
         :advanced-original-form="advancedOriginalForm"
         :route-name="ContractRouteEnum.CONTRACT_INDEX"
         @refresh-table-data="searchData"
@@ -79,9 +87,6 @@
     :form-key="activeFormKey"
     :source-id="activeSourceId"
     :need-init-detail="needInitDetail"
-    :initial-source-name="initialSourceName"
-    :link-form-key="FormDesignKeyEnum.CONTRACT"
-    :link-form-info="linkFormInfo"
     @saved="handleFormCreateSaved"
   />
 
@@ -94,13 +99,6 @@
     @create-success="handleExportCreateSuccess"
   />
 
-  <VoidReasonModal
-    v-model:visible="showVoidReasonModal"
-    :name="activeSourceName"
-    :sourceId="activeSourceId"
-    @refresh="searchData(undefined, activeSourceId)"
-  />
-
   <DetailDrawer
     v-model:visible="showDetailDrawer"
     :sourceId="activeSourceId"
@@ -111,65 +109,39 @@
     @open-business-title-drawer="handleOpenBusinessTitleDrawer"
   />
 
-  <ApprovalModal
-    v-model:show="showApprovalModal"
-    :quotationIds="checkedRowKeys"
-    :approval-api="batchApproveContract"
-    @refresh="handleApprovalSuccess"
-  />
-
-  <batchOperationResultModal v-model:visible="resultVisible" :result="batchResult" :name="batchOperationName" />
-
   <businessTitleDrawer v-model:visible="showBusinessTitleDetailDrawer" :source-id="activeBusinessTitleSourceId" />
 </template>
 
 <script setup lang="ts">
   import { useRoute } from 'vue-router';
-  import { DataTableRowKey, NButton, NTooltip, useMessage } from 'naive-ui';
+  import { DataTableRowKey, NButton, useMessage } from 'naive-ui';
 
-  import { ContractStatusEnum } from '@lib/shared/enums/contractEnum';
+  import { CustomerSearchTypeEnum } from '@lib/shared/enums/customerEnum';
   import { FieldTypeEnum, FormDesignKeyEnum } from '@lib/shared/enums/formDesignEnum';
-  import { QuotationStatusEnum } from '@lib/shared/enums/opportunityEnum';
   import { useI18n } from '@lib/shared/hooks/useI18n';
   import useLocale from '@lib/shared/locale/useLocale';
   import { abbreviateNumber, characterLimit } from '@lib/shared/method';
   import { ExportTableColumnItem } from '@lib/shared/models/common';
   import type { ContractItem } from '@lib/shared/models/contract';
-  import { BatchOperationResult } from '@lib/shared/models/opportunity';
 
-  import { COMMON_SELECTION_OPERATORS } from '@/components/pure/crm-advance-filter/index';
   import CrmAdvanceFilter from '@/components/pure/crm-advance-filter/index.vue';
   import { FilterForm, FilterFormItem, FilterResult } from '@/components/pure/crm-advance-filter/type';
   import type { ActionsItem } from '@/components/pure/crm-more-action/type';
   import CrmNameTooltip from '@/components/pure/crm-name-tooltip/index.vue';
   import CrmTable from '@/components/pure/crm-table/index.vue';
   import CrmTableButton from '@/components/pure/crm-table-button/index.vue';
-  import StatusTagSelect from '@/components/business/crm-follow-detail/statusTagSelect.vue';
   import CrmFormCreateDrawer from '@/components/business/crm-form-create-drawer/index.vue';
+  import CrmImportButton from '@/components/business/crm-import-button/index.vue';
   import CrmOperationButton from '@/components/business/crm-operation-button/index.vue';
   import CrmTableExportModal from '@/components/business/crm-table-export-modal/index.vue';
   import CrmViewSelect from '@/components/business/crm-view-select/index.vue';
   import businessTitleDrawer from '../../businessTitle/components/detail.vue';
   import DetailDrawer from './detail.vue';
-  import VoidReasonModal from './voidReasonModal.vue';
-  import ApprovalModal from '@/views/opportunity/components/quotation/approvalModal.vue';
-  import batchOperationResultModal from '@/views/opportunity/components/quotation/batchOperationResultModal.vue';
-  import QuotationStatus from '@/views/opportunity/components/quotation/quotationStatus.vue';
 
-  import {
-    batchApproveContract,
-    changeContractStatus,
-    deleteContract,
-    getContractStatistic,
-    revokeContract,
-  } from '@/api/modules';
+  import { deleteContract, getContractStatistic } from '@/api/modules';
   import { baseFilterConfigList } from '@/config/clue';
-  import { contractStatusOptions } from '@/config/contract';
-  import { quotationStatusOptions } from '@/config/opportunity';
-  import useFormCreateApi from '@/hooks/useFormCreateApi';
   import useFormCreateTable from '@/hooks/useFormCreateTable';
   import useModal from '@/hooks/useModal';
-  import { useUserStore } from '@/store';
   // import useViewChartParams, { STORAGE_VIEW_CHART_KEY, ViewChartResult } from '@/hooks/useViewChartParams';
   import { getExportColumns } from '@/utils/export';
   import { hasAnyPermission } from '@/utils/permission';
@@ -187,7 +159,6 @@
     ): void;
   }>();
 
-  const useStore = useUserStore();
   const { t } = useI18n();
   const Message = useMessage();
   const { currentLocale } = useLocale(Message.loading);
@@ -201,11 +172,9 @@
   const checkedRowKeys = ref<DataTableRowKey[]>([]);
   const tableRefreshId = ref(0);
   const tableRemoveRefreshId = ref('');
-  const tableItemRefreshId = ref('');
 
   const formCreateDrawerVisible = ref(false);
   const activeSourceId = ref('');
-  const activeSourceName = ref('');
   const needInitDetail = ref(false);
   const activeFormKey = ref(FormDesignKeyEnum.CONTRACT);
 
@@ -213,7 +182,6 @@
     needInitDetail.value = false;
     activeFormKey.value = FormDesignKeyEnum.CONTRACT;
     activeSourceId.value = '';
-    activeSourceName.value = '';
     formCreateDrawerVisible.value = true;
   }
 
@@ -228,78 +196,18 @@
     checkedRowKeys.value = [];
   }
 
-  const showApprovalModal = ref(false);
-  const batchOperationName = ref('');
-  const batchResult = ref<BatchOperationResult>({
-    success: 0,
-    fail: 0,
-    errorMessages: '',
-  });
-  const resultVisible = ref(false);
-  function handleApprovalSuccess(val: BatchOperationResult) {
-    batchResult.value = val;
-    resultVisible.value = true;
-    tableRefreshId.value += 1;
-  }
-
   function handleBatchAction(item: ActionsItem) {
     switch (item.key) {
       case 'exportChecked':
         isExportAll.value = false;
         showExportModal.value = true;
         break;
-      case 'approval':
-        showApprovalModal.value = true;
-        batchOperationName.value = t('common.batchApproval');
-        break;
       default:
         break;
     }
   }
 
-  function getEnableApprovalGroupList(row: ContractItem) {
-    if (row.approvalStatus === QuotationStatusEnum.APPROVING) {
-      return [
-        {
-          label: t('common.approval'),
-          key: 'approval',
-          permission: ['CONTRACT:APPROVAL'],
-        },
-        ...(row.createUser === useStore.userInfo.id
-          ? [
-              {
-                label: t('common.revoke'),
-                key: 'revoke',
-              },
-            ]
-          : []),
-        {
-          label: t('common.delete'),
-          key: 'delete',
-          permission: ['CONTRACT:DELETE'],
-        },
-      ];
-    }
-    if (row.approvalStatus === QuotationStatusEnum.APPROVED) {
-      return [
-        ...(row.stage !== ContractStatusEnum.VOID
-          ? [
-              {
-                label: t('contract.payment'),
-                key: 'paymentRecord',
-                permission: ['CONTRACT:PAYMENT'],
-                disabled: !row.amount || row.alreadyPayAmount >= row.amount,
-                tooltipContent: row.alreadyPayAmount >= row.amount ? t('contract.noPaymentRequired') : undefined,
-              },
-            ]
-          : []),
-        {
-          label: t('common.delete'),
-          key: 'delete',
-          permission: ['CONTRACT:DELETE'],
-        },
-      ];
-    }
+  function getOperationGroupList() {
     return [
       {
         label: t('common.edit'),
@@ -312,34 +220,6 @@
         permission: ['CONTRACT:DELETE'],
       },
     ];
-  }
-
-  function getOperationGroupList(row: ContractItem, dicApprovalEnable: boolean) {
-    return dicApprovalEnable
-      ? getEnableApprovalGroupList(row)
-      : [
-          {
-            label: t('common.edit'),
-            key: 'edit',
-            permission: ['CONTRACT:UPDATE'],
-          },
-          ...(row.stage !== ContractStatusEnum.VOID
-            ? [
-                {
-                  label: t('contract.payment'),
-                  key: 'paymentRecord',
-                  permission: ['CONTRACT:PAYMENT'],
-                  disabled: !row.amount || row.alreadyPayAmount >= row.amount,
-                  tooltipContent: row.alreadyPayAmount >= row.amount ? t('contract.noPaymentRequired') : undefined,
-                },
-              ]
-            : []),
-          {
-            label: t('common.delete'),
-            key: 'delete',
-            permission: ['CONTRACT:DELETE'],
-          },
-        ];
   }
 
   const showDetailDrawer = ref(false);
@@ -371,54 +251,9 @@
     });
   }
 
-  const showVoidReasonModal = ref(false);
-  function handleVoided(row: ContractItem) {
-    activeSourceName.value = row.name;
-    activeSourceId.value = row.id;
-    showVoidReasonModal.value = true;
-  }
-
-  async function handleRevoke(row: ContractItem) {
-    try {
-      await revokeContract(row.id);
-      Message.success(t('common.revokeSuccess'));
-      tableItemRefreshId.value = row.id;
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(error);
-    }
-  }
-
   // 回款
-  const initialSourceName = ref('');
-  const linkFormInfo = ref();
-  const { initFormDetail, initFormConfig, linkFormFieldMap } = useFormCreateApi({
-    formKey: ref(FormDesignKeyEnum.CONTRACT),
-    sourceId: activeSourceId,
-  });
-  async function handlePaymentRecord(row: ContractItem) {
-    activeSourceId.value = row.id;
-    initialSourceName.value = row.name;
-    needInitDetail.value = false;
-    activeFormKey.value = FormDesignKeyEnum.CONTRACT_PAYMENT_RECORD;
-    await initFormConfig();
-    await initFormDetail(false, true);
-    linkFormInfo.value = linkFormFieldMap.value;
-    formCreateDrawerVisible.value = true;
-  }
-
   async function handleActionSelect(row: ContractItem, actionKey: string) {
     switch (actionKey) {
-      case 'approval':
-        activeSourceId.value = row.id;
-        showDetailDrawer.value = true;
-        break;
-      case 'paymentRecord':
-        handlePaymentRecord(row);
-        break;
-      case 'revoke':
-        handleRevoke(row);
-        break;
       case 'edit':
         handleEdit(row.id);
         break;
@@ -442,27 +277,16 @@
     );
   }
 
-  async function changeStatus(id: string, stage: string) {
-    try {
-      await changeContractStatus(id, stage);
-      Message.success(t('common.updateSuccess'));
-      return true;
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(error);
-    }
-  }
-
-  const { useTableRes, customFieldsFilterConfig, fieldList, dicApprovalEnable } = await useFormCreateTable({
+  const { useTableRes, customFieldsFilterConfig, fieldList } = await useFormCreateTable({
     formKey: FormDesignKeyEnum.CONTRACT,
     operationColumn: {
       key: 'operation',
       width: currentLocale.value === 'en-US' ? 180 : 150,
       fixed: 'right',
       render: (row: ContractItem) =>
-        getOperationGroupList(row, dicApprovalEnable.value).length
+        getOperationGroupList().length
           ? h(CrmOperationButton, {
-              groupList: getOperationGroupList(row, dicApprovalEnable.value),
+              groupList: getOperationGroupList(),
               onSelect: (key: string) => handleActionSelect(row, key),
             })
           : '-',
@@ -501,47 +325,8 @@
               { default: () => row.customerName, trigger: () => row.customerName }
             );
       },
-      stage: (row: ContractItem) => {
-        const disabled = row.approvalStatus !== QuotationStatusEnum.APPROVED || !hasAnyPermission(['CONTRACT:STAGE']);
-        if (disabled && dicApprovalEnable.value) {
-          return h(
-            NTooltip,
-            { delay: 300 },
-            {
-              trigger: () =>
-                h(
-                  'div',
-                  { class: 'cursor-not-allowed' },
-                  {
-                    default: () => contractStatusOptions.find((item) => item.value === row?.stage)?.label,
-                  }
-                ),
-              default: () => t('contract.changeStageTip'),
-            }
-          );
-        }
-        return h(StatusTagSelect, {
-          'status': row.stage as ContractStatusEnum,
-          'noRender': true,
-          'disabled': disabled && dicApprovalEnable.value,
-          'onUpdate:status': async (val) => {
-            // 修改为作废的时候需要填写原因
-            if (val === ContractStatusEnum.VOID) {
-              handleVoided(row);
-            } else {
-              const res = await changeStatus(row.id, val);
-              if (res) row.stage = val;
-            }
-          },
-          'statusOptions': contractStatusOptions,
-        });
-      },
-      approvalStatus: (row: ContractItem) =>
-        h(QuotationStatus, {
-          status: row.approvalStatus,
-        }),
     },
-    permission: ['CONTRACT:EXPORT', 'CONTRACT:APPROVAL'],
+    permission: ['CONTRACT:EXPORT'],
     containerClass: '.crm-contract-table',
   });
   const {
@@ -610,15 +395,6 @@
           key: 'exportChecked',
           permission: ['CONTRACT:EXPORT'],
         },
-        ...(dicApprovalEnable.value
-          ? [
-              {
-                label: t('common.batchApproval'),
-                key: 'approval',
-                permission: ['CONTRACT:APPROVAL'],
-              },
-            ]
-          : []),
       ],
     };
   });
@@ -640,38 +416,6 @@
         containChildIds: [],
       },
     },
-    {
-      title: t('contract.status'),
-      dataIndex: 'stage',
-      type: FieldTypeEnum.SELECT_MULTIPLE,
-      operatorOption: COMMON_SELECTION_OPERATORS,
-      selectProps: {
-        options: contractStatusOptions,
-      },
-    },
-    {
-      title: t('contract.voidReason'),
-      dataIndex: 'voidReason',
-      type: FieldTypeEnum.INPUT,
-    },
-    {
-      title: t('contract.alreadyPayAmount'),
-      dataIndex: 'alreadyPayAmount',
-      type: FieldTypeEnum.INPUT_NUMBER,
-    },
-    ...(dicApprovalEnable.value
-      ? [
-          {
-            title: t('contract.approvalStatus'),
-            dataIndex: 'approvalStatus',
-            operatorOption: COMMON_SELECTION_OPERATORS,
-            type: FieldTypeEnum.SELECT_MULTIPLE,
-            selectProps: {
-              options: quotationStatusOptions.filter((item) => ![QuotationStatusEnum.VOIDED].includes(item.value)),
-            },
-          },
-        ]
-      : []),
     ...baseFilterConfigList,
   ]);
 
@@ -714,7 +458,7 @@
   }
 
   function handleFormCreateSaved(res: any) {
-    if (needInitDetail.value || activeFormKey.value === FormDesignKeyEnum.CONTRACT_PAYMENT_RECORD) {
+    if (needInitDetail.value) {
       searchData(undefined, res.id);
     } else {
       searchData();
@@ -734,17 +478,6 @@
     (val) => {
       if (val) {
         removeItemFromList(val);
-      }
-    }
-  );
-
-  watch(
-    () => tableItemRefreshId.value,
-    (val) => {
-      if (val) {
-        loadList(false, val);
-        getStatistic();
-        tableItemRefreshId.value = '';
       }
     }
   );

@@ -3,7 +3,6 @@ package cn.cordys.crm.system.controller;
 
 import cn.cordys.crm.contract.constants.ContractApprovalStatus;
 import cn.cordys.crm.contract.constants.ContractPaymentPlanStatus;
-import cn.cordys.crm.contract.constants.ContractStage;
 import cn.cordys.crm.contract.domain.Contract;
 import cn.cordys.crm.contract.domain.ContractPaymentPlan;
 import cn.cordys.crm.customer.domain.Customer;
@@ -126,7 +125,6 @@ public class AddNoticeExpireTests {
         contract.setCustomerId("100001");
         contract.setAmount(BigDecimal.valueOf(10000));
         contract.setApprovalStatus(ContractApprovalStatus.APPROVED.name());
-        contract.setStage(ContractStage.PENDING_SIGNING.name());
         contract.setCreateUser("admin");
         contract.setOwner("aaa");
         contract.setStartTime(System.currentTimeMillis());
@@ -144,7 +142,6 @@ public class AddNoticeExpireTests {
         contract.setCustomerId("100001");
         contract.setAmount(BigDecimal.valueOf(10000));
         contract.setApprovalStatus(ContractApprovalStatus.APPROVED.name());
-        contract.setStage(ContractStage.PENDING_SIGNING.name());
         contract.setCreateUser("admin");
         contract.setOwner("aaa");
         contract.setStartTime(System.currentTimeMillis() - 1000 * 60 * 60 * 24 * 2);
@@ -162,7 +159,6 @@ public class AddNoticeExpireTests {
         contract.setCustomerId("100001");
         contract.setAmount(BigDecimal.valueOf(10000));
         contract.setApprovalStatus(ContractApprovalStatus.APPROVED.name());
-        contract.setStage(ContractStage.PENDING_SIGNING.name());
         contract.setCreateUser("admin");
         contract.setOwner("aaa");
         contract.setStartTime(System.currentTimeMillis() - 1000 * 60 * 60 * 24 * 5);

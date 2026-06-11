@@ -1,0 +1,31 @@
+企业微信监测服务 — 编译与运行（与 mail monitoring 相同：纯 Java + JDBC + JDK HttpURLConnection）
+
+一、准备 MySQL 驱动 JAR
+  任选本机 Maven 仓库中的 mysql-connector-j，例如：
+  E:\Maven\MAVEN-local repository\com\mysql\mysql-connector-j\9.6.0\mysql-connector-j-9.6.0.jar
+
+二、编译（在项目根 wecom monitoring 目录下）
+  Windows PowerShell 示例（路径按本机修改）：
+  $cp = "E:\Maven\MAVEN-local repository\com\mysql\mysql-connector-j\9.6.0\mysql-connector-j-9.6.0.jar"
+  $src = Get-Content sources.txt | ForEach-Object { "$PWD\$_" }
+  New-Item -ItemType Directory -Force -Path out | Out-Null
+  javac -encoding UTF-8 -d out -cp $cp @src
+
+三、运行
+  1. 复制 config.properties.example 为 config.properties，按需修改。
+  2. 配置真实企微会话存档：WECOM_CORP_ID、WECOM_CORP_SECRET 与 WECOM_PRIVATE_KEY_PATH；
+     项目已编译企业微信 Finance SDK Java 绑定类，系统库路径/PATH 需能找到对应 native 动态库。
+     配置缺失会直接启动失败。
+  3. CRM_INGESTION_DB_ENABLED=true 时，监控程序会从 CRM 库 sys_user.wecom_id 自动读取联系专员 userid。
+     客户匹配使用 customer.wecom_external_id，无需再维护本地 userid 或客户 external_userid 配置。
+  4. 启动命令（classpath 需包含编译输出目录和 MySQL 驱动；PATH 需包含 WeWorkFinanceSdk.dll 所在目录）：
+     $env:PATH="E:\sdk_win_v3\java_sdk\WeWorkFinanceSdk;$env:PATH"
+     java -cp "out;E:\Maven\MAVEN-local repository\com\mysql\mysql-connector-j\9.6.0\mysql-connector-j-9.6.0.jar" Main
+     Linux/macOS 将分号改为冒号。
+
+四、IntelliJ IDEA
+  新建模块指向 wecom monitoring 目录，将 mysql-connector-j 加入模块依赖，并把 WeWorkFinanceSdk.dll 所在目录加入 PATH，运行 Main 类即可。
+
+五、数据库脚本（仅两个文件）
+  docs\mysql_企业微信监测库.sql — 监测服务库（如 wecom_monitoring_db），4 张表
+  docs\mysql_cordys_crm_企业微信表.sql — CRM 库（如 cordys-crm），3 张表：日会话主记录、消息明细、媒体元数据

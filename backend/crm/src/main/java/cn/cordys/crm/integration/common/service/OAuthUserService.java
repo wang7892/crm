@@ -111,7 +111,7 @@ public class OAuthUserService {
         Map<String, Object> result = JSON.parseObject(response, new TypeReference<>() {
         });
         if (result.get("errcode") != null && (Integer) result.get("errcode") == 0) {
-            Map<String, Object> user = (Map<String, Object>) result.get("result");
+            Map<?, ?> user = (Map<?, ?>) result.get("result");
             return (String) user.get("userid");
         } else {
             throw new GenericException("Error getting user id from unionid: " + result.get("errmsg"));

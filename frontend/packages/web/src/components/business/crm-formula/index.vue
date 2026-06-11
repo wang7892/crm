@@ -1,11 +1,11 @@
 <template>
-  <n-tooltip trigger="hover" placement="top">
+  <n-tooltip trigger="hover" placement="top" :disabled="!hasFormula">
     <template #trigger>
       <component
         :is="currentComponent"
         v-model:value="value"
         :path="props.path"
-        :field-config="fieldConfig"
+        :field-config="runtimeFieldConfig"
         :form-config="props.formConfig"
         :is-sub-table-field="props.isSubTableField"
         :is-sub-table-render="props.isSubTableRender"
@@ -74,6 +74,12 @@
   const fieldList = computed(() => formulaFormContext?.value.fields);
   const formulaDataSource = computed(() => formulaFormContext?.value.formulaDataSource);
   const evaluationNow = computed(() => formulaFormContext?.value.evaluationNow);
+  const hasFormula = computed(() => !!props.fieldConfig.formula?.trim());
+  const allowManualInput = computed(() => props.fieldConfig.internalKey === 'contractTotalAmount' && !hasFormula.value);
+  const runtimeFieldConfig = computed(() => ({
+    ...props.fieldConfig,
+    editable: props.fieldConfig.editable !== false || allowManualInput.value,
+  }));
 
   const formulaDisplayInfo = computed(() =>
     getFormulaDisplayInfo({
@@ -90,6 +96,9 @@
   // 根据公式实时计算 todo 等待优化
   const updateValue = debounce(() => {
     const { formula } = props.fieldConfig;
+    if (!formula?.trim()) {
+      return;
+    }
 
     const result = executeFormFormula({
       formula,

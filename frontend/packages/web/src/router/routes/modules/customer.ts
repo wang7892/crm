@@ -46,6 +46,16 @@ const customer: AppRouteRecordRaw = {
         permissions: ['CUSTOMER_MANAGEMENT_POOL:READ'],
       },
     },
+    {
+      path: 'wecom-monitor',
+      name: CustomerRouteEnum.CUSTOMER_WECOM,
+      component: () => import('../../../views/customer/wecomIngestionMonitor.vue'),
+      meta: {
+        locale: 'menu.customerWecom',
+        isTopMenu: true,
+        permissions: ['CUSTOMER_MANAGEMENT:READ', 'CUSTOMER_MANAGEMENT_POOL:READ'],
+      },
+    },
   ],
 };
 

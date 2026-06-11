@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useMessage } from 'naive-ui';
 
 import { CustomerFollowPlanStatusEnum } from '@lib/shared/enums/customerEnum';
@@ -39,6 +39,8 @@ export type followEnumType =
   | typeof FormDesignKeyEnum.CLUE_POOL
   | typeof FormDesignKeyEnum.CUSTOMER_OPEN_SEA
   | 'myPlan';
+
+export type MonitorSource = 'WECOM' | 'MAIL';
 
 type FollowApiMapType = Record<
   followEnumType,
@@ -141,6 +143,7 @@ export default function useFollowApi(followProps: {
   followApiKey: followEnumType;
   type: Ref<'followRecord' | 'followPlan'>;
   sourceId: Ref<string>;
+  monitorSource?: Ref<MonitorSource | undefined>;
   onDeleteSuccess?: () => void;
 }) {
   const { t } = useI18n();
@@ -153,6 +156,7 @@ export default function useFollowApi(followProps: {
   const activeStatus = ref<CustomerFollowPlanStatusEnum>(CustomerFollowPlanStatusEnum.ALL);
 
   const followKeyword = ref<string>('');
+  const followTimeRange = ref<[number, number] | null>(null);
 
   const loading = ref(false);
 
@@ -161,9 +165,12 @@ export default function useFollowApi(followProps: {
     pageSize: 10,
     current: 1,
   });
-  const { type, followApiKey, sourceId } = followProps;
+  const { type, followApiKey, sourceId, monitorSource } = followProps;
 
   const apis = followApiMap[followApiKey];
+  const hasFollowTimeRange = computed(
+    () => !!followTimeRange.value && followTimeRange.value[0] != null && followTimeRange.value[1] != null
+  );
 
   function transformField(item: FollowDetailItem, optionMap?: Record<string, any>) {
     const methodKey = type.value === 'followPlan' ? 'method' : 'followMethod';
@@ -189,6 +196,10 @@ export default function useFollowApi(followProps: {
         current: pageNation.value.current || 1,
         pageSize: pageNation.value.pageSize,
         keyword: followKeyword.value,
+        ...(type.value === 'followRecord' && monitorSource?.value ? { monitorSource: monitorSource.value } : {}),
+        ...(type.value === 'followRecord' && hasFollowTimeRange.value
+          ? { startTime: followTimeRange.value?.[0], endTime: followTimeRange.value?.[1] }
+          : {}),
         ...(type.value === 'followPlan' && { status: activeStatus.value }),
         myPlan: followApiKey === 'myPlan',
       };
@@ -261,6 +272,14 @@ export default function useFollowApi(followProps: {
     }
   }
 
+  function setFollowTimeRange(range: [number, number] | null) {
+    followTimeRange.value = range;
+  }
+
+  function clearFollowTimeRange() {
+    followTimeRange.value = null;
+  }
+
   // 删除
   async function handleDelete(item: FollowDetailItem) {
     openModal({
@@ -290,6 +309,8 @@ export default function useFollowApi(followProps: {
     loading,
     handleReachBottom,
     followKeyword,
+    followTimeRange,
+    hasFollowTimeRange,
     loadFollowList,
     changePlanStatus,
     followFormKeyMap,
@@ -297,5 +318,7 @@ export default function useFollowApi(followProps: {
     handleDelete,
     activeStatus,
     getApiKey,
+    setFollowTimeRange,
+    clearFollowTimeRange,
   };
 }

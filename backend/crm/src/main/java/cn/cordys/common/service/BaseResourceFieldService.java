@@ -79,11 +79,11 @@ public abstract class BaseResourceFieldService<T extends BaseResourceField, V ex
      *
      * @return 资源字段类型
      */
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings("unchecked")
     private Class<T> getResourceFieldClass() {
         Type type = getGenericType(0);
-        if (type instanceof Class tClass) {
-            return tClass;
+        if (type instanceof Class<?> tClass) {
+            return (Class<T>) tClass;
         } else {
             throw new IllegalArgumentException("Type cannot be converted to Class: " + type);
         }
@@ -94,11 +94,11 @@ public abstract class BaseResourceFieldService<T extends BaseResourceField, V ex
      *
      * @return 资源大字段类型
      */
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings("unchecked")
     private Class<V> getResourceFieldBlobClass() {
         Type type = getGenericType(1);
-        if (type instanceof Class vClass) {
-            return vClass;
+        if (type instanceof Class<?> vClass) {
+            return (Class<V>) vClass;
         } else {
             throw new IllegalArgumentException("Type cannot be converted to Class: " + type);
         }
@@ -232,7 +232,9 @@ public abstract class BaseResourceFieldService<T extends BaseResourceField, V ex
                     BaseModuleFieldValue fieldValue = fieldValueMap.get(field.getId());
                     return (fieldValue != null && fieldValue.valid()) && field.isAttachment();
                 }).map(field -> fieldValueMap.get(field.getId())).toList();
-        List processVal = attachmentFieldVals.stream().map(val -> (List) val.getFieldValue()).flatMap(List::stream).toList();
+        List<Object> processVal = attachmentFieldVals.stream()
+                .flatMap(val -> toObjectList(val.getFieldValue()).stream())
+                .toList();
         preProcessTempAttachment(orgId, resourceId, userId, processVal);
 
         if (CollectionUtils.isNotEmpty(customerFields)) {
@@ -1068,6 +1070,13 @@ public abstract class BaseResourceFieldService<T extends BaseResourceField, V ex
         LambdaQueryWrapper<T> wrapper = new LambdaQueryWrapper<>();
         wrapper.in(BaseResourceField::getResourceId, resourceIds);
         return getResourceFieldMapper().selectListByLambda(wrapper);
+    }
+
+    private List<Object> toObjectList(Object value) {
+        if (value instanceof List<?> values) {
+            return new ArrayList<>(values);
+        }
+        return List.of();
     }
 
     /**

@@ -49,6 +49,7 @@ import cn.cordys.crm.system.mapper.ExtUserMapper;
 import cn.cordys.crm.system.service.DepartmentService;
 import cn.cordys.crm.system.service.UserExtendService;
 import cn.cordys.mybatis.BaseMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import jakarta.annotation.Resource;
@@ -481,7 +482,7 @@ public class AgentBaseService extends DashboardSortService {
      * @param orgId
      * @return
      */
-    private ThirdConfigBaseDTO<?> getConfig(String orgId) {
+    private ThirdConfigBaseDTO<MaxKBThirdConfigRequest> getConfig(String orgId) {
         OrganizationConfig organizationConfig = extOrganizationConfigMapper.getOrganizationConfig(
                 orgId, OrganizationConfigConstants.ConfigType.THIRD.name()
         );
@@ -496,7 +497,8 @@ public class AgentBaseService extends DashboardSortService {
         }
 
 
-        var thirdConfigBaseDTO = JSON.parseObject(new String(details.getFirst().getContent()), ThirdConfigBaseDTO.class);
+        ThirdConfigBaseDTO<MaxKBThirdConfigRequest> thirdConfigBaseDTO = JSON.parseObject(new String(details.getFirst().getContent()), new TypeReference<>() {
+        });
         MaxKBThirdConfigRequest maxKBThirdConfigRequest;
         if (thirdConfigBaseDTO.getConfig() == null) {
             maxKBThirdConfigRequest = JSON.parseObject(new String(details.getFirst().getContent()), MaxKBThirdConfigRequest.class);
@@ -515,15 +517,15 @@ public class AgentBaseService extends DashboardSortService {
      * @return
      */
     public List<OptionDTO> workspace(String orgId) {
-        ThirdConfigBaseDTO<?> config = getConfig(orgId);
+        ThirdConfigBaseDTO<MaxKBThirdConfigRequest> config = getConfig(orgId);
         if (config == null) {
             return Collections.emptyList();
         }
         return getWorkspace(config);
     }
 
-    private List<OptionDTO> getWorkspace(ThirdConfigBaseDTO<?> baseConfig) {
-        MaxKBThirdConfigRequest config = JSON.MAPPER.convertValue(baseConfig.getConfig(), MaxKBThirdConfigRequest.class);
+    private List<OptionDTO> getWorkspace(ThirdConfigBaseDTO<MaxKBThirdConfigRequest> baseConfig) {
+        MaxKBThirdConfigRequest config = baseConfig.getConfig();
         String body = qrCodeClient.exchange(
                 config.getMkAddress().concat(MaxKBApiPaths.WORKSPACE),
                 "Bearer " + config.getAppSecret(),
@@ -547,15 +549,15 @@ public class AgentBaseService extends DashboardSortService {
      * @return
      */
     public List<OptionDTO> application(String workspaceId, String orgId) {
-        ThirdConfigBaseDTO<?> config = getConfig(orgId);
+        ThirdConfigBaseDTO<MaxKBThirdConfigRequest> config = getConfig(orgId);
         if (config == null) {
             return Collections.emptyList();
         }
         return getApplication(workspaceId, config);
     }
 
-    private List<OptionDTO> getApplication(String workspaceId, ThirdConfigBaseDTO<?> baseConfig) {
-        MaxKBThirdConfigRequest config = JSON.MAPPER.convertValue(baseConfig.getConfig(), MaxKBThirdConfigRequest.class);
+    private List<OptionDTO> getApplication(String workspaceId, ThirdConfigBaseDTO<MaxKBThirdConfigRequest> baseConfig) {
+        MaxKBThirdConfigRequest config = baseConfig.getConfig();
         String body = qrCodeClient.exchange(
                 HttpRequestUtil.urlTransfer(config.getMkAddress().concat(MaxKBApiPaths.APPLICATION), workspaceId),
                 "Bearer " + config.getAppSecret(),
@@ -579,15 +581,15 @@ public class AgentBaseService extends DashboardSortService {
      * @return
      */
     public ScriptResponse script(ScriptRequest request, String orgId) {
-        ThirdConfigBaseDTO<?> config = getConfig(orgId);
+        ThirdConfigBaseDTO<MaxKBThirdConfigRequest> config = getConfig(orgId);
         if (config == null) {
             return new ScriptResponse();
         }
         return getScript(request, config);
     }
 
-    private ScriptResponse getScript(ScriptRequest request, ThirdConfigBaseDTO<?> baseConfig) {
-        MaxKBThirdConfigRequest config = JSON.MAPPER.convertValue(baseConfig.getConfig(), MaxKBThirdConfigRequest.class);
+    private ScriptResponse getScript(ScriptRequest request, ThirdConfigBaseDTO<MaxKBThirdConfigRequest> baseConfig) {
+        MaxKBThirdConfigRequest config = baseConfig.getConfig();
         ScriptResponse response = new ScriptResponse();
         List<ParameterDTO> parameters = new ArrayList<>();
         String accessToken = qrCodeClient.exchange(
@@ -642,15 +644,15 @@ public class AgentBaseService extends DashboardSortService {
      * @return
      */
     public String edition(String orgId) {
-        ThirdConfigBaseDTO<?> config = getConfig(orgId);
+        ThirdConfigBaseDTO<MaxKBThirdConfigRequest> config = getConfig(orgId);
         if (config == null) {
             throw new GenericException(Translator.get("third.config.not.exist"));
         }
         return getEdition(config);
     }
 
-    private String getEdition(ThirdConfigBaseDTO<?> baseConfig) {
-        MaxKBThirdConfigRequest config = JSON.MAPPER.convertValue(baseConfig.getConfig(), MaxKBThirdConfigRequest.class);
+    private String getEdition(ThirdConfigBaseDTO<MaxKBThirdConfigRequest> baseConfig) {
+        MaxKBThirdConfigRequest config = baseConfig.getConfig();
         String body = qrCodeClient.exchange(
                 config.getMkAddress().concat(MaxKBApiPaths.EDITION),
                 "Bearer " + config.getAppSecret(),

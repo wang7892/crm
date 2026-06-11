@@ -133,19 +133,14 @@ public class ContractExportService extends BaseExportService {
         systemFieldMap.put("departmentId", data.getDepartmentName());
         systemFieldMap.put("customerId", data.getCustomerName());
         systemFieldMap.put("amount", data.getAmount());
-        systemFieldMap.put("alreadyPayAmount", data.getAlreadyPayAmount());
         systemFieldMap.put("number", data.getNumber());
         if (StringUtils.isNotBlank(data.getApprovalStatus())) {
             systemFieldMap.put("approvalStatus", Translator.get("contract.approval_status." + data.getApprovalStatus().toLowerCase(), Locale.SIMPLIFIED_CHINESE));
-        }
-        if (StringUtils.isNotBlank(data.getStage())) {
-            systemFieldMap.put("stage", Translator.get("contract.stage." + data.getStage().toLowerCase(), Locale.SIMPLIFIED_CHINESE));
         }
         systemFieldMap.put("createUser", data.getCreateUserName());
         systemFieldMap.put("createTime", TimeUtils.getDateTimeStr(data.getCreateTime()));
         systemFieldMap.put("updateUser", data.getUpdateUserName());
         systemFieldMap.put("updateTime", TimeUtils.getDateTimeStr(data.getUpdateTime()));
-        systemFieldMap.put("voidReason", data.getVoidReason());
         systemFieldMap.put("startTime", TimeUtils.getDateTimeStr(data.getStartTime()));
         systemFieldMap.put("endTime", TimeUtils.getDateTimeStr(data.getEndTime()));
         return systemFieldMap;

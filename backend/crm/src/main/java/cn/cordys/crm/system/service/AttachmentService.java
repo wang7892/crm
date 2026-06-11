@@ -87,9 +87,14 @@ public class AttachmentService {
      * @return 文件流
      */
     public ResponseEntity<org.springframework.core.io.Resource> getResource(String attachmentId) {
+        return getResource(attachmentId, false);
+    }
+
+    public ResponseEntity<org.springframework.core.io.Resource> getResource(String attachmentId, boolean inline) {
         Attachment attachment = attachmentMapper.selectByPrimaryKey(attachmentId);
         FileRequest request;
         ResponseEntity.BodyBuilder responseBuilder = ResponseEntity.ok();
+        String dispositionType = inline ? "inline" : "attachment";
         try {
             InputStream fileStream;
             if (attachment == null) {
@@ -101,9 +106,9 @@ public class AttachmentService {
                 }
                 File file = folderFiles.getFirst();
                 fileStream = new FileInputStream(file);
-                responseBuilder.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodeName(file.getName()))
+                responseBuilder.header(HttpHeaders.CONTENT_DISPOSITION, dispositionType + "; filename*=UTF-8''" + encodeName(file.getName()))
                         .contentLength(file.length())
-                        .contentType(isSvg(file.getName()) ? MediaType.parseMediaType("image/svg+xml") : MediaType.parseMediaType("application/octet-stream"));
+                        .contentType(resolveMediaType(file.getName()));
             } else {
                 // get attachment from transferred dir
                 request = new FileRequest(DefaultRepositoryDir.getTransferFileDir(attachment.getOrganizationId(), attachment.getResourceId(), attachment.getId()), StorageType.LOCAL.name(), attachment.getName());
@@ -111,9 +116,9 @@ public class AttachmentService {
                 if (fileStream == null) {
                     throw new GenericException("The file does not exist or has been deleted");
                 }
-                responseBuilder.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encodeName(attachment.getName()))
+                responseBuilder.header(HttpHeaders.CONTENT_DISPOSITION, dispositionType + "; filename*=UTF-8''" + encodeName(attachment.getName()))
                         .contentLength(attachment.getSize())
-                        .contentType(isSvg(attachment.getName()) ? MediaType.parseMediaType("image/svg+xml") : MediaType.parseMediaType("application/octet-stream"));
+                        .contentType(resolveMediaType(attachment.getName()));
             }
             return responseBuilder
                     .body(new InputStreamResource(fileStream));
@@ -133,6 +138,74 @@ public class AttachmentService {
      */
     private boolean isSvg(String fileName) {
         return fileName.endsWith(".svg") || fileName.endsWith(".SVG");
+    }
+
+    private MediaType resolveMediaType(String fileName) {
+        if (fileName == null) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
+        String lowerName = fileName.toLowerCase();
+        if (isSvg(fileName)) {
+            return MediaType.parseMediaType("image/svg+xml");
+        }
+        if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) {
+            return MediaType.IMAGE_JPEG;
+        }
+        if (lowerName.endsWith(".png")) {
+            return MediaType.IMAGE_PNG;
+        }
+        if (lowerName.endsWith(".gif")) {
+            return MediaType.IMAGE_GIF;
+        }
+        if (lowerName.endsWith(".webp")) {
+            return MediaType.parseMediaType("image/webp");
+        }
+        if (lowerName.endsWith(".mp4")) {
+            return MediaType.parseMediaType("video/mp4");
+        }
+        if (lowerName.endsWith(".mov")) {
+            return MediaType.parseMediaType("video/quicktime");
+        }
+        if (lowerName.endsWith(".mp3")) {
+            return MediaType.parseMediaType("audio/mpeg");
+        }
+        if (lowerName.endsWith(".wav")) {
+            return MediaType.parseMediaType("audio/wav");
+        }
+        if (lowerName.endsWith(".m4a")) {
+            return MediaType.parseMediaType("audio/mp4");
+        }
+        if (lowerName.endsWith(".amr")) {
+            return MediaType.parseMediaType("audio/amr");
+        }
+        if (lowerName.endsWith(".pdf")) {
+            return MediaType.APPLICATION_PDF;
+        }
+        if (lowerName.endsWith(".doc")) {
+            return MediaType.parseMediaType("application/msword");
+        }
+        if (lowerName.endsWith(".docx")) {
+            return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        }
+        if (lowerName.endsWith(".xls")) {
+            return MediaType.parseMediaType("application/vnd.ms-excel");
+        }
+        if (lowerName.endsWith(".xlsx")) {
+            return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        }
+        if (lowerName.endsWith(".ppt")) {
+            return MediaType.parseMediaType("application/vnd.ms-powerpoint");
+        }
+        if (lowerName.endsWith(".pptx")) {
+            return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        }
+        if (lowerName.endsWith(".txt")) {
+            return MediaType.TEXT_PLAIN;
+        }
+        if (lowerName.endsWith(".csv")) {
+            return MediaType.parseMediaType("text/csv");
+        }
+        return MediaType.APPLICATION_OCTET_STREAM;
     }
 
     /**

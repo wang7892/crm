@@ -1,11 +1,13 @@
 package cn.cordys.crm.integration.webhook.service;
 
+import cn.cordys.common.constants.BusinessModuleField;
+import cn.cordys.common.constants.FormKey;
 import cn.cordys.common.domain.BaseModuleFieldValue;
 import cn.cordys.common.uid.IDGenerator;
+import cn.cordys.common.util.JSON;
 import cn.cordys.crm.customer.domain.Customer;
 import cn.cordys.crm.customer.domain.CustomerContact;
 import cn.cordys.crm.customer.domain.CustomerContactField;
-import cn.cordys.crm.customer.domain.CustomerField;
 import cn.cordys.crm.customer.dto.request.CustomerContactAddRequest;
 import cn.cordys.crm.customer.service.CustomerContactService;
 import cn.cordys.crm.follow.domain.FollowUpRecord;
@@ -18,7 +20,19 @@ import cn.cordys.crm.integration.webhook.dto.request.EmailWebhookRequest;
 import cn.cordys.crm.integration.webhook.dto.response.EmailWebhookResponse;
 import cn.cordys.crm.system.domain.User;
 import cn.cordys.crm.system.domain.ModuleField;
+import cn.cordys.crm.system.domain.ModuleFieldBlob;
+import cn.cordys.crm.system.domain.ModuleForm;
+import cn.cordys.crm.system.constants.FieldType;
+import cn.cordys.crm.system.dto.field.CheckBoxField;
+import cn.cordys.crm.system.dto.field.RadioField;
+import cn.cordys.crm.system.dto.field.SelectField;
+import cn.cordys.crm.system.dto.field.SelectMultipleField;
+import cn.cordys.crm.system.dto.field.base.BaseField;
+import cn.cordys.crm.system.dto.field.base.HasOption;
+import cn.cordys.crm.system.dto.field.base.OptionProp;
+import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
 import cn.cordys.crm.system.service.ModuleFieldService;
+import cn.cordys.crm.system.service.ModuleFormCacheService;
 import cn.cordys.mybatis.BaseMapper;
 import cn.cordys.mybatis.lambda.LambdaQueryWrapper;
 import cn.cordys.security.SessionUtils;
@@ -26,14 +40,15 @@ import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -43,7 +58,8 @@ public class EmailWebhookService {
     private static final String CONTACT_EMAIL_INTERNAL_KEY = "contactEmail";
     private static final String STATUS_SUCCESS = "SUCCESS";
     private static final String STATUS_FAIL = "FAIL";
-    private static final String EMAIL_FOLLOW_METHOD_DEFAULT = "3";
+    /** 邮件跟进方式在表单中的选项 value；解析失败时的兜底（与手动创建「邮件」时写入的 ID 一致）。 */
+    private static final String EMAIL_FOLLOW_METHOD_DEFAULT = "177667046269900000";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Resource
@@ -55,11 +71,11 @@ public class EmailWebhookService {
     @Resource
     private BaseMapper<CustomerContact> customerContactMapper;
     @Resource
-    private BaseMapper<CustomerField> customerFieldMapper;
-    @Resource
     private BaseMapper<Customer> customerMapper;
     @Resource
     private ModuleFieldService moduleFieldService;
+    @Resource
+    private ModuleFormCacheService moduleFormCacheService;
     @Resource
     private FollowUpRecordService followUpRecordService;
     @Resource
@@ -68,7 +84,13 @@ public class EmailWebhookService {
     private BaseMapper<User> userMapper;
     @Resource
     private BaseMapper<FollowUpRecord> followUpRecordMapper;
-    @Value("${crm.webhook.follow-method:3}")
+    @Resource
+    private BaseMapper<ModuleForm> moduleFormMapper;
+    @Resource
+    private BaseMapper<ModuleField> moduleFieldRowMapper;
+    @Resource
+    private BaseMapper<ModuleFieldBlob> moduleFieldBlobMapper;
+    @Value("${crm.webhook.follow-method:177667046269900000}")
     private String followMethod;
     /**
      * Webhook联调阶段建议先只落库，不自动创建跟进记录。
@@ -97,7 +119,7 @@ public class EmailWebhookService {
         emailWebhookEventMapper.insert(event);
         List<String> persistedAttachmentUrls = saveAttachmentsIfAny(request, event, organizationId, userId);
         try {
-            Customer customer = findCustomerByMailboxFromCustomerField(request.getMatchedTargetMailbox(), organizationId);
+            Customer customer = findCustomerByEmail(request.getMatchedTargetMailbox(), organizationId);
             if (customer == null || StringUtils.isBlank(customer.getId())) {
                 markFail(event, "customer mailbox not found");
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -120,7 +142,7 @@ public class EmailWebhookService {
 
             CustomerContact contact = ensureCustomerContact(customer, request.getMatchedTargetMailbox(), responsibleUserId, organizationId, userId);
             FollowUpRecord record = followUpRecordService.add(
-                    buildFollowRequest(request, event, persistedAttachmentUrls, customer.getId(), contact == null ? null : contact.getId(), responsibleUserId),
+                    buildFollowRequest(request, event, persistedAttachmentUrls, customer.getId(), contact == null ? null : contact.getId(), responsibleUserId, organizationId),
                     userId,
                     organizationId
             );
@@ -253,39 +275,28 @@ public class EmailWebhookService {
         return null;
     }
 
-    private Customer findCustomerByMailboxFromCustomerField(String mailbox, String organizationId) {
-        if (StringUtils.isBlank(mailbox)) {
+    private Customer findCustomerByEmail(String mailbox, String organizationId) {
+        String customerEmail = StringUtils.trimToEmpty(mailbox);
+        if (StringUtils.isAnyBlank(customerEmail, organizationId)) {
             return null;
         }
-        LambdaQueryWrapper<CustomerField> fieldQuery = new LambdaQueryWrapper<>();
-        fieldQuery.eq(CustomerField::getFieldValue, mailbox);
-        List<CustomerField> fields = customerFieldMapper.selectListByLambda(fieldQuery);
-        if (CollectionUtils.isEmpty(fields)) {
-            return null;
-        }
-        List<String> customerIds = fields.stream()
-                .map(CustomerField::getResourceId)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .collect(Collectors.toList());
-        for (String customerId : customerIds) {
-            Customer customer = customerMapper.selectByPrimaryKey(customerId);
-            if (customer != null && StringUtils.equals(customer.getOrganizationId(), organizationId)) {
-                return customer;
-            }
-        }
-        return null;
+        LambdaQueryWrapper<Customer> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(Customer::getEmail, customerEmail);
+        queryWrapper.eq(Customer::getOrganizationId, organizationId);
+        List<Customer> customers = customerMapper.selectListByLambda(queryWrapper);
+        return CollectionUtils.isEmpty(customers) ? null : customers.get(0);
     }
 
     private FollowUpRecordAddRequest buildFollowRequest(EmailWebhookRequest request, EmailWebhookEvent event,
                                                         List<String> persistedAttachmentUrls,
-                                                        String customerId, String contactId, String responsibleUserId) {
+                                                        String customerId, String contactId, String responsibleUserId,
+                                                        String organizationId) {
         FollowUpRecordAddRequest followRequest = new FollowUpRecordAddRequest();
         followRequest.setType("CUSTOMER");
         followRequest.setCustomerId(customerId);
         followRequest.setContactId(contactId);
         followRequest.setOwner(responsibleUserId);
-        followRequest.setFollowMethod(resolveFollowMethod());
+        followRequest.setFollowMethod(resolveFollowMethod(organizationId));
         followRequest.setFollowTime(request.getSendTime() == null ? System.currentTimeMillis() : request.getSendTime());
 
         // 按需求：跟进内容直接取邮件正文(contentText)；如为空则兜底空串
@@ -355,16 +366,230 @@ public class EmailWebhookService {
                 .collect(Collectors.toList());
     }
 
-    private String resolveFollowMethod() {
-        if (StringUtils.isBlank(followMethod)) {
+    /**
+     * 跟进方式存的是表单选项的 value（与前端 optionMap 的 id 一致）。优先从当前组织「跟进记录」表单解析「邮件」；
+     * 解析失败则使用 EMAIL_FOLLOW_METHOD_DEFAULT；亦可通过 crm.webhook.follow-method 覆盖（匹配选项 value 或 label）。
+     * <p>
+     * 注意：表单 JSON 里可能仍保留旧版「邮件」选项 value=3，与前端实际使用的长 ID 不一致；若直接按 label 命中会写回 3，
+     * 导致前端「选项不存在」。因此对 1~2 位数字的配置与选项 value 一律不作为最终写入值，优先长数字 ID。
+     */
+    private String resolveFollowMethod(String organizationId) {
+        List<OptionProp> options = loadFollowMethodOptions(organizationId);
+        if (CollectionUtils.isEmpty(options)) {
+            log.warn("follow method field has no options, orgId={}, fallback={}", organizationId, EMAIL_FOLLOW_METHOD_DEFAULT);
             return EMAIL_FOLLOW_METHOD_DEFAULT;
         }
-        String method = StringUtils.trim(followMethod);
-        if (!method.matches("\\d{1,2}")) {
-            log.warn("invalid crm.webhook.follow-method={}, fallback to {}", followMethod, EMAIL_FOLLOW_METHOD_DEFAULT);
-            return EMAIL_FOLLOW_METHOD_DEFAULT;
+        String configured = StringUtils.trimToEmpty(followMethod);
+        // 仅当配置为「非旧版短数字」时，才按配置精确匹配（避免 crm.webhook.follow-method=3 或默认历史值写回 3）
+        if (StringUtils.isNotBlank(configured) && !isLegacyShortOptionValue(configured)) {
+            for (OptionProp opt : options) {
+                if (opt == null) {
+                    continue;
+                }
+                if (configured.equals(StringUtils.trimToEmpty(opt.getValue()))) {
+                    return opt.getValue();
+                }
+            }
+            for (OptionProp opt : options) {
+                if (opt == null) {
+                    continue;
+                }
+                if (configured.equalsIgnoreCase(StringUtils.trimToEmpty(opt.getLabel()))) {
+                    return opt.getValue();
+                }
+            }
+            log.warn("crm.webhook.follow-method={} not found in form options, orgId={}, will resolve by 邮件 label", configured, organizationId);
         }
-        return method;
+        String picked = pickEmailFollowMethodFromOptions(options);
+        if (picked != null) {
+            return picked;
+        }
+        log.warn("email follow method option 邮件 not resolved to a non-legacy id, orgId={}, fallback={}", organizationId, EMAIL_FOLLOW_METHOD_DEFAULT);
+        return EMAIL_FOLLOW_METHOD_DEFAULT;
+    }
+
+    private static boolean isLegacyShortOptionValue(String value) {
+        String v = StringUtils.trimToEmpty(value);
+        return v.matches("\\d{1,2}");
+    }
+
+    /**
+     * 在「邮件」相关 label 的选项中：优先与兜底常量一致的长 ID，否则优先长数字 value，避免选用旧版 1~2 位 value。
+     */
+    private String pickEmailFollowMethodFromOptions(List<OptionProp> options) {
+        List<OptionProp> mailRelated = new ArrayList<>();
+        for (OptionProp opt : options) {
+            if (opt == null) {
+                continue;
+            }
+            String lb = StringUtils.trimToEmpty(opt.getLabel());
+            if (lb.isEmpty()) {
+                continue;
+            }
+            if ("邮件".equalsIgnoreCase(lb) || "email".equalsIgnoreCase(lb) || StringUtils.contains(lb, "邮件")) {
+                mailRelated.add(opt);
+            }
+        }
+        if (mailRelated.isEmpty()) {
+            return null;
+        }
+        for (OptionProp o : mailRelated) {
+            if (EMAIL_FOLLOW_METHOD_DEFAULT.equals(StringUtils.trimToEmpty(o.getValue()))) {
+                return o.getValue();
+            }
+        }
+        for (OptionProp o : mailRelated) {
+            String v = StringUtils.trimToEmpty(o.getValue());
+            if (v.matches("\\d{12,}")) {
+                return v;
+            }
+        }
+        for (OptionProp o : mailRelated) {
+            String v = StringUtils.trimToEmpty(o.getValue());
+            if (!isLegacyShortOptionValue(v)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从库中读取「跟进记录」表单里 recordMethod 字段的原始 JSON 并解析选项。
+     * 原因：ModuleFormService#getAllFields 使用 JSON.parseObject(..., BaseField.class) 时，子类多态可能未带上 options，
+     * instanceof HasOption 不成立时会走兜底 ID。按字段 type 反序列化为具体类型可稳定拿到选项 value。
+     */
+    private List<OptionProp> loadFollowMethodOptions(String organizationId) {
+        if (StringUtils.isBlank(organizationId)) {
+            return List.of();
+        }
+        List<OptionProp> fromBlob = loadFollowMethodOptionsFromFieldBlob(organizationId);
+        if (CollectionUtils.isNotEmpty(fromBlob)) {
+            return fromBlob;
+        }
+        try {
+            ModuleFormConfigDTO config = moduleFormCacheService.getBusinessFormConfig(FormKey.FOLLOW_RECORD.getKey(), organizationId);
+            if (config == null || CollectionUtils.isEmpty(config.getFields())) {
+                return List.of();
+            }
+            for (BaseField field : config.getFields()) {
+                if (field == null || !Strings.CS.equals(BusinessModuleField.FOLLOW_METHOD.getKey(), field.getInternalKey())) {
+                    continue;
+                }
+                if (field instanceof HasOption hasOption) {
+                    return mergeOptionProps(hasOption);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("load follow method options failed, orgId={}, err={}", organizationId, e.getMessage());
+        }
+        return List.of();
+    }
+
+    private static final String OPTION_SOURCE_CUSTOM = "custom";
+    private static final int OPTION_REF_MAX_DEPTH = 8;
+
+    private List<OptionProp> loadFollowMethodOptionsFromFieldBlob(String organizationId) {
+        try {
+            LambdaQueryWrapper<ModuleForm> formQuery = new LambdaQueryWrapper<>();
+            formQuery.eq(ModuleForm::getFormKey, FormKey.FOLLOW_RECORD.getKey());
+            formQuery.eq(ModuleForm::getOrganizationId, organizationId);
+            List<ModuleForm> forms = moduleFormMapper.selectListByLambda(formQuery);
+            if (CollectionUtils.isEmpty(forms)) {
+                return List.of();
+            }
+            ModuleForm form = forms.getFirst();
+            LambdaQueryWrapper<ModuleField> fieldQuery = new LambdaQueryWrapper<>();
+            fieldQuery.eq(ModuleField::getFormId, form.getId());
+            fieldQuery.eq(ModuleField::getInternalKey, BusinessModuleField.FOLLOW_METHOD.getKey());
+            List<ModuleField> fieldRows = moduleFieldRowMapper.selectListByLambda(fieldQuery);
+            if (CollectionUtils.isEmpty(fieldRows)) {
+                return List.of();
+            }
+            ModuleField row = fieldRows.getFirst();
+            ModuleFieldBlob blob = moduleFieldBlobMapper.selectByPrimaryKey(row.getId());
+            if (blob == null || StringUtils.isBlank(blob.getProp())) {
+                return List.of();
+            }
+            List<OptionProp> direct = loadOptionsFromFieldBlobContent(blob.getProp(), row.getType(), 0);
+            if (CollectionUtils.isNotEmpty(direct)) {
+                return direct;
+            }
+            log.warn("follow method field blob produced no options, orgId={}, fieldId={}, type={}",
+                    organizationId, row.getId(), row.getType());
+        } catch (Exception e) {
+            log.warn("load follow method options from field blob failed, orgId={}, err={}", organizationId, e.getMessage());
+        }
+        return List.of();
+    }
+
+    /**
+     * 按 sys_module_field.type 将 blob 反序列化为具体字段类型并合并 options/customOptions；
+     * 若选项来自「引用其他字段」(optionSource!=custom 且 refId 有值)，则继续读取被引用字段的 blob。
+     */
+    private List<OptionProp> loadOptionsFromFieldBlobContent(String prop, String type, int depth) {
+        if (depth > OPTION_REF_MAX_DEPTH || StringUtils.isBlank(prop)) {
+            return List.of();
+        }
+        String t = StringUtils.trimToEmpty(type);
+        if (Strings.CI.equals(t, FieldType.SELECT.name())) {
+            SelectField parsed = JSON.parseObject(prop, SelectField.class);
+            List<OptionProp> merged = mergeOptionProps(parsed);
+            if (CollectionUtils.isNotEmpty(merged)) {
+                return merged;
+            }
+            return followOptionRefIfNeeded(parsed.getOptionSource(), parsed.getRefId(), depth);
+        }
+        if (Strings.CI.equals(t, FieldType.SELECT_MULTIPLE.name())) {
+            SelectMultipleField parsed = JSON.parseObject(prop, SelectMultipleField.class);
+            List<OptionProp> merged = mergeOptionProps(parsed);
+            if (CollectionUtils.isNotEmpty(merged)) {
+                return merged;
+            }
+            return followOptionRefIfNeeded(parsed.getOptionSource(), parsed.getRefId(), depth);
+        }
+        if (Strings.CI.equals(t, FieldType.RADIO.name())) {
+            RadioField parsed = JSON.parseObject(prop, RadioField.class);
+            List<OptionProp> merged = mergeOptionProps(parsed);
+            if (CollectionUtils.isNotEmpty(merged)) {
+                return merged;
+            }
+            return followOptionRefIfNeeded(parsed.getOptionSource(), parsed.getRefId(), depth);
+        }
+        if (Strings.CI.equals(t, FieldType.CHECKBOX.name())) {
+            CheckBoxField parsed = JSON.parseObject(prop, CheckBoxField.class);
+            List<OptionProp> merged = mergeOptionProps(parsed);
+            if (CollectionUtils.isNotEmpty(merged)) {
+                return merged;
+            }
+            return followOptionRefIfNeeded(parsed.getOptionSource(), parsed.getRefId(), depth);
+        }
+        return List.of();
+    }
+
+    private List<OptionProp> followOptionRefIfNeeded(String optionSource, String refId, int depth) {
+        if (StringUtils.isBlank(refId)) {
+            return List.of();
+        }
+        if (StringUtils.isBlank(optionSource) || Strings.CI.equals(optionSource, OPTION_SOURCE_CUSTOM)) {
+            return List.of();
+        }
+        ModuleField refRow = moduleFieldRowMapper.selectByPrimaryKey(refId);
+        ModuleFieldBlob refBlob = moduleFieldBlobMapper.selectByPrimaryKey(refId);
+        if (refRow == null || refBlob == null || StringUtils.isBlank(refBlob.getProp())) {
+            return List.of();
+        }
+        return loadOptionsFromFieldBlobContent(refBlob.getProp(), refRow.getType(), depth + 1);
+    }
+
+    private List<OptionProp> mergeOptionProps(HasOption field) {
+        List<OptionProp> list = new ArrayList<>();
+        if (field.getOptions() != null) {
+            list.addAll(field.getOptions());
+        }
+        if (field.getCustomOptions() != null) {
+            list.addAll(field.getCustomOptions());
+        }
+        return list;
     }
 
     private String resolveResponsibleUserId(String sourceMailbox, String organizationId) {

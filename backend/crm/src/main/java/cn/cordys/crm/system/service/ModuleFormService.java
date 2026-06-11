@@ -6,6 +6,7 @@ import cn.cordys.aspectj.constants.LogType;
 import cn.cordys.aspectj.context.OperationLogContext;
 import cn.cordys.aspectj.dto.LogContextInfo;
 import cn.cordys.common.constants.BusinessModuleField;
+import cn.cordys.common.constants.CustomerPromotedField;
 import cn.cordys.common.constants.FormKey;
 import cn.cordys.common.constants.InternalUser;
 import cn.cordys.common.constants.LinkScenarioKey;
@@ -741,11 +742,16 @@ public class ModuleFormService {
         if (field instanceof SubField subField) {
             subField.getSubFields().forEach(this::setFieldBusinessParam);
         }
+        CustomerPromotedField promotedField = CustomerPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey());
         BusinessModuleField businessEnum = businessModuleFieldMap.get(field.getInternalKey());
         if (businessEnum != null) {
             // 设置特殊的业务字段 key
             field.setBusinessKey(businessEnum.getBusinessKey());
             field.setDisabledProps(businessEnum.getDisabledProps());
+        } else if (promotedField != null) {
+            field.setInternalKey(promotedField.getInternalKey());
+            field.setBusinessKey(promotedField.getBusinessKey());
+            field.setDisabledProps(Set.of());
         } else {
             field.setBusinessKey(null);
             field.setDisabledProps(null);

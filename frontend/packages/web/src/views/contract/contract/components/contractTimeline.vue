@@ -57,11 +57,8 @@
                     <template #trigger> {{ decItem.value }} </template>
                   </CrmTableButton>
                 </template>
-                <template #stage>
-                  {{ contractStatusOptions.find((i) => i.value === item.stage)?.label }}
-                </template>
                 <template #planStatus>
-                  <ContractStatus :status="item?.planStatus ?? ContractStatusEnum.SIGNED" />
+                  <ContractStatus :status="item?.planStatus ?? ContractPaymentPlanEnum.PENDING" />
                 </template>
                 <template #createTime="{ item: decItem }">
                   <div class="flex items-center gap-[8px]">
@@ -102,7 +99,7 @@
   import { NEmpty } from 'naive-ui';
   import dayjs from 'dayjs';
 
-  import { type ContractInvoiceStatusEnum, ContractStatusEnum } from '@lib/shared/enums/contractEnum';
+  import { type ContractInvoiceStatusEnum, ContractPaymentPlanEnum } from '@lib/shared/enums/contractEnum';
   import { FormDesignKeyEnum } from '@lib/shared/enums/formDesignEnum';
   import { useI18n } from '@lib/shared/hooks/useI18n';
 
@@ -113,7 +110,6 @@
   import ContractStatus from '@/views/contract/contractPaymentPlan/components/contractPaymentStatus.vue';
   import ContractInvoiceStatus from '@/views/contract/invoice/components/contractInvoiceStatus.vue';
 
-  import { contractStatusOptions } from '@/config/contract';
   import type { TimelineType } from '@/hooks/useContractTimeline';
   import useContractTimeline from '@/hooks/useContractTimeline';
   import useOpenNewPage from '@/hooks/useOpenNewPage';

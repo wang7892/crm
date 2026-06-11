@@ -19,6 +19,7 @@ import cn.cordys.common.pager.PagerWithOption;
 import cn.cordys.common.permission.PermissionCache;
 import cn.cordys.common.permission.PermissionUtils;
 import cn.cordys.common.service.BaseService;
+import cn.cordys.common.util.JSON;
 import cn.cordys.common.uid.IDGenerator;
 import cn.cordys.common.util.BeanUtils;
 import cn.cordys.common.util.Translator;
@@ -28,16 +29,24 @@ import cn.cordys.crm.follow.constants.FollowUpPlanType;
 import cn.cordys.crm.follow.domain.FollowUpRecord;
 import cn.cordys.crm.follow.dto.AttachmentUrlMapping;
 import cn.cordys.crm.follow.dto.CustomerDataDTO;
+import cn.cordys.crm.follow.dto.WecomMediaMapping;
+import cn.cordys.crm.follow.dto.WecomVoipMapping;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordAddRequest;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordPageRequest;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordUpdateRequest;
+import cn.cordys.crm.follow.dto.request.FollowSpecialistCustomerPageRequest;
 import cn.cordys.crm.follow.dto.request.RecordHomePageRequest;
+import cn.cordys.crm.follow.dto.response.FollowSpecialistCustomerResponse;
+import cn.cordys.crm.follow.dto.response.FollowSpecialistResponse;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordDetailResponse;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordListResponse;
 import cn.cordys.crm.follow.mapper.ExtFollowUpRecordMapper;
 import cn.cordys.crm.integration.webhook.domain.EmailWebhookAttachment;
 import cn.cordys.crm.integration.webhook.domain.EmailWebhookEvent;
 import cn.cordys.crm.opportunity.domain.Opportunity;
+import cn.cordys.crm.system.dto.field.base.BaseField;
+import cn.cordys.crm.system.dto.field.base.HasOption;
+import cn.cordys.crm.system.dto.field.base.OptionProp;
 import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
 import cn.cordys.crm.system.dto.response.UserResponse;
 import cn.cordys.crm.system.service.ModuleFormCacheService;
@@ -54,10 +63,14 @@ import org.apache.commons.lang3.Strings;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -65,6 +78,12 @@ import java.util.stream.Stream;
 @Slf4j
 @Transactional(rollbackFor = Exception.class)
 public class FollowUpRecordService extends BaseFollowUpService {
+    private static final String MONITOR_SOURCE_WECOM = "WECOM";
+    private static final String MONITOR_SOURCE_MAIL = "MAIL";
+    private static final String LEGACY_MAIL_FOLLOW_METHOD = "3";
+    private static final String LEGACY_WECOM_FOLLOW_METHOD = "4";
+    private static final String EMAIL_FOLLOW_METHOD_DEFAULT = "177667046269900000";
+
     @Resource
     private BaseMapper<FollowUpRecord> followUpRecordMapper;
     @Resource
@@ -227,6 +246,7 @@ public class FollowUpRecordService extends BaseFollowUpService {
      * @return
      */
     public PagerWithOption<List<FollowUpRecordListResponse>> poolList(FollowUpRecordPageRequest request, String userId, String orgId, String resourceType, String type) {
+        applyFollowMethodFilter(request, orgId);
         Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
         List<FollowUpRecordListResponse> list = extFollowUpRecordMapper.selectPoolList(request, userId, orgId, resourceType, type);
         buildListData(list, orgId);
@@ -258,6 +278,8 @@ public class FollowUpRecordService extends BaseFollowUpService {
         List<String> ids = list.stream().map(FollowUpRecordListResponse::getId).toList();
         Map<String, List<BaseModuleFieldValue>> recordCustomFieldMap = followUpRecordFieldService.getResourceFieldMap(ids, true);
         Map<String, List<String>> attachmentUrlMap = buildAttachmentUrlsMapByFollowRecordIds(ids, orgId);
+        Map<String, List<WecomMediaMapping>> wecomMediaMap = buildWecomMediaMapByFollowRecordIds(ids);
+        Map<String, List<WecomVoipMapping>> wecomVoipMap = buildWecomVoipMapByFollowRecordIds(ids);
 
         List<String> createUserIds = list.stream().map(FollowUpRecordListResponse::getCreateUser).toList();
         List<String> updateUserIds = list.stream().map(FollowUpRecordListResponse::getUpdateUser).toList();
@@ -297,7 +319,11 @@ public class FollowUpRecordService extends BaseFollowUpService {
             recordListResponse.setClueName(clueMap.get(recordListResponse.getClueId()));
             recordListResponse.setPhone(contactPhoneMap.get(recordListResponse.getContactId()));
             recordListResponse.setResourceType(recordListResponse.getType());
+            recordListResponse.setContent(enrichWecomVoipContent(
+                    recordListResponse.getContent(),
+                    wecomVoipMap.getOrDefault(recordListResponse.getId(), List.of())));
             recordListResponse.setAttachmentUrls(attachmentUrlMap.getOrDefault(recordListResponse.getId(), List.of()));
+            recordListResponse.setWecomMediaList(wecomMediaMap.getOrDefault(recordListResponse.getId(), List.of()));
             log.info("follow record attachment mapping, recordId={}, attachmentCount={}",
                     recordListResponse.getId(),
                     recordListResponse.getAttachmentUrls() == null ? 0 : recordListResponse.getAttachmentUrls().size());
@@ -319,6 +345,191 @@ public class FollowUpRecordService extends BaseFollowUpService {
             return buildAttachmentUrlsMapByFollowRecordIdsFallback(followRecordIds);
         }
         return toAttachmentMap(mappings);
+    }
+
+    private Map<String, List<WecomMediaMapping>> buildWecomMediaMapByFollowRecordIds(List<String> followRecordIds) {
+        if (CollectionUtils.isEmpty(followRecordIds)) {
+            return Map.of();
+        }
+        List<WecomMediaMapping> mediaList = extFollowUpRecordMapper.selectWecomMediaByFollowRecordIds(followRecordIds);
+        if (CollectionUtils.isEmpty(mediaList)) {
+            return Map.of();
+        }
+        mediaList.forEach(media -> media.setPreviewUrl(buildWecomMediaPreviewUrl(media.getCrmAssetRef())));
+        return mediaList.stream()
+                .filter(media -> StringUtils.isNotBlank(media.getFollowRecordId()))
+                .collect(Collectors.groupingBy(WecomMediaMapping::getFollowRecordId));
+    }
+
+    private Map<String, List<WecomVoipMapping>> buildWecomVoipMapByFollowRecordIds(List<String> followRecordIds) {
+        if (CollectionUtils.isEmpty(followRecordIds)) {
+            return Map.of();
+        }
+        List<WecomVoipMapping> voipList = extFollowUpRecordMapper.selectWecomVoipByFollowRecordIds(followRecordIds);
+        if (CollectionUtils.isEmpty(voipList)) {
+            return Map.of();
+        }
+        return voipList.stream()
+                .filter(voip -> StringUtils.isNotBlank(voip.getFollowRecordId()))
+                .collect(Collectors.groupingBy(WecomVoipMapping::getFollowRecordId));
+    }
+
+    private String enrichWecomVoipContent(String content, List<WecomVoipMapping> voipList) {
+        if (StringUtils.isBlank(content) || CollectionUtils.isEmpty(voipList) || !content.contains("[voiptext]")) {
+            return content;
+        }
+        String[] lines = content.split("\\R", -1);
+        int voipIndex = 0;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (!StringUtils.startsWithIgnoreCase(StringUtils.trim(line), "[voiptext]")) {
+                continue;
+            }
+            if (voipIndex >= voipList.size()) {
+                break;
+            }
+            String summary = buildVoipSummary(voipList.get(voipIndex++));
+            if (StringUtils.isBlank(summary)) {
+                continue;
+            }
+            String existing = StringUtils.trimToEmpty(line).substring("[voiptext]".length()).trim();
+            lines[i] = "[voiptext]" + appendMissingVoipSummary(existing, summary);
+        }
+        return String.join("\n", lines);
+    }
+
+    private String appendMissingVoipSummary(String existing, String fallback) {
+        String merged = StringUtils.trimToEmpty(existing);
+        for (String part : StringUtils.split(StringUtils.trimToEmpty(fallback), ",")) {
+            String cleanPart = StringUtils.trimToEmpty(part);
+            int eqIndex = cleanPart.indexOf('=');
+            if (eqIndex <= 0) {
+                continue;
+            }
+            String key = cleanPart.substring(0, eqIndex).trim();
+            if (StringUtils.isBlank(key) || containsVoipKey(merged, key)) {
+                continue;
+            }
+            merged = StringUtils.isBlank(merged) ? cleanPart : merged + ", " + cleanPart;
+        }
+        return StringUtils.isBlank(merged) ? "" : " " + merged;
+    }
+
+    private boolean containsVoipKey(String summary, String key) {
+        String normalized = normalizeVoipKey(key);
+        for (String part : StringUtils.split(StringUtils.trimToEmpty(summary), ",")) {
+            int eqIndex = part.indexOf('=');
+            if (eqIndex > 0 && normalizeVoipKey(part.substring(0, eqIndex)).equals(normalized)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String normalizeVoipKey(String key) {
+        return StringUtils.trimToEmpty(key).replace("_", "").toLowerCase();
+    }
+
+    private String buildVoipSummary(WecomVoipMapping voip) {
+        String existing = extractVoipSummaryFromContentText(voip.getContentText());
+        String extracted = extractVoipSummaryFromExtraJson(voip.getExtraJson());
+        return appendMissingVoipSummary(existing, extracted).trim();
+    }
+
+    private String extractVoipSummaryFromContentText(String contentText) {
+        String content = StringUtils.trimToEmpty(contentText);
+        if (!StringUtils.startsWithIgnoreCase(content, "[voiptext]")) {
+            return "";
+        }
+        return content.substring("[voiptext]".length()).trim();
+    }
+
+    private String extractVoipSummaryFromExtraJson(String extraJson) {
+        Map<String, Object> extra = parseJsonMap(extraJson);
+        Map<String, Object> payload = asJsonMap(findJsonValue(extra, "payload"));
+        if (payload.isEmpty()) {
+            payload = extra;
+        }
+        Map<String, Object> body = asJsonMap(findJsonValue(payload, "voiptext", "voip_text", "info"));
+        if (body.isEmpty()) {
+            body = payload;
+        }
+        List<String> parts = new ArrayList<>();
+        String inviteType = jsonValueAsString(findJsonValue(body, "invitetype", "invite_type", "inviteType"));
+        String callDuration = jsonValueAsString(findJsonValue(body, "callduration", "call_duration", "callDuration", "duration"));
+        String content = jsonValueAsString(findJsonValue(body, "content"));
+        if (StringUtils.isNotBlank(inviteType)) {
+            parts.add("invitetype=" + inviteType);
+        }
+        if (StringUtils.isNotBlank(callDuration)) {
+            parts.add("callduration=" + callDuration);
+        }
+        if (StringUtils.isNotBlank(content)) {
+            parts.add("content=" + content);
+        }
+        return String.join(", ", parts);
+    }
+
+    private Map<String, Object> parseJsonMap(String value) {
+        String json = StringUtils.trimToNull(value);
+        if (json == null || !json.startsWith("{")) {
+            return Map.of();
+        }
+        try {
+            return asJsonMap(JSON.parseToMap(json));
+        } catch (RuntimeException ex) {
+            return Map.of();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asJsonMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, item) -> {
+                if (key != null) {
+                    result.put(String.valueOf(key), item);
+                }
+            });
+            return result;
+        }
+        if (value instanceof String text) {
+            return parseJsonMap(text);
+        }
+        return Map.of();
+    }
+
+    private Object findJsonValue(Map<String, Object> map, String... keys) {
+        if (map == null || map.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                if (StringUtils.equalsIgnoreCase(entry.getKey(), key)) {
+                    return entry.getValue();
+                }
+            }
+        }
+        return null;
+    }
+
+    private String jsonValueAsString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        return StringUtils.trimToNull(String.valueOf(value));
+    }
+
+    private String buildWecomMediaPreviewUrl(String crmAssetRef) {
+        if (StringUtils.isBlank(crmAssetRef)) {
+            return null;
+        }
+        String ref = crmAssetRef.trim();
+        if (StringUtils.startsWithIgnoreCase(ref, "http://") || StringUtils.startsWithIgnoreCase(ref, "https://")
+                || ref.startsWith("/")) {
+            return ref;
+        }
+        return "/attachment/preview/" + ref;
     }
 
     private Map<String, List<String>> buildAttachmentUrlsMapByFollowRecordIdsFallback(List<String> followRecordIds) {
@@ -443,6 +654,7 @@ public class FollowUpRecordService extends BaseFollowUpService {
      * @return
      */
     public PagerWithOption<List<FollowUpRecordListResponse>> list(FollowUpRecordPageRequest request, String userId, String orgId, String resourceType, String type, CustomerDataDTO customerData) {
+        applyFollowMethodFilter(request, orgId);
         Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
         List<FollowUpRecordListResponse> list = extFollowUpRecordMapper.selectList(request, userId, orgId, resourceType, type, customerData);
         buildListData(list, orgId);
@@ -463,12 +675,101 @@ public class FollowUpRecordService extends BaseFollowUpService {
      */
     public PagerWithOption<List<FollowUpRecordListResponse>> totalList(RecordHomePageRequest request, String userId, String orgId,
                                                                        DeptDataPermissionDTO clueDataPermission, DeptDataPermissionDTO customerDataPermission) {
+        applyFollowMethodFilter(request, orgId);
         Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
         // 解析当前用户数据权限
         List<FollowUpRecordListResponse> recordList = extFollowUpRecordMapper.selectTotalList(request, userId, orgId, clueDataPermission, customerDataPermission);
         buildListData(recordList, orgId);
         Map<String, List<OptionDTO>> optionMap = buildOptionMap(orgId, recordList);
         return PageUtils.setPageInfoWithOption(page, recordList, optionMap);
+    }
+
+    public PagerWithOption<List<FollowSpecialistResponse>> specialistList(RecordHomePageRequest request, String userId, String orgId,
+                                                                          DeptDataPermissionDTO customerDataPermission) {
+        applyFollowMethodFilter(request, orgId);
+        Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
+        List<FollowSpecialistResponse> list = extFollowUpRecordMapper.selectSpecialistList(request, userId, orgId, customerDataPermission);
+        return PageUtils.setPageInfoWithOption(page, list, Map.of());
+    }
+
+    public PagerWithOption<List<FollowSpecialistCustomerResponse>> specialistCustomerList(FollowSpecialistCustomerPageRequest request, String userId, String orgId,
+                                                                                          DeptDataPermissionDTO customerDataPermission) {
+        applyFollowMethodFilter(request, orgId);
+        Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
+        List<FollowSpecialistCustomerResponse> list = extFollowUpRecordMapper.selectSpecialistCustomerList(request, userId, orgId, customerDataPermission);
+        return PageUtils.setPageInfoWithOption(page, list, Map.of());
+    }
+
+    private void applyFollowMethodFilter(FollowUpRecordPageRequest request, String orgId) {
+        if (request == null) {
+            return;
+        }
+        request.setFollowMethodValues(resolveFollowMethodValues(request.getMonitorSource(), orgId));
+    }
+
+    private void applyFollowMethodFilter(RecordHomePageRequest request, String orgId) {
+        if (request == null) {
+            return;
+        }
+        request.setFollowMethodValues(resolveFollowMethodValues(request.getMonitorSource(), orgId));
+    }
+
+    private List<String> resolveFollowMethodValues(String monitorSource, String orgId) {
+        String source = StringUtils.trimToEmpty(monitorSource);
+        if (!Strings.CS.equalsAny(source, MONITOR_SOURCE_WECOM, MONITOR_SOURCE_MAIL)) {
+            return List.of();
+        }
+
+        Set<String> values = new LinkedHashSet<>();
+        if (Strings.CS.equals(source, MONITOR_SOURCE_MAIL)) {
+            values.add(LEGACY_MAIL_FOLLOW_METHOD);
+            values.add(EMAIL_FOLLOW_METHOD_DEFAULT);
+        } else {
+            values.add(LEGACY_WECOM_FOLLOW_METHOD);
+        }
+
+        ModuleFormConfigDTO customerFormConfig = moduleFormCacheService.getBusinessFormConfig(FormKey.FOLLOW_RECORD.getKey(), orgId);
+        if (customerFormConfig == null || CollectionUtils.isEmpty(customerFormConfig.getFields())) {
+            return new ArrayList<>(values);
+        }
+        customerFormConfig.getFields().stream()
+                .filter(this::isFollowMethodField)
+                .filter(HasOption.class::isInstance)
+                .map(HasOption.class::cast)
+                .forEach(field -> {
+                    collectMatchedFollowMethodValues(field.getOptions(), source, values);
+                    collectMatchedFollowMethodValues(field.getCustomOptions(), source, values);
+                });
+        return new ArrayList<>(values);
+    }
+
+    private boolean isFollowMethodField(BaseField field) {
+        if (field == null) {
+            return false;
+        }
+        return Strings.CS.equals(field.getInternalKey(), BusinessModuleField.FOLLOW_METHOD.getKey())
+                || Strings.CS.equals(field.getBusinessKey(), BusinessModuleField.FOLLOW_METHOD.getBusinessKey());
+    }
+
+    private void collectMatchedFollowMethodValues(List<OptionProp> options, String monitorSource, Set<String> values) {
+        if (CollectionUtils.isEmpty(options)) {
+            return;
+        }
+        options.stream()
+                .filter(option -> option != null && StringUtils.isNotBlank(option.getValue()))
+                .filter(option -> isMatchedFollowMethodLabel(option.getLabel(), monitorSource))
+                .map(OptionProp::getValue)
+                .map(StringUtils::trim)
+                .forEach(values::add);
+    }
+
+    private boolean isMatchedFollowMethodLabel(String label, String monitorSource) {
+        String normalizedLabel = StringUtils.trimToEmpty(label);
+        if (Strings.CS.equals(monitorSource, MONITOR_SOURCE_MAIL)) {
+            return StringUtils.contains(normalizedLabel, "邮件")
+                    || StringUtils.contains(StringUtils.lowerCase(normalizedLabel), "email");
+        }
+        return StringUtils.contains(normalizedLabel, "微信");
     }
 
     /**

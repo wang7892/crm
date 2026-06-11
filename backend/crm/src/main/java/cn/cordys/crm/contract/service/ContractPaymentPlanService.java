@@ -20,7 +20,6 @@ import cn.cordys.common.util.BeanUtils;
 import cn.cordys.crm.contract.constants.ContractPaymentPlanStatus;
 import cn.cordys.crm.contract.domain.Contract;
 import cn.cordys.crm.contract.domain.ContractPaymentPlan;
-import cn.cordys.crm.contract.domain.ContractPaymentRecord;
 import cn.cordys.crm.contract.dto.request.ContractPaymentPlanAddRequest;
 import cn.cordys.crm.contract.dto.request.ContractPaymentPlanPageRequest;
 import cn.cordys.crm.contract.dto.request.ContractPaymentPlanUpdateRequest;

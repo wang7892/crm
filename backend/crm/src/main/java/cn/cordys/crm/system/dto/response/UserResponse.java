@@ -30,6 +30,15 @@ public class UserResponse {
     @Schema(description = "邮箱")
     private String email;
 
+    @Schema(description = "邮箱授权码")
+    private String emailAuthCode;
+
+    @Schema(description = "企微id")
+    private String wecomId;
+
+    @Schema(description = "企业微信群聊 roomid，多个 roomid 可用英文逗号分隔")
+    private String roomid;
+
     @Schema(description = "部门id")
     private String departmentId;
 

@@ -63,6 +63,8 @@ import java.util.stream.Collectors;
 @Slf4j
 public class OrganizationUserService {
 
+    private static final String DEFAULT_PASSWORD_SEED = "CordysCRM";
+
     @Resource
     private ExtOrganizationUserMapper extOrganizationUserMapper;
     @Resource
@@ -218,10 +220,17 @@ public class OrganizationUserService {
     @OperationLog(module = LogModule.SYSTEM_ORGANIZATION, type = LogType.ADD, operator = "{#operatorId}")
     public void addUser(UserAddRequest request, String organizationId, String operatorId) {
         String id = IDGenerator.nextStr();
+        String normalizedEmailAuthCode = normalizeEmailAuthCode(request.getEmailAuthCode());
+        String normalizedWecomId = normalizeWecomId(request.getWecomId());
+        log.warn("[ORG_USER] addUser emailAuthCodeLen={}, email={}",
+                normalizedEmailAuthCode == null ? 0 : normalizedEmailAuthCode.length(),
+                request.getEmail());
         //邮箱和手机号唯一性校验
         checkEmailAndPhone(request.getEmail(), request.getPhone(), id);
         //add user base
         User user = addUserBaseData(request, operatorId, id);
+        ensureEmailAuthCodePersisted(user.getId(), normalizedEmailAuthCode);
+        ensureWecomIdPersisted(user.getId(), normalizedWecomId);
         user.setLastOrganizationId(organizationId);
         //add user info
         addUserInfo(request, organizationId, operatorId, user.getId());
@@ -292,10 +301,12 @@ public class OrganizationUserService {
      * @param phone
      */
     private void checkEmailAndPhone(String email, String phone, String id) {
-        if (extUserMapper.countByEmail(email, id) > 0) {
+        email = normalizeContactValue(email);
+        phone = normalizeContactValue(phone);
+        if (StringUtils.isNotBlank(email) && extUserMapper.countByEmail(email, id) > 0) {
             throw new GenericException(Translator.get("email.exist"));
         }
-        if (extUserMapper.countByPhone(phone, id) > 0) {
+        if (StringUtils.isNotBlank(phone) && extUserMapper.countByPhone(phone, id) > 0) {
             throw new GenericException(Translator.get("phone.exist"));
         }
 
@@ -312,8 +323,13 @@ public class OrganizationUserService {
     private User addUserBaseData(UserAddRequest request, String operatorId, String id) {
         User user = new User();
         BeanUtils.copyBean(user, request);
+        user.setPhone(normalizeContactValue(request.getPhone()));
+        user.setEmail(normalizeContactValue(request.getEmail()));
+        user.setEmailAuthCode(normalizeEmailAuthCode(request.getEmailAuthCode()));
+        user.setWecomId(normalizeWecomId(request.getWecomId()));
+        user.setRoomid(normalizeRoomid(request.getRoomid()));
         user.setId(id);
-        user.setPassword(CodingUtils.md5(request.getPhone().substring(request.getPhone().length() - 6)));
+        user.setPassword(CodingUtils.md5(getInitialPasswordSeed(user.getPhone(), id)));
         user.setCreateTime(System.currentTimeMillis());
         user.setCreateUser(operatorId);
         user.setUpdateTime(System.currentTimeMillis());
@@ -321,6 +337,13 @@ public class OrganizationUserService {
         user.setLanguage(Locale.SIMPLIFIED_CHINESE.toString());
         userMapper.insert(user);
         return user;
+    }
+
+    private String getInitialPasswordSeed(String phone, String id) {
+        if (StringUtils.isNotBlank(phone) && phone.length() >= 6) {
+            return phone.substring(phone.length() - 6);
+        }
+        return DEFAULT_PASSWORD_SEED;
     }
 
 
@@ -353,12 +376,21 @@ public class OrganizationUserService {
     @OperationLog(module = LogModule.SYSTEM_ORGANIZATION, type = LogType.UPDATE, operator = "{#operatorId}")
     public void updateUser(UserUpdateRequest request, String operatorId, String orgId) {
         UserResponse oldUser = getUserDetail(request.getId());
+        String normalizedEmailAuthCode = normalizeEmailAuthCode(request.getEmailAuthCode());
+        String normalizedWecomId = normalizeWecomId(request.getWecomId());
+        log.warn("[ORG_USER] updateUser emailAuthCodeLen={}, email={}, userId={}",
+                normalizedEmailAuthCode == null ? 0 : normalizedEmailAuthCode.length(),
+                request.getEmail(),
+                oldUser == null ? null : oldUser.getUserId());
         //邮箱和手机号唯一性校验
         checkEmailAndPhone(request.getEmail(), request.getPhone(), oldUser.getUserId());
         //update user info
         updateUserInfo(request, operatorId, oldUser);
         //update user base
         updateUserBaseData(request, operatorId, oldUser.getUserId());
+        ensureEmailAuthCodePersisted(oldUser.getUserId(), normalizedEmailAuthCode);
+        ensureWecomIdPersisted(oldUser.getUserId(), normalizedWecomId);
+        ensureRoomidPersisted(oldUser.getUserId(), normalizeRoomid(request.getRoomid()));
         //update user role
         updateUserRole(request.getRoleIds(), oldUser, operatorId, orgId);
         if (!request.getEnable()) {
@@ -415,10 +447,58 @@ public class OrganizationUserService {
      */
     private void updateUserBaseData(UserUpdateRequest request, String operatorId, String userId) {
         User updateUser = BeanUtils.copyBean(new User(), request);
+        updateUser.setPhone(normalizeContactValue(request.getPhone()));
+        updateUser.setEmail(normalizeContactValue(request.getEmail()));
+        updateUser.setEmailAuthCode(normalizeEmailAuthCode(request.getEmailAuthCode()));
+        updateUser.setWecomId(normalizeWecomId(request.getWecomId()));
+        updateUser.setRoomid(normalizeRoomid(request.getRoomid()));
         updateUser.setId(userId);
         updateUser.setUpdateTime(System.currentTimeMillis());
         updateUser.setUpdateUser(operatorId);
         userMapper.updateById(updateUser);
+    }
+
+    private String normalizeEmailAuthCode(String emailAuthCode) {
+        return StringUtils.isBlank(emailAuthCode) ? null : emailAuthCode.trim();
+    }
+
+    private String normalizeContactValue(String value) {
+        return StringUtils.isBlank(value) ? null : value.trim();
+    }
+
+    private String normalizeWecomId(String wecomId) {
+        return StringUtils.isBlank(wecomId) ? null : wecomId.trim();
+    }
+
+    private String normalizeRoomid(String roomid) {
+        return StringUtils.isBlank(roomid) ? null : roomid.trim();
+    }
+
+    private void ensureEmailAuthCodePersisted(String userId, String emailAuthCode) {
+        int affectRows = extUserMapper.updateEmailAuthCodeById(userId, emailAuthCode);
+        log.warn("[ORG_USER] persist emailAuthCode done. userId={}, affectRows={}, emailAuthCodeLen={}",
+                userId, affectRows, emailAuthCode == null ? 0 : emailAuthCode.length());
+        if (affectRows <= 0) {
+            throw new GenericException("email auth code persist failed");
+        }
+    }
+
+    private void ensureWecomIdPersisted(String userId, String wecomId) {
+        int affectRows = extUserMapper.updateWecomIdById(userId, wecomId);
+        log.warn("[ORG_USER] persist wecomId done. userId={}, affectRows={}, wecomIdLen={}",
+                userId, affectRows, wecomId == null ? 0 : wecomId.length());
+        if (affectRows <= 0) {
+            throw new GenericException("wecom id persist failed");
+        }
+    }
+
+    private void ensureRoomidPersisted(String userId, String roomid) {
+        int affectRows = extUserMapper.updateRoomidById(userId, roomid);
+        log.warn("[ORG_USER] persist roomid done. userId={}, affectRows={}, roomidLen={}",
+                userId, affectRows, roomid == null ? 0 : roomid.length());
+        if (affectRows <= 0) {
+            throw new GenericException("wecom roomid persist failed");
+        }
     }
 
     /**
@@ -430,10 +510,7 @@ public class OrganizationUserService {
     public void resetPassword(String userId, String operatorId, String orgId) {
         if (!Strings.CI.equals(userId, InternalUser.ADMIN.getValue())) {
             User user = userMapper.selectByPrimaryKey(userId);
-            if (StringUtils.isBlank(user.getPhone())) {
-                throw new GenericException(Translator.get("user_phone_not_exist"));
-            }
-            user.setPassword(CodingUtils.md5(user.getPhone().substring(user.getPhone().length() - 6)));
+            user.setPassword(CodingUtils.md5(getInitialPasswordSeed(user.getPhone(), user.getId())));
             user.setUpdateTime(System.currentTimeMillis());
             user.setUpdateUser(operatorId);
             userMapper.updateById(user);

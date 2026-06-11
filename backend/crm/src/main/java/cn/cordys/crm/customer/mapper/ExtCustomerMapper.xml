@@ -13,9 +13,16 @@
         </foreach>
     </update>
 
+    <sql id="promotedCustomerColumns">
+        , c.wecom_external_id AS wecomExternalId, c.roomid, c.email, c.full_name AS fullName, c.credit_limit AS creditLimit,
+        c.customs_code AS customsCode, c.region, c.phone, c.address, c.remark,
+        c.customer_available AS customerAvailable, c.customer_source AS customerSource
+    </sql>
+
     <select id="list" resultType="cn.cordys.crm.customer.dto.response.CustomerListResponse">
         select c.id, c.`name`, if(c.in_shared_pool, null, c.owner) as owner, c.create_time, c.update_time, c.create_user, c.update_user, c.collection_time, c.pool_id,
                c.follower, c.follow_time, c.reason_id
+               <include refid="promotedCustomerColumns"/>
                 <if test="dataPermission != null and dataPermission.visible">
                     ,cc.collaboration_type
                 </if>
@@ -199,6 +206,7 @@
     <select id="sourceList" resultType="cn.cordys.crm.customer.dto.response.CustomerListResponse">
         select distinct c.id, c.`name`, if(c.in_shared_pool, null, c.owner) as owner, c.create_time, c.update_time, c.create_user, c.update_user, c.collection_time, c.pool_id,
         c.follower, c.follow_time
+        <include refid="promotedCustomerColumns"/>
         from customer c left join customer_collaboration cc on c.id = cc.customer_id and cc.user_id = #{userId}
 
         <include refid="fieldConditionJoin">
@@ -257,7 +265,9 @@
                 order by
                 <choose>
                     <when test="${sort}.name in
-                        {'name', 'owner', 'create_time', 'update_time', 'follower', 'follow_time', 'create_user', 'update_user', 'collection_time', 'reason_id'}">
+                        {'name', 'owner', 'create_time', 'update_time', 'follower', 'follow_time', 'create_user', 'update_user', 'collection_time', 'reason_id',
+                        'wecom_external_id', 'roomid', 'email', 'full_name', 'credit_limit', 'customs_code', 'region', 'phone', 'address', 'remark',
+                        'customer_available', 'customer_source'}">
                         c.${sortName} ${sortType}, c.id ASC
                     </when>
                     <when test="${sort}.name == 'department_id'">
@@ -283,7 +293,9 @@
         <if test="${conditions} != null and ${conditions}.size() > 0">
             <foreach collection="${conditions}" item="condition" index="i">
                 <if test="condition.name not in
-                {'name', 'owner', 'createTime', 'updateTime', 'follower', 'followTime', 'createUser', 'updateUser', 'departmentId'}">
+                {'name', 'owner', 'createTime', 'updateTime', 'follower', 'followTime', 'createUser', 'updateUser', 'departmentId',
+                'wecomExternalId', 'roomid', 'email', 'fullName', 'creditLimit', 'customsCode', 'region', 'phone', 'address', 'remark',
+                'customerAvailable', 'customerSource'}">
                     <if test="condition.multipleValue">
                         left join customer_field_blob ${tablePrefix}_${i}
                         on c.id = ${tablePrefix}_${i}.resource_id and ${tablePrefix}_${i}.field_id = #{condition.name}
@@ -309,7 +321,9 @@
                     left join sys_organization_user sou_sort on c.owner = sou_sort.user_id
                 </when>
                 <when test="${sort}.name not in
-                    {'name', 'owner', 'create_time', 'update_time', 'follower', 'follow_time', 'create_user', 'update_user', 'collection_time', 'reason_id'}">
+                    {'name', 'owner', 'create_time', 'update_time', 'follower', 'follow_time', 'create_user', 'update_user', 'collection_time', 'reason_id',
+                    'wecom_external_id', 'roomid', 'email', 'full_name', 'credit_limit', 'customs_code', 'region', 'phone', 'address', 'remark',
+                    'customer_available', 'customer_source'}">
                     left join customer_field sort_table
                     on c.id = sort_table.resource_id and sort_table.field_id = #{sortName}
                     left join sys_module_field module_table on sort_table.field_id = module_table.id
@@ -383,6 +397,78 @@
                     <property name="column" value="c.owner"/>
                 </include>
             </when>
+            <when test="condition.name == 'roomid'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.roomid"/>
+                </include>
+            </when>
+            <when test="condition.name == 'wecomExternalId'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.wecom_external_id"/>
+                </include>
+            </when>
+            <when test="condition.name == 'email'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.email"/>
+                </include>
+            </when>
+            <when test="condition.name == 'fullName'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.full_name"/>
+                </include>
+            </when>
+            <when test="condition.name == 'creditLimit'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.credit_limit"/>
+                </include>
+            </when>
+            <when test="condition.name == 'customsCode'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.customs_code"/>
+                </include>
+            </when>
+            <when test="condition.name == 'region'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.region"/>
+                </include>
+            </when>
+            <when test="condition.name == 'phone'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.phone"/>
+                </include>
+            </when>
+            <when test="condition.name == 'address'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.address"/>
+                </include>
+            </when>
+            <when test="condition.name == 'remark'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.remark"/>
+                </include>
+            </when>
+            <when test="condition.name == 'customerAvailable'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.customer_available"/>
+                </include>
+            </when>
+            <when test="condition.name == 'customerSource'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="c.customer_source"/>
+                </include>
+            </when>
             <when test="condition.name == 'follower'">
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
@@ -452,6 +538,7 @@
     <select id="checkRepeatCustomer" resultType="cn.cordys.crm.search.response.advanced.AdvancedCustomerResponse">
         select c.id, c.`name`, if(c.in_shared_pool, null, c.owner) as owner, c.create_time, c.update_time, c.create_user, c.update_user, c.collection_time, c.pool_id,
         c.follower, c.follow_time, c.reason_id
+        <include refid="promotedCustomerColumns"/>
         from customer c
 
         <include refid="fieldConditionJoin">
@@ -557,6 +644,7 @@
     <select id="getListByIds" resultType="cn.cordys.crm.customer.dto.response.CustomerListResponse">
         select c.id, c.`name`, c.owner, c.create_time, c.update_time, c.create_user, c.update_user, c.collection_time, c.pool_id,
                c.follower, c.follow_time, c.in_shared_pool, c.organization_id, c.reason_id
+               <include refid="promotedCustomerColumns"/>
         from customer c
         where c.id in
         <foreach collection="ids" item="id" open="(" close=")" separator=",">
@@ -601,6 +689,7 @@
     <select id="customerPoolList" resultType="cn.cordys.crm.search.response.advanced.AdvancedCustomerPoolResponse">
         select c.id, c.`name`, if(c.in_shared_pool, null, c.owner) as owner, c.create_time, c.update_time, c.create_user, c.update_user, c.collection_time, c.pool_id,
         c.follower, c.follow_time, c.reason_id
+        <include refid="promotedCustomerColumns"/>
         from customer c
 
         <include refid="fieldConditionJoin">
@@ -716,6 +805,42 @@
             </if>
             <if test="request.fieldName == 'name'">
                 name = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'wecomExternalId'">
+                wecom_external_id = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'roomid'">
+                roomid = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'email'">
+                email = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'fullName'">
+                full_name = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'creditLimit'">
+                credit_limit = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'customsCode'">
+                customs_code = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'region'">
+                region = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'phone'">
+                phone = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'address'">
+                address = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'remark'">
+                remark = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'customerAvailable'">
+                customer_available = #{request.fieldValue},
+            </if>
+            <if test="request.fieldName == 'customerSource'">
+                customer_source = #{request.fieldValue},
             </if>
             update_time = #{request.updateTime},
             update_user = #{request.updateUser}

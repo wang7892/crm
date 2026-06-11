@@ -11,7 +11,6 @@ import {
   GetContractDetailUrl,
   GetContractFormConfigUrl,
   GetContractTabUrl,
-  ChangeContractStatusUrl,
   GetContractFormSnapshotConfigUrl,
   ExportContractAllUrl,
   ExportContractSelectedUrl,
@@ -43,9 +42,9 @@ import {
   EnablePaymentPlanViewUrl,
   DeletePaymentPlanViewUrl,
   DragPaymentPlanViewUrl,
-  BatchApproveContractUrl,
-  ApproveContractUrl,
-  RevokeContractUrl,
+  PreCheckContractImportUrl,
+  DownloadContractTemplateUrl,
+  ImportContractUrl,
   PaymentRecordPageUrl,
   PaymentRecordAddUrl,
   PaymentRecordUpdateUrl,
@@ -143,7 +142,6 @@ import type {
   UpdateContractInvoiceParams,
   ContractInvoiceDetail,
 } from '@lib/shared/models/contract';
-import type { BatchOperationResult, BatchUpdateQuotationStatusParams } from '@lib/shared/models/opportunity';
 export default function useContractApi(CDR: CordysAxios) {
   // 合同列表
   function getContractList(data: TableQueryParams) {
@@ -188,10 +186,6 @@ export default function useContractApi(CDR: CordysAxios) {
     });
   }
 
-  function changeContractStatus(id: string, stage: string, voidReason?: string) {
-    return CDR.post({ url: `${ChangeContractStatusUrl}`, data: { stage, id, voidReason } });
-  }
-
   // 获取合同tab显隐藏
   function getContractTab() {
     return CDR.get<CustomerTabHidden>({ url: GetContractTabUrl });
@@ -215,16 +209,26 @@ export default function useContractApi(CDR: CordysAxios) {
     });
   }
 
-  function batchApproveContract(data: BatchUpdateQuotationStatusParams) {
-    return CDR.post<BatchOperationResult>({ url: BatchApproveContractUrl, data });
+  function preCheckImportContract(file: File) {
+    return CDR.uploadFile<{ data: ValidateInfo }>(
+      { url: PreCheckContractImportUrl },
+      { fileList: [file] },
+      'file'
+    );
   }
 
-  function approvalContract(data: ApprovalContractParams) {
-    return CDR.post({ url: ApproveContractUrl, data });
+  function downloadContractTemplate() {
+    return CDR.get(
+      {
+        url: DownloadContractTemplateUrl,
+        responseType: 'blob',
+      },
+      { isTransformResponse: false, isReturnNativeResponse: true }
+    );
   }
 
-  function revokeContract(id: string) {
-    return CDR.get({ url: `${RevokeContractUrl}/${id}` });
+  function importContract(file: File) {
+    return CDR.uploadFile({ url: ImportContractUrl }, { fileList: [file] }, 'file');
   }
 
   // 视图
@@ -709,12 +713,11 @@ export default function useContractApi(CDR: CordysAxios) {
     addContract,
     updateContract,
     deleteContract,
-    changeContractStatus,
     getContractFormConfig,
     getContractFormSnapshotConfig,
-    batchApproveContract,
-    approvalContract,
-    revokeContract,
+    preCheckImportContract,
+    downloadContractTemplate,
+    importContract,
     getContractStatistic,
     // 回款计划
     getPaymentPlanList,

@@ -7,6 +7,7 @@ import cn.cordys.crm.system.mapper.ExtScheduleMapper;
 import cn.cordys.mybatis.BaseMapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.quartz.Job;
 import org.quartz.JobKey;
 import org.quartz.TriggerKey;
 import org.springframework.stereotype.Service;
@@ -51,7 +52,7 @@ public class ExtScheduleService {
                     scheduleManager.addOrUpdateCronJob(
                             new JobKey(schedule.getKey(), schedule.getJob()),
                             new TriggerKey(schedule.getKey(), schedule.getJob()),
-                            Class.forName(schedule.getJob()),
+                            Class.forName(schedule.getJob()).asSubclass(Job.class),
                             schedule.getValue(),
                             scheduleManager.getDefaultJobDataMap(schedule, schedule.getValue(), schedule.getCreateUser())
                     );

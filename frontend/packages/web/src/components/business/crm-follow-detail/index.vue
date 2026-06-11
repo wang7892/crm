@@ -1,10 +1,52 @@
 <template>
   <div :class="`crm-follow-detail p-[24px] ${props.wrapperClass}`">
     <div class="mb-[16px] flex items-center justify-between">
-      <div>
+      <div class="flex items-center gap-[12px]">
         <n-button v-if="showAdd" type="primary" @click="handleAdd">
           {{ t(props.activeType === 'followPlan' ? 'crmFollowRecord.writePlan' : 'crmFollowRecord.writeRecord') }}
         </n-button>
+        <n-button-group v-if="props.activeType === 'followRecord'">
+          <n-button
+            :type="monitorSource === 'WECOM' ? 'primary' : 'default'"
+            @click="handleMonitorSourceClick('WECOM')"
+          >
+            微信
+          </n-button>
+          <n-button :type="monitorSource === 'MAIL' ? 'primary' : 'default'" @click="handleMonitorSourceClick('MAIL')">
+            邮件
+          </n-button>
+        </n-button-group>
+        <n-popover
+          v-if="props.activeType === 'followRecord'"
+          v-model:show="showFollowTimePicker"
+          trigger="click"
+          placement="bottom-start"
+          :show-arrow="false"
+          class="!p-0"
+          @update:show="handleFollowTimePickerShow"
+        >
+          <template #trigger>
+            <n-button
+              :type="hasFollowTimeRange ? 'primary' : 'default'"
+              :title="t('crmFollowRecord.followTimeRange')"
+              :aria-label="t('crmFollowRecord.followTimeRange')"
+            >
+              <template #icon>
+                <CrmIcon type="iconicon_calendar1" :size="16" />
+              </template>
+            </n-button>
+          </template>
+          <n-date-picker
+            v-model:value="draftFollowTimeRange"
+            panel
+            type="datetimerange"
+            clearable
+            :actions="followTimePickerActions"
+            :default-time="[undefined, '23:59:59']"
+            @confirm="handleFollowTimeRangeConfirm"
+            @clear="handleFollowTimeRangeClear"
+          />
+        </n-popover>
       </div>
       <div class="flex gap-[12px]">
         <CrmTab
@@ -109,12 +151,11 @@
       @delete="handleDelete(activeItem as FollowDetailItem)"
       @edit="handleEdit(activeItem as FollowDetailItem)"
     />
-    />
   </div>
 </template>
 
 <script lang="ts" setup>
-  import { NButton, NSpin } from 'naive-ui';
+  import { NButton, NButtonGroup, NDatePicker, NPopover, NSpin } from 'naive-ui';
   import dayjs from 'dayjs';
 
   import { CustomerFollowPlanStatusEnum } from '@lib/shared/enums/customerEnum';
@@ -123,6 +164,7 @@
   import type { CustomerFollowPlanListItem, FollowDetailItem } from '@lib/shared/models/customer';
 
   import type { Description } from '@/components/pure/crm-detail-card/index.vue';
+  import CrmIcon from '@/components/pure/crm-icon-font/index.vue';
   import CrmSearchInput from '@/components/pure/crm-search-input/index.vue';
   import CrmTab from '@/components/pure/crm-tab/index.vue';
   import DetailDrawer from '@/components/business/crm-follow-drawer/components/detailDrawer.vue';
@@ -133,7 +175,7 @@
   import { hasAnyPermission } from '@/utils/permission';
 
   import { descriptionList, statusTabList } from './config';
-  import useFollowApi, { type followEnumType } from './useFollowApi';
+  import useFollowApi, { type followEnumType, type MonitorSource } from './useFollowApi';
 
   const { t } = useI18n();
 
@@ -159,6 +201,7 @@
 
   const realFormKey = ref<FormDesignKeyEnum>(FormDesignKeyEnum.FOLLOW_PLAN_BUSINESS);
   const refreshDetailKey = ref(0);
+  const monitorSource = ref<MonitorSource>();
 
   const sourceId = ref('');
   const sourceName = ref('');
@@ -184,13 +227,18 @@
     loadFollowList,
     changePlanStatus,
     followKeyword,
+    followTimeRange,
+    hasFollowTimeRange,
     followFormKeyMap,
     handleDelete,
     getApiKey,
+    setFollowTimeRange,
+    clearFollowTimeRange,
   } = useFollowApi({
     type: toRef(props, 'activeType'),
     followApiKey: props.followApiKey,
     sourceId: toRef(props, 'sourceId'),
+    monitorSource,
     onDeleteSuccess: () => {
       // 确认删除成功后关闭详情弹窗
       if (showDetailDrawer.value) {
@@ -198,6 +246,44 @@
       }
     },
   });
+
+  function handleMonitorSourceClick(source: MonitorSource) {
+    monitorSource.value = monitorSource.value === source ? undefined : source;
+    loadFollowList(true);
+  }
+
+  type FollowTimeRangeValue = number | [number, number] | null;
+  const followTimePickerActions: ('clear' | 'confirm')[] = ['clear', 'confirm'];
+  const showFollowTimePicker = ref(false);
+  const draftFollowTimeRange = ref<FollowTimeRangeValue>(null);
+
+  function normalizeFollowTimeRange(value: FollowTimeRangeValue) {
+    if (Array.isArray(value) && value[0] != null && value[1] != null) {
+      return [value[0], value[1]] as [number, number];
+    }
+    return null;
+  }
+
+  function handleFollowTimePickerShow(show: boolean) {
+    showFollowTimePicker.value = show;
+    if (show) {
+      draftFollowTimeRange.value = followTimeRange.value ? ([...followTimeRange.value] as [number, number]) : null;
+    }
+  }
+
+  function handleFollowTimeRangeConfirm(value: FollowTimeRangeValue) {
+    const range = normalizeFollowTimeRange(value ?? draftFollowTimeRange.value);
+    setFollowTimeRange(range);
+    showFollowTimePicker.value = false;
+    loadFollowList(true);
+  }
+
+  function handleFollowTimeRangeClear() {
+    draftFollowTimeRange.value = null;
+    clearFollowTimeRange();
+    showFollowTimePicker.value = false;
+    loadFollowList(true);
+  }
 
   const needInitDetail = ref(false);
   const activePlan = ref();

@@ -7,6 +7,7 @@ import cn.cordys.aspectj.context.OperationLogContext;
 import cn.cordys.aspectj.dto.LogContextInfo;
 import cn.cordys.aspectj.dto.LogDTO;
 import cn.cordys.common.constants.BusinessModuleField;
+import cn.cordys.common.constants.CustomerPromotedField;
 import cn.cordys.common.constants.FormKey;
 import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.domain.BaseModuleFieldValue;
@@ -258,7 +259,7 @@ public class CustomerService {
 
         list.forEach(customerListResponse -> {
             // 获取自定义字段
-            List<BaseModuleFieldValue> customerFields = caseCustomFiledMap.get(customerListResponse.getId());
+            List<BaseModuleFieldValue> customerFields = filterPromotedModuleFields(caseCustomFiledMap.get(customerListResponse.getId()));
             customerListResponse.setModuleFields(customerFields);
             // 设置回收公海
             CustomerPool reservePool = ownersDefaultPoolMap.get(customerListResponse.getOwner());
@@ -325,7 +326,7 @@ public class CustomerService {
         CustomerGetResponse customerGetResponse = BeanUtils.copyBean(new CustomerGetResponse(), customer);
         customerGetResponse = baseService.setCreateUpdateOwnerUserName(customerGetResponse);
         // 获取模块字段
-        List<BaseModuleFieldValue> customerFields = customerFieldService.getModuleFieldValuesByResourceId(id);
+        List<BaseModuleFieldValue> customerFields = filterPromotedModuleFields(customerFieldService.getModuleFieldValuesByResourceId(id));
         ModuleFormConfigDTO customerFormConfig = getFormConfig(customer.getOrganizationId());
 
         Map<String, List<OptionDTO>> optionMap = moduleFormService.getOptionMap(customerFormConfig, customerFields);
@@ -393,6 +394,7 @@ public class CustomerService {
     @OperationLog(module = LogModule.CUSTOMER_INDEX, type = LogType.ADD, resourceName = "{#request.name}")
     public Customer add(CustomerAddRequest request, String userId, String orgId) {
         Customer customer = BeanUtils.copyBean(new Customer(), request);
+        List<BaseModuleFieldValue> customModuleFields = extractPromotedModuleFields(customer, request.getModuleFields());
         if (StringUtils.isBlank(request.getOwner())) {
             customer.setOwner(userId);
         }
@@ -407,11 +409,11 @@ public class CustomerService {
         customer.setInSharedPool(false);
 
         //保存自定义字段
-        customerFieldService.saveModuleField(customer, orgId, userId, request.getModuleFields(), false);
+        customerFieldService.saveModuleField(customer, orgId, userId, customModuleFields, false);
 
         customerMapper.insert(customer);
 
-        baseService.handleAddLog(customer, request.getModuleFields());
+        baseService.handleAddLog(customer, customModuleFields);
         // 通知
         commonNoticeSendService.sendNotice(NotificationConstants.Module.CUSTOMER,
                 NotificationConstants.Event.CUSTOMER_ADD, customer.getName(), userId,
@@ -428,6 +430,7 @@ public class CustomerService {
         dataScopeService.checkDataPermission(userId, orgId, originCustomer.getOwner(), PermissionConstants.CUSTOMER_MANAGEMENT_UPDATE);
 
         Customer customer = BeanUtils.copyBean(new Customer(), request);
+        List<BaseModuleFieldValue> customModuleFields = extractPromotedModuleFields(customer, request.getModuleFields());
         customer.setUpdateTime(System.currentTimeMillis());
         customer.setUpdateUser(userId);
 
@@ -446,30 +449,71 @@ public class CustomerService {
         }
 
         // 获取模块字段
-        List<BaseModuleFieldValue> originCustomerFields = customerFieldService.getModuleFieldValuesByResourceId(request.getId());
+        List<BaseModuleFieldValue> originCustomerFields = filterPromotedModuleFields(customerFieldService.getModuleFieldValuesByResourceId(request.getId()));
 
         if (BooleanUtils.isTrue(request.getAgentInvoke())) {
-            customerFieldService.updateModuleFieldByAgent(customer, originCustomerFields, request.getModuleFields(), orgId, userId);
+            customerFieldService.updateModuleFieldByAgent(customer, originCustomerFields, customModuleFields, orgId, userId);
         } else {
             // 更新模块字段
-            updateModuleField(customer, request.getModuleFields(), orgId, userId);
+            updateModuleField(customer, customModuleFields, orgId, userId);
         }
 
         customerMapper.update(customer);
 
         customer = customerMapper.selectByPrimaryKey(request.getId());
-        baseService.handleUpdateLog(originCustomer, customer, originCustomerFields, request.getModuleFields(), originCustomer.getId(), originCustomer.getName());
+        List<BaseModuleFieldValue> modifiedLogFields = request.getModuleFields() == null ? originCustomerFields : customModuleFields;
+        baseService.handleUpdateLog(originCustomer, customer, originCustomerFields, modifiedLogFields, originCustomer.getId(), originCustomer.getName());
         return customer;
+    }
+
+    private List<BaseModuleFieldValue> extractPromotedModuleFields(Customer customer, List<BaseModuleFieldValue> moduleFields) {
+        if (moduleFields == null) {
+            return null;
+        }
+        moduleFields.forEach(fieldValue -> {
+            CustomerPromotedField promotedField = CustomerPromotedField.ofFieldId(fieldValue.getFieldId());
+            if (promotedField != null) {
+                setPromotedFieldValue(customer, promotedField, toPromotedFieldValue(fieldValue.getFieldValue()));
+            }
+        });
+        return filterPromotedModuleFields(moduleFields);
+    }
+
+    private List<BaseModuleFieldValue> filterPromotedModuleFields(List<BaseModuleFieldValue> moduleFields) {
+        if (moduleFields == null) {
+            return null;
+        }
+        return moduleFields.stream()
+                .filter(fieldValue -> !CustomerPromotedField.isPromotedFieldId(fieldValue.getFieldId()))
+                .toList();
+    }
+
+    private String toPromotedFieldValue(Object fieldValue) {
+        return fieldValue == null ? StringUtils.EMPTY : fieldValue.toString();
+    }
+
+    private void setPromotedFieldValue(Customer customer, CustomerPromotedField promotedField, String fieldValue) {
+        switch (promotedField) {
+            case WECOM_EXTERNAL_ID -> customer.setWecomExternalId(fieldValue);
+            case ROOMID -> customer.setRoomid(fieldValue);
+            case EMAIL -> customer.setEmail(fieldValue);
+            case FULL_NAME -> customer.setFullName(fieldValue);
+            case CREDIT_LIMIT -> customer.setCreditLimit(fieldValue);
+            case CUSTOMS_CODE -> customer.setCustomsCode(fieldValue);
+            case REGION -> customer.setRegion(fieldValue);
+            case PHONE -> customer.setPhone(fieldValue);
+            case ADDRESS -> customer.setAddress(fieldValue);
+            case REMARK -> customer.setRemark(fieldValue);
+            case CUSTOMER_AVAILABLE -> customer.setCustomerAvailable(fieldValue);
+            case CUSTOMER_SOURCE -> customer.setCustomerSource(fieldValue);
+        }
     }
 
     private void updateModuleField(Customer customer, List<BaseModuleFieldValue> moduleFields, String orgId, String userId) {
         if (moduleFields == null) {
-            // 如果为 null，则不更新
             return;
         }
-        // 先删除
         customerFieldService.deleteByResourceId(customer.getId());
-        // 再保存
         customerFieldService.saveModuleField(customer, orgId, userId, moduleFields, true);
     }
 
@@ -730,8 +774,15 @@ public class CustomerService {
                     logs.add(new LogDTO(currentOrg, customer.getId(), currentUser, LogType.ADD, LogModule.CUSTOMER_INDEX, customer.getName()));
                 });
                 customerMapper.batchInsert(customers);
-                customerFieldMapper.batchInsert(customerFields.stream().map(field -> BeanUtils.copyBean(new CustomerField(), field)).toList());
-                customerFieldBlobMapper.batchInsert(customerFieldBlobs.stream().map(field -> BeanUtils.copyBean(new CustomerFieldBlob(), field)).toList());
+                List<CustomerField> importCustomerFields = customerFields.stream()
+                        .map(field -> BeanUtils.copyBean(new CustomerField(), field))
+                        .collect(Collectors.toCollection(ArrayList::new));
+                if (CollectionUtils.isNotEmpty(importCustomerFields)) {
+                    customerFieldMapper.batchInsert(importCustomerFields);
+                }
+                if (CollectionUtils.isNotEmpty(customerFieldBlobs)) {
+                    customerFieldBlobMapper.batchInsert(customerFieldBlobs.stream().map(field -> BeanUtils.copyBean(new CustomerFieldBlob(), field)).toList());
+                }
                 // record logs
                 logService.batchAdd(logs);
             };
@@ -769,6 +820,11 @@ public class CustomerService {
 
     public void batchUpdate(ResourceBatchEditRequest request, String userId, String organizationId) {
         BaseField field = customerFieldService.getAndCheckField(request.getFieldId(), organizationId);
+        CustomerPromotedField promotedField = CustomerPromotedField.of(request.getFieldId(), field.getInternalKey(), field.getBusinessKey());
+        if (promotedField != null) {
+            field.setInternalKey(promotedField.getInternalKey());
+            field.setBusinessKey(promotedField.getBusinessKey());
+        }
 
         if (Strings.CS.equals(field.getBusinessKey(), BusinessModuleField.CUSTOMER_OWNER.getBusinessKey())) {
             // 修改负责人，走批量转移接口

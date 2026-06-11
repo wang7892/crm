@@ -21,10 +21,7 @@
 
   import { getReasonConfig, updateReasonEnable } from '@/api/modules';
 
-  export type approvalConfigType =
-    | FormDesignKeyEnum.OPPORTUNITY_QUOTATION
-    | FormDesignKeyEnum.CONTRACT
-    | FormDesignKeyEnum.INVOICE;
+  export type approvalConfigType = FormDesignKeyEnum.OPPORTUNITY_QUOTATION | FormDesignKeyEnum.INVOICE;
 
   const props = defineProps<{
     type: approvalConfigType;

@@ -2,6 +2,7 @@
 <configuration debug="true">
 
     <property resource="commons.properties"/>
+    <springProperty scope="context" name="LOG_PATH" source="logging.file.path" defaultValue="/opt/cordys/logs/cordys-crm"/>
     <!-- 不在此强制加载 /opt/cordys/conf/cordys-crm.properties：Windows/本地常无该路径，会导致 Logback 启动失败。业务配置由 Spring Application 与 spring.config.additional-location 加载。 -->
 
     <!-- Console 输出 -->
@@ -20,9 +21,9 @@
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
-        <File>${logging.file.path}/trace.log</File>
+        <File>${LOG_PATH}/trace.log</File>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <FileNamePattern>${logging.file.path}/history/trace.%d{yyyyMMdd}-%i.log</FileNamePattern>
+            <FileNamePattern>${LOG_PATH}/history/trace.%d{yyyyMMdd}-%i.log</FileNamePattern>
             <maxHistory>${logger.max.history:-30}</maxHistory>
             <maxFileSize>50MB</maxFileSize>
         </rollingPolicy>
@@ -38,9 +39,9 @@
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
-        <File>${logging.file.path}/debug.log</File>
+        <File>${LOG_PATH}/debug.log</File>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <FileNamePattern>${logging.file.path}/history/debug.%d{yyyyMMdd}-%i.log</FileNamePattern>
+            <FileNamePattern>${LOG_PATH}/history/debug.%d{yyyyMMdd}-%i.log</FileNamePattern>
             <maxHistory>${logger.max.history:-30}</maxHistory>
             <maxFileSize>50MB</maxFileSize>
         </rollingPolicy>
@@ -56,9 +57,9 @@
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
-        <File>${logging.file.path}/info.log</File>
+        <File>${LOG_PATH}/info.log</File>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <FileNamePattern>${logging.file.path}/history/info.%d{yyyyMMdd}-%i.log</FileNamePattern>
+            <FileNamePattern>${LOG_PATH}/history/info.%d{yyyyMMdd}-%i.log</FileNamePattern>
             <maxHistory>${logger.max.history:-30}</maxHistory>
             <maxFileSize>50MB</maxFileSize>
         </rollingPolicy>
@@ -74,9 +75,9 @@
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
-        <File>${logging.file.path}/warn.log</File>
+        <File>${LOG_PATH}/warn.log</File>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <FileNamePattern>${logging.file.path}/history/warn.%d{yyyyMMdd}-%i.log</FileNamePattern>
+            <FileNamePattern>${LOG_PATH}/history/warn.%d{yyyyMMdd}-%i.log</FileNamePattern>
             <maxHistory>${logger.max.history:-30}</maxHistory>
             <maxFileSize>50MB</maxFileSize>
         </rollingPolicy>
@@ -92,9 +93,9 @@
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
-        <File>${logging.file.path}/error.log</File>
+        <File>${LOG_PATH}/error.log</File>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <FileNamePattern>${logging.file.path}/history/error.%d{yyyyMMdd}-%i.log</FileNamePattern>
+            <FileNamePattern>${LOG_PATH}/history/error.%d{yyyyMMdd}-%i.log</FileNamePattern>
             <maxHistory>${logger.max.history:-30}</maxHistory>
             <maxFileSize>50MB</maxFileSize>
         </rollingPolicy>

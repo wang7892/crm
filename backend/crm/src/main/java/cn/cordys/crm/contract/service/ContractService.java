@@ -6,10 +6,10 @@ import cn.cordys.aspectj.constants.LogType;
 import cn.cordys.aspectj.context.OperationLogContext;
 import cn.cordys.aspectj.dto.LogDTO;
 import cn.cordys.common.constants.BusinessModuleField;
-import cn.cordys.common.constants.CommonResultCode;
 import cn.cordys.common.constants.FormKey;
 import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.domain.BaseModuleFieldValue;
+import cn.cordys.common.domain.BaseResourceSubField;
 import cn.cordys.common.dto.*;
 import cn.cordys.common.dto.condition.BaseCondition;
 import cn.cordys.common.dto.condition.FilterCondition;
@@ -25,10 +25,10 @@ import cn.cordys.common.uid.SerialNumGenerator;
 import cn.cordys.common.util.BeanUtils;
 import cn.cordys.common.util.JSON;
 import cn.cordys.common.util.Translator;
-import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.contract.constants.ContractApprovalStatus;
-import cn.cordys.crm.contract.constants.ContractStage;
 import cn.cordys.crm.contract.domain.Contract;
+import cn.cordys.crm.contract.domain.ContractField;
+import cn.cordys.crm.contract.domain.ContractFieldBlob;
 import cn.cordys.crm.contract.domain.ContractPaymentRecord;
 import cn.cordys.crm.contract.domain.ContractSnapshot;
 import cn.cordys.crm.contract.dto.request.*;
@@ -38,48 +38,51 @@ import cn.cordys.crm.contract.dto.response.ContractStatisticResponse;
 import cn.cordys.crm.contract.dto.response.CustomerContractStatisticResponse;
 import cn.cordys.crm.contract.mapper.ExtContractInvoiceMapper;
 import cn.cordys.crm.contract.mapper.ExtContractMapper;
-import cn.cordys.crm.contract.mapper.ExtContractSnapshotMapper;
 import cn.cordys.crm.customer.domain.Customer;
-import cn.cordys.crm.opportunity.constants.ApprovalState;
-import cn.cordys.crm.system.constants.DictModule;
-import cn.cordys.crm.system.constants.NotificationConstants;
-import cn.cordys.crm.system.domain.MessageTaskConfig;
-import cn.cordys.crm.system.dto.MessageTaskConfigDTO;
+import cn.cordys.crm.system.constants.SheetKey;
 import cn.cordys.crm.system.dto.field.SerialNumberField;
 import cn.cordys.crm.system.dto.field.base.BaseField;
-import cn.cordys.crm.system.dto.response.BatchAffectSkipResponse;
+import cn.cordys.crm.system.dto.response.ImportResponse;
 import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
-import cn.cordys.crm.system.notice.CommonNoticeSendService;
-import cn.cordys.crm.system.service.DictService;
+import cn.cordys.crm.system.excel.CustomImportAfterDoConsumer;
+import cn.cordys.crm.system.excel.handler.CustomHeadColWidthStyleStrategy;
+import cn.cordys.crm.system.excel.handler.CustomTemplateWriteHandler;
+import cn.cordys.crm.system.excel.listener.CustomFieldCheckEventListener;
+import cn.cordys.crm.system.excel.listener.CustomFieldImportEventListener;
 import cn.cordys.crm.system.service.LogService;
 import cn.cordys.crm.system.service.ModuleFormCacheService;
 import cn.cordys.crm.system.service.ModuleFormService;
+import cn.cordys.excel.utils.EasyExcelExporter;
 import cn.cordys.mybatis.BaseMapper;
 import cn.cordys.mybatis.lambda.LambdaQueryWrapper;
+import cn.idev.excel.FastExcelFactory;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Strings;
-import org.apache.ibatis.session.ExecutorType;
-import org.apache.ibatis.session.SqlSession;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.mybatis.spring.SqlSessionUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.util.*;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @Transactional(rollbackFor = Exception.class)
 public class ContractService {
 
     @Resource
     private ContractFieldService contractFieldService;
+    @Resource
+    private BaseMapper<ContractField> contractFieldMapper;
+    @Resource
+    private BaseMapper<ContractFieldBlob> contractFieldBlobMapper;
     @Resource
     private BaseMapper<Contract> contractMapper;
     @Resource
@@ -101,19 +104,11 @@ public class ContractService {
     @Resource
     private SerialNumGenerator serialNumGenerator;
     @Resource
-    private SqlSessionFactory sqlSessionFactory;
-    @Resource
-    private CommonNoticeSendService commonNoticeSendService;
-    @Resource
-    private BaseMapper<MessageTaskConfig> messageTaskConfigMapper;
-    @Resource
     private DataScopeService dataScopeService;
     @Resource
     private BaseMapper<ContractPaymentRecord> contractPaymentRecordMapper;
     @Resource
     private ExtContractInvoiceMapper extContractInvoiceMapper;
-    @Resource
-    private DictService dictService;
 
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("9999999999");
 
@@ -143,19 +138,14 @@ public class ContractService {
         contract.setCustomerId(request.getCustomerId());
         contract.setOwner(request.getOwner());
         contract.setNumber(createContractNumber(moduleFormConfigDTO, orgId, request.getNumber()));
-        contract.setStage(ContractStage.PENDING_SIGNING.name());
         contract.setOrganizationId(orgId);
-        contract.setApprovalStatus(ContractApprovalStatus.APPROVING.name());
+        contract.setApprovalStatus(ContractApprovalStatus.NONE.name());
         contract.setStartTime(request.getStartTime());
         contract.setEndTime(request.getEndTime());
         contract.setCreateTime(System.currentTimeMillis());
         contract.setCreateUser(operatorId);
         contract.setUpdateTime(System.currentTimeMillis());
         contract.setUpdateUser(operatorId);
-
-        if (!dictService.isDictConfigEnable(DictModule.CONTRACT_APPROVAL.name(), orgId)) {
-            contract.setApprovalStatus(ContractApprovalStatus.NONE.name());
-        }
 
         //判断总金额
         setAmount(request.getAmount(), contract);
@@ -214,7 +204,7 @@ public class ContractService {
         if (getResponse == null) {
             throw new GenericException(Translator.get("resource.not.exist"));
         }
-        dataScopeService.checkDataPermission(userId, orgId, getResponse.getOwner(), PermissionConstants.CONTRACT_READ);
+        dataScopeService.checkDataPermission(userId, orgId, getPermissionOwner(getResponse, orgId), PermissionConstants.CONTRACT_READ);
         return getResponse;
     }
 
@@ -223,13 +213,30 @@ public class ContractService {
         if (getResponse == null) {
             throw new GenericException(Translator.get("resource.not.exist"));
         }
-        dataScopeService.checkDataPermission(userId, orgId, getResponse.getOwner(), PermissionConstants.CONTRACT_READ);
+        dataScopeService.checkDataPermission(userId, orgId, getPermissionOwner(getResponse, orgId), PermissionConstants.CONTRACT_READ);
         return getResponse;
+    }
+
+    private String getPermissionOwner(ContractGetResponse response, String orgId) {
+        return getPermissionOwner(response.getOwner(), response.getCreateUser(), orgId);
+    }
+
+    private String getPermissionOwner(String owner, String createUser, String orgId) {
+        String resolvedOwner = baseService.resolveUserIdByIdOrName(owner, orgId);
+        if (StringUtils.isNotBlank(resolvedOwner)) {
+            return resolvedOwner;
+        }
+        return createUser;
     }
 
     private ContractGetResponse get(Contract contract, List<BaseModuleFieldValue> contractFields, ModuleFormConfigDTO contractFormConfig) {
         ContractGetResponse contractGetResponse = BeanUtils.copyBean(new ContractGetResponse(), contract);
         contractGetResponse = baseService.setCreateUpdateOwnerUserName(contractGetResponse);
+        if (StringUtils.isNotBlank(contract.getOwner()) &&
+                (StringUtils.isBlank(contractGetResponse.getOwnerName()) ||
+                        Strings.CS.equals(contractGetResponse.getOwnerName(), Translator.get("common.option.not_exist")))) {
+            contractGetResponse.setOwnerName(contract.getOwner());
+        }
 
         String id = contract.getId();
         // 获取模块字段
@@ -245,9 +252,10 @@ public class ContractService {
         optionMap.put(BusinessModuleField.CONTRACT_OWNER.getBusinessKey(), ownerFieldOption);
 
         Customer customer = customerBaseMapper.selectByPrimaryKey(contract.getCustomerId());
-        if (customer != null) {
-            contractGetResponse.setCustomerName(customer.getName());
-            optionMap.put(BusinessModuleField.CONTRACT_CUSTOMER_NAME.getBusinessKey(), Collections.singletonList(new OptionDTO(customer.getId(), customer.getName())));
+        String customerName = customer == null ? contract.getCustomerId() : customer.getName();
+        if (StringUtils.isNotBlank(customerName)) {
+            contractGetResponse.setCustomerName(customerName);
+            optionMap.put(BusinessModuleField.CONTRACT_CUSTOMER_NAME.getBusinessKey(), Collections.singletonList(new OptionDTO(contract.getCustomerId(), customerName)));
         }
 
         contractGetResponse.setOptionMap(optionMap);
@@ -263,7 +271,6 @@ public class ContractService {
 
         // 附件信息
         contractGetResponse.setAttachmentMap(moduleFormService.getAttachmentMap(contractFormConfig, contractFields));
-        contractGetResponse.setAlreadyPayAmount(sumContractRecordAmount(id));
 
         return contractGetResponse;
     }
@@ -314,12 +321,7 @@ public class ContractService {
             contract.setNumber(oldContract.getNumber());
             contract.setCreateUser(oldContract.getCreateUser());
             contract.setCreateTime(oldContract.getCreateTime());
-            contract.setStage(oldContract.getStage());
-            if (dictService.isDictConfigEnable(DictModule.CONTRACT_APPROVAL.name(), orgId)) {
-                contract.setApprovalStatus(ContractApprovalStatus.APPROVING.name());
-            } else {
-                contract.setApprovalStatus(oldContract.getApprovalStatus());
-            }
+            contract.setApprovalStatus(ContractApprovalStatus.NONE.name());
 
             //判断总金额
             setAmount(request.getAmount(), contract);
@@ -429,8 +431,15 @@ public class ContractService {
             if (customer != null) {
                 response.setInCustomerPool(customer.getInSharedPool());
                 response.setPoolId(customer.getPoolId());
+                if (StringUtils.isBlank(response.getCustomerName())) {
+                    response.setCustomerName(customer.getName());
+                }
+            } else if (StringUtils.isBlank(response.getCustomerName()) && StringUtils.isNotBlank(contract.getCustomerId())) {
+                response.setCustomerName(contract.getCustomerId());
             }
-            response.setAlreadyPayAmount(sumContractRecordAmount(id));
+            if (StringUtils.isBlank(response.getOwnerName()) && StringUtils.isNotBlank(contract.getOwner())) {
+                response.setOwnerName(contract.getOwner());
+            }
         }
         return response;
     }
@@ -465,6 +474,13 @@ public class ContractService {
         List<OptionDTO> ownerFieldOption = moduleFormService.getBusinessFieldOption(buildList,
                 ContractListResponse::getOwner, ContractListResponse::getOwnerName);
         optionMap.put(BusinessModuleField.CONTRACT_OWNER.getBusinessKey(), ownerFieldOption);
+        // 补充客户选项。手动录入客户名称时 customer_id 本身就是显示值。
+        List<OptionDTO> customerFieldOption = moduleFormService.getBusinessFieldOption(buildList,
+                        ContractListResponse::getCustomerId, ContractListResponse::getCustomerName)
+                .stream()
+                .filter(option -> StringUtils.isNotBlank(option.getId()) && StringUtils.isNotBlank(option.getName()))
+                .toList();
+        optionMap.put(BusinessModuleField.CONTRACT_CUSTOMER_NAME.getBusinessKey(), customerFieldOption);
         return optionMap;
     }
 
@@ -483,16 +499,36 @@ public class ContractService {
         Map<String, List<BaseModuleFieldValue>> resolvefieldValueMap = contractFieldService.setBusinessRefFieldValue(list, moduleFormService.getFlattenFormFields(FormKey.CONTRACT.getKey(), orgId), contractFiledMap);
 
 
-        List<String> ownerIds = list.stream()
+        List<String> ownerValues = list.stream()
                 .map(ContractListResponse::getOwner)
+                .filter(StringUtils::isNotBlank)
+                .distinct()
+                .toList();
+        Map<String, String> resolvedOwnerIdMap = baseService.resolveUserIdsByIdsOrNames(ownerValues, orgId);
+        List<String> ownerIds = resolvedOwnerIdMap.values().stream()
+                .filter(StringUtils::isNotBlank)
+                .distinct()
+                .toList();
+        List<String> permissionUserIds = list.stream()
+                .flatMap(item -> java.util.stream.Stream.of(
+                        resolvedOwnerIdMap.getOrDefault(item.getOwner(), item.getOwner()),
+                        item.getCreateUser()))
+                .filter(StringUtils::isNotBlank)
                 .distinct()
                 .toList();
         Map<String, String> userNameMap = baseService.getUserNameMap(ownerIds);
-        Map<String, UserDeptDTO> userDeptMap = baseService.getUserDeptMapByUserIds(ownerIds, orgId);
+        Map<String, UserDeptDTO> userDeptMap = baseService.getUserDeptMapByUserIds(permissionUserIds, orgId);
 
         list.forEach(item -> {
-            item.setOwnerName(userNameMap.get(item.getOwner()));
-            UserDeptDTO userDeptDTO = userDeptMap.get(item.getOwner());
+            String resolvedOwnerId = resolvedOwnerIdMap.get(item.getOwner());
+            item.setOwnerName(StringUtils.defaultIfBlank(userNameMap.get(resolvedOwnerId), item.getOwner()));
+            if (StringUtils.isBlank(item.getCustomerName())) {
+                item.setCustomerName(item.getCustomerId());
+            }
+            UserDeptDTO userDeptDTO = userDeptMap.get(resolvedOwnerId);
+            if (userDeptDTO == null) {
+                userDeptDTO = userDeptMap.get(item.getCreateUser());
+            }
             if (userDeptDTO != null) {
                 item.setDepartmentId(userDeptDTO.getDeptId());
                 item.setDepartmentName(userDeptDTO.getDeptName());
@@ -536,222 +572,119 @@ public class ContractService {
         return PermissionUtils.getTabEnableConfig(userId, PermissionConstants.CONTRACT_READ, rolePermissions);
     }
 
-
     /**
-     * 更新合同状态
+     * 下载导入模板
      *
-     * @param request
-     * @param userId
+     * @param response   响应
+     * @param currentOrg 当前组织
      */
-    public void updateStage(ContractStageRequest request, String userId, String orgId) {
-        Contract contract = contractMapper.selectByPrimaryKey(request.getId());
-        if (contract == null) {
-            throw new GenericException(Translator.get("contract.not.exist"));
-        }
-        if (dictService.isDictConfigEnable(DictModule.CONTRACT_APPROVAL.name(), orgId) && !Strings.CI.equals(contract.getApprovalStatus(), ContractApprovalStatus.APPROVED.name())) {
-            throw new GenericException(Translator.get("contract.unapproved.cannot.edit"));
-        }
-
-        Map<String, String> oldMap = new HashMap<>();
-        oldMap.put("contractStage", Translator.get("contract.stage." + contract.getStage().toLowerCase()));
-
-        contract.setStage(request.getStage());
-        if (StringUtils.isNotBlank(request.getVoidReason())) {
-            contract.setVoidReason(request.getVoidReason());
-        }
-
-        contract.setUpdateTime(System.currentTimeMillis());
-        contract.setUpdateUser(userId);
-        contractMapper.update(contract);
-
-        updateStatusSnapshot(request.getId(), request.getStage(), null);
-
-        LogDTO logDTO = new LogDTO(orgId, request.getId(), userId, LogType.UPDATE, LogModule.CONTRACT_INDEX, contract.getName());
-        Map<String, String> newMap = new HashMap<>();
-        newMap.put("contractStage", Translator.get("contract.stage." + request.getStage().toLowerCase()));
-        logDTO.setOriginalValue(oldMap);
-        logDTO.setModifiedValue(newMap);
-        logService.add(logDTO);
-
-        if (Strings.CI.equals(request.getStage(), ContractStage.VOID.name()) || Strings.CI.equals(request.getStage(), ContractStage.ARCHIVED.name())) {
-            String event = Strings.CI.equals(request.getStage(), ContractStage.VOID.name()) ?
-                    NotificationConstants.Event.CONTRACT_VOID : NotificationConstants.Event.CONTRACT_ARCHIVED;
-            Customer customer = customerBaseMapper.selectByPrimaryKey(contract.getCustomerId());
-            sendNotice(contract, userId, orgId, event, customer.getName());
-        }
-
+    public void downloadImportTpl(HttpServletResponse response, String currentOrg) {
+        new EasyExcelExporter()
+                .exportMultiSheetTplWithSharedHandler(response, moduleFormService.getCustomImportHeadsNoRef(FormKey.CONTRACT.getKey(), currentOrg),
+                        Translator.get("contract.import_tpl.name"), Translator.get(SheetKey.DATA), Translator.get(SheetKey.COMMENT),
+                        new CustomTemplateWriteHandler(moduleFormService.getAllCustomImportFields(FormKey.CONTRACT.getKey(), currentOrg)),
+                        new CustomHeadColWidthStyleStrategy());
     }
 
     /**
-     * 发送通知
+     * 导入检查
      *
-     * @param contract 合同实体
-     * @param userId   用户ID
-     * @param orgId    组织ID
-     * @param event    事件类型
+     * @param file       导入文件
+     * @param currentOrg 当前组织
+     * @return 导入检查信息
      */
-    private void sendNotice(Contract contract, String userId, String orgId, String event, String customerName) {
-        //查询通知配置的接收范围
-        List<String> receiveUserIds = new ArrayList<>();
-        List<MessageTaskConfig> messageTaskConfigList = messageTaskConfigMapper.selectListByLambda(new LambdaQueryWrapper<MessageTaskConfig>()
-                .eq(MessageTaskConfig::getOrganizationId, orgId)
-                .eq(MessageTaskConfig::getTaskType, NotificationConstants.Module.CONTRACT)
-                .eq(MessageTaskConfig::getEvent, event));
-        if (CollectionUtils.isNotEmpty(messageTaskConfigList)) {
-            MessageTaskConfig messageTaskConfig = messageTaskConfigList.getFirst();
-            MessageTaskConfigDTO messageTaskConfigDTO = JSON.parseObject(messageTaskConfig.getValue(), MessageTaskConfigDTO.class);
-            receiveUserIds = commonNoticeSendService.getNoticeReceiveUserIds(messageTaskConfigDTO, contract.getCreateUser(), contract.getOwner(), orgId);
-        } else {
-            //默认通知创建人
-            receiveUserIds.add(contract.getOwner());
+    public ImportResponse importPreCheck(MultipartFile file, String currentOrg) {
+        if (file == null) {
+            throw new GenericException(Translator.get("file_cannot_be_null"));
         }
-
-        Map<String, Object> paramMap = new HashMap<>();
-        paramMap.put("customerName", customerName);
-        paramMap.put("name", contract.getName());
-        commonNoticeSendService.sendNotice(NotificationConstants.Module.CONTRACT, event,
-                paramMap, userId, orgId, receiveUserIds, true);
+        return checkImportExcel(file, currentOrg);
     }
 
-    private void updateStatusSnapshot(String id, String stage, String approvalStatus) {
-        LambdaQueryWrapper<ContractSnapshot> delWrapper = new LambdaQueryWrapper<>();
-        delWrapper.eq(ContractSnapshot::getContractId, id);
-        List<ContractSnapshot> contractSnapshots = snapshotBaseMapper.selectListByLambda(delWrapper);
-        ContractSnapshot first = contractSnapshots.getFirst();
-        if (first != null) {
-            ContractGetResponse response = JSON.parseObject(first.getContractValue(), ContractGetResponse.class);
-            if (StringUtils.isNotBlank(stage)) {
-                response.setStage(stage);
-            }
-            if (StringUtils.isNotBlank(approvalStatus)) {
-                response.setApprovalStatus(approvalStatus);
-            }
-            first.setContractValue(JSON.toJSONString(response));
-            snapshotBaseMapper.update(first);
+    /**
+     * 合同导入
+     *
+     * @param file        导入文件
+     * @param currentOrg  当前组织
+     * @param currentUser 当前用户
+     * @return 导入返回信息
+     */
+    public ImportResponse realImport(MultipartFile file, String currentOrg, String currentUser) {
+        if (file == null) {
+            throw new GenericException(Translator.get("file_cannot_be_null"));
+        }
+        try {
+            List<BaseField> fields = moduleFormService.getAllFields(FormKey.CONTRACT.getKey(), currentOrg);
+            Optional<SerialNumberField> serialOptional = fields.stream()
+                    .filter(BaseField::isSerialNumber)
+                    .filter(field -> Strings.CI.equals(field.getInternalKey(), BusinessModuleField.CONTRACT_NO.getKey()))
+                    .filter(SerialNumberField.class::isInstance)
+                    .map(SerialNumberField.class::cast)
+                    .findAny();
+            ModuleFormConfigDTO moduleFormConfigDTO = getFormConfig(currentOrg);
+
+            CustomImportAfterDoConsumer<Contract, BaseResourceSubField> afterDo = (contracts, contractFields, contractFieldBlobs) -> {
+                List<LogDTO> logs = new ArrayList<>();
+                contracts.forEach(contract -> {
+                    serialOptional.ifPresent(serialField ->
+                            contract.setNumber(serialNumGenerator.generateByRules(serialField.getSerialNumberRules(), currentOrg, FormKey.CONTRACT.getKey())));
+                    contract.setApprovalStatus(ContractApprovalStatus.NONE.name());
+                    if (contract.getAmount() == null) {
+                        contract.setAmount(BigDecimal.ZERO);
+                    }
+                    if (contract.getAmount().compareTo(MAX_AMOUNT) > 0) {
+                        throw new GenericException(Translator.get("contract.amount.exceed.max"));
+                    }
+                    logs.add(new LogDTO(currentOrg, contract.getId(), currentUser, LogType.ADD, LogModule.CONTRACT_INDEX, contract.getName()));
+                });
+
+                contractMapper.batchInsert(contracts);
+                if (CollectionUtils.isNotEmpty(contractFields)) {
+                    contractFieldMapper.batchInsert(contractFields.stream().map(field -> BeanUtils.copyBean(new ContractField(), field)).toList());
+                }
+                if (CollectionUtils.isNotEmpty(contractFieldBlobs)) {
+                    contractFieldBlobMapper.batchInsert(contractFieldBlobs.stream().map(field -> BeanUtils.copyBean(new ContractFieldBlob(), field)).toList());
+                }
+                logService.batchAdd(logs);
+
+                contracts.forEach(contract -> saveSnapshot(contract, moduleFormConfigDTO, get(contract.getId())));
+            };
+
+            CustomFieldImportEventListener<Contract> eventListener = new CustomFieldImportEventListener<>(fields, Contract.class, currentOrg, currentUser,
+                    "contract_field", afterDo, 2000, null, null);
+            FastExcelFactory.read(file.getInputStream(), eventListener).headRowNumber(1).ignoreEmptyRow(true).sheet().doRead();
+            return ImportResponse.builder().errorMessages(eventListener.getErrList())
+                    .successCount(eventListener.getSuccessCount()).failCount(eventListener.getErrList().size()).build();
+        } catch (Exception e) {
+            log.error("contract import error", e);
+            throw new GenericException(e.getMessage());
         }
     }
+
+    /**
+     * 检查导入文件
+     *
+     * @param file       导入文件
+     * @param currentOrg 当前组织
+     * @return 检查信息
+     */
+    private ImportResponse checkImportExcel(MultipartFile file, String currentOrg) {
+        try {
+            List<BaseField> fields = moduleFormService.getAllCustomImportFields(FormKey.CONTRACT.getKey(), currentOrg);
+            CustomFieldCheckEventListener eventListener = new CustomFieldCheckEventListener(fields, "contract", "contract_field", currentOrg);
+            FastExcelFactory.read(file.getInputStream(), eventListener).headRowNumber(1).ignoreEmptyRow(true).sheet().doRead();
+            return ImportResponse.builder().errorMessages(eventListener.getErrList())
+                    .successCount(eventListener.getSuccess()).failCount(eventListener.getErrList().size()).build();
+        } catch (Exception e) {
+            log.error("contract import pre-check error", e);
+            throw new GenericException(e.getMessage());
+        }
+    }
+
 
     public CustomerContractStatisticResponse calculateContractStatisticByCustomerId(String customerId, String userId, String orgId, DeptDataPermissionDTO deptDataPermission) {
         return extContractMapper.calculateContractStatisticByCustomerId(customerId, userId, orgId, deptDataPermission);
     }
 
-
-    /**
-     * 审核通过/不通过
-     *
-     * @param request
-     * @param userId
-     */
-    public void approvalContract(ContractApprovalRequest request, String userId, String orgId) {
-        Contract contract = contractMapper.selectByPrimaryKey(request.getId());
-        if (contract == null) {
-            throw new GenericException(Translator.get("contract.not.exist"));
-        }
-
-        checkApprovalConfig(orgId);
-
-        String state = contract.getApprovalStatus();
-        contract.setApprovalStatus(request.getApprovalStatus());
-        contract.setUpdateTime(System.currentTimeMillis());
-        contract.setUpdateUser(userId);
-        contractMapper.update(contract);
-
-        updateStatusSnapshot(request.getId(), null, request.getApprovalStatus());
-
-        // 添加日志上下文
-        LogDTO logDTO = getApprovalLogDTO(orgId, request.getId(), userId, contract.getName(), state, request.getApprovalStatus());
-        logService.add(logDTO);
-    }
-
-    public String revoke(String id, String userId, String orgId) {
-        Contract contract = contractMapper.selectByPrimaryKey(id);
-        if (contract == null) {
-            throw new GenericException(Translator.get("contract.not.exist"));
-        }
-
-        checkApprovalConfig(orgId);
-
-        String originApprovalStatus = contract.getApprovalStatus();
-        if (!Strings.CI.equals(contract.getCreateUser(), userId) || !Strings.CI.equals(contract.getApprovalStatus(), ApprovalState.APPROVING.toString())) {
-            return contract.getApprovalStatus();
-        }
-        contract.setApprovalStatus(ApprovalState.REVOKED.toString());
-        contract.setUpdateUser(userId);
-        contract.setUpdateTime(System.currentTimeMillis());
-        contractMapper.update(contract);
-
-        //更新快照
-        updateStatusSnapshot(id, null, ApprovalState.REVOKED.toString());
-
-        // 添加日志上下文
-        LogDTO logDTO = getApprovalLogDTO(orgId, id, userId, contract.getName(), originApprovalStatus, ApprovalState.REVOKED.toString());
-        logService.add(logDTO);
-
-        return contract.getApprovalStatus();
-    }
-
-    private void checkApprovalConfig(String orgId) {
-        if (!dictService.isDictConfigEnable(DictModule.CONTRACT_APPROVAL.name(), orgId)) {
-            // 未开启审批
-            throw new GenericException(CommonResultCode.APPROVAL_NOT_ENABLED_ERROR);
-        }
-    }
-
-
-    /**
-     * 批量审核
-     *
-     * @param request
-     * @param userId
-     * @param orgId
-     */
-    public BatchAffectSkipResponse batchApprovalContract(ContractApprovalBatchRequest request, String userId, String orgId) {
-        checkApprovalConfig(orgId);
-
-        List<String> ids = extContractMapper.selectByStatusAndIds(request.getIds(), ContractApprovalStatus.APPROVING.name());
-
-        if (CollectionUtils.isEmpty(ids)) {
-            return BatchAffectSkipResponse.builder().success(0).fail(0).skip(request.getIds().size()).build();
-        }
-
-        LambdaQueryWrapper<ContractSnapshot> wrapper = new LambdaQueryWrapper<>();
-        wrapper.in(ContractSnapshot::getContractId, ids);
-        List<ContractSnapshot> contractSnapshots = snapshotBaseMapper.selectListByLambda(wrapper);
-        Map<String, ContractSnapshot> snapshotsMaps = contractSnapshots.stream().collect(Collectors.toMap(ContractSnapshot::getContractId, Function.identity()));
-
-        List<LogDTO> logs = new ArrayList<>();
-        SqlSession sqlSession = sqlSessionFactory.openSession(ExecutorType.BATCH);
-        ExtContractMapper batchUpdateMapper = sqlSession.getMapper(ExtContractMapper.class);
-        ExtContractSnapshotMapper snapshotMapper = sqlSession.getMapper(ExtContractSnapshotMapper.class);
-
-        ids.forEach(id -> {
-            batchUpdateMapper.updateStatus(id, request.getApprovalStatus(), userId, System.currentTimeMillis());
-            ContractSnapshot contractSnapshot = snapshotsMaps.get(id);
-            ContractGetResponse response = JSON.parseObject(contractSnapshot.getContractValue(), ContractGetResponse.class);
-            String state = response.getApprovalStatus();
-            response.setApprovalStatus(request.getApprovalStatus());
-            contractSnapshot.setContractValue(JSON.toJSONString(response));
-            snapshotMapper.update(contractSnapshot);
-            LogDTO logDTO = getApprovalLogDTO(orgId, id, userId, response.getName(), state, request.getApprovalStatus());
-            logs.add(logDTO);
-        });
-        sqlSession.flushStatements();
-        SqlSessionUtils.closeSqlSession(sqlSession, sqlSessionFactory);
-        logService.batchAdd(logs);
-
-        return BatchAffectSkipResponse.builder().success(ids.size()).fail(0).skip(request.getIds().size() - ids.size()).build();
-    }
-
-    private LogDTO getApprovalLogDTO(String orgId, String id, String userId, String response, String state, String newState) {
-        LogDTO logDTO = new LogDTO(orgId, id, userId, LogType.APPROVAL, LogModule.CONTRACT_INDEX, response);
-        Map<String, String> oldMap = new HashMap<>();
-        oldMap.put("approvalStatus", Translator.get("contract.approval_status." + state.toLowerCase()));
-        logDTO.setOriginalValue(oldMap);
-        Map<String, String> newMap = new HashMap<>();
-        newMap.put("approvalStatus", Translator.get("contract.approval_status." + newState.toLowerCase()));
-        logDTO.setModifiedValue(newMap);
-        return logDTO;
-    }
 
     public String getContractName(String id) {
         Contract contract = contractMapper.selectByPrimaryKey(id);
@@ -780,46 +713,7 @@ public class ContractService {
      * @return 搜索条件
      */
     public List<FilterCondition> getDefaultSourceFilters() {
-        // 只展示状态为通过且非作废/归档阶段的合同
-        List<FilterCondition> conditions = new ArrayList<>();
-
-        if (dictService.isDictConfigEnable(DictModule.CONTRACT_APPROVAL.name(), OrganizationContext.getOrganizationId())) {
-            FilterCondition statusCondition = new FilterCondition();
-            statusCondition.setMultipleValue(false);
-            statusCondition.setName("approvalStatus");
-            statusCondition.setOperator(FilterCondition.CombineConditionOperator.IN.name());
-            statusCondition.setValue(List.of(ContractApprovalStatus.APPROVED.name()));
-            conditions.add(statusCondition);
-        }
-
-        FilterCondition stageCondition = new FilterCondition();
-        stageCondition.setMultipleValue(false);
-        stageCondition.setName("stage");
-        stageCondition.setOperator(FilterCondition.CombineConditionOperator.IN.name());
-        stageCondition.setValue(List.of(ContractStage.PENDING_SIGNING.name(), ContractStage.SIGNED.name(),
-                ContractStage.IN_PROGRESS.name(), ContractStage.COMPLETED_PERFORMANCE.name(), ContractStage.CHANGE.name()));
-        conditions.add(stageCondition);
-
-        return conditions;
-    }
-
-    /**
-     * 计算合同已回款金额
-     *
-     * @param contractId 合同ID
-     * @return 已回款金额
-     */
-    private BigDecimal sumContractRecordAmount(String contractId) {
-        LambdaQueryWrapper<ContractPaymentRecord> paymentRecordWrapper = new LambdaQueryWrapper<>();
-        paymentRecordWrapper.eq(ContractPaymentRecord::getContractId, contractId);
-        List<ContractPaymentRecord> contractPaymentRecords = contractPaymentRecordMapper.selectListByLambda(paymentRecordWrapper);
-        if (CollectionUtils.isNotEmpty(contractPaymentRecords)) {
-            return contractPaymentRecords.stream()
-                    .map(ContractPaymentRecord::getRecordAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-        } else {
-            return BigDecimal.ZERO;
-        }
+        return Collections.emptyList();
     }
 
     /**

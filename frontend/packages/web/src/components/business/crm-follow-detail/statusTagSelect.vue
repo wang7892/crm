@@ -17,7 +17,7 @@
   import { VNodeChild } from 'vue';
   import { NSelect, SelectOption } from 'naive-ui';
 
-  import { ContractPaymentPlanEnum, ContractStatusEnum } from '@lib/shared/enums/contractEnum';
+  import { ContractPaymentPlanEnum } from '@lib/shared/enums/contractEnum';
   import { CustomerFollowPlanStatusEnum } from '@lib/shared/enums/customerEnum';
   import { useI18n } from '@lib/shared/hooks/useI18n';
   import type { StatusTagKey } from '@lib/shared/models/customer';
@@ -39,7 +39,7 @@
     (e: 'change'): void;
   }>();
 
-  const status = defineModel<CustomerFollowPlanStatusEnum | ContractPaymentPlanEnum | ContractStatusEnum>('status', {
+  const status = defineModel<CustomerFollowPlanStatusEnum | ContractPaymentPlanEnum>('status', {
     required: true,
   });
 

@@ -34,6 +34,7 @@
       "
       :class="props.isSubTableField ? '!w-[150px]' : ''"
       :status="props.feedback ? 'error' : undefined"
+      :manual-input="allowManualInput"
       @confirm="handleConfirm"
       @delete-tag="handleConfirm"
     />
@@ -73,6 +74,7 @@
     default: [],
   });
   const selectedUsers = ref<SelectedUsersItem[]>(props.fieldConfig.initialOptions || []);
+  const allowManualInput = computed(() => props.fieldConfig.internalKey === 'contractOwner');
   const memberTypes = computed(() => {
     if ([FieldTypeEnum.MEMBER, FieldTypeEnum.MEMBER_MULTIPLE].includes(props.fieldConfig.type)) {
       return [

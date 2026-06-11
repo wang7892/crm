@@ -25,6 +25,54 @@ public class CustomerAddRequest {
     @Schema(description = "负责人")
     private String owner;
 
+    @Size(max = 255)
+    @Schema(description = "Customer WeCom external ID")
+    private String wecomExternalId;
+
+    @Size(max = 1024)
+    @Schema(description = "企业微信群聊 roomid，多个 roomid 可用英文逗号分隔")
+    private String roomid;
+
+    @Size(max = 255)
+    @Schema(description = "Email")
+    private String email;
+
+    @Size(max = 255)
+    @Schema(description = "Full name")
+    private String fullName;
+
+    @Size(max = 255)
+    @Schema(description = "Credit limit")
+    private String creditLimit;
+
+    @Size(max = 255)
+    @Schema(description = "Customs code")
+    private String customsCode;
+
+    @Size(max = 255)
+    @Schema(description = "Region")
+    private String region;
+
+    @Size(max = 255)
+    @Schema(description = "Phone")
+    private String phone;
+
+    @Size(max = 512)
+    @Schema(description = "Address")
+    private String address;
+
+    @Size(max = 512)
+    @Schema(description = "Remark")
+    private String remark;
+
+    @Size(max = 255)
+    @Schema(description = "Customer available")
+    private String customerAvailable;
+
+    @Size(max = 255)
+    @Schema(description = "Customer source")
+    private String customerSource;
+
     @Schema(description = "模块字段值")
     private List<BaseModuleFieldValue> moduleFields;
 

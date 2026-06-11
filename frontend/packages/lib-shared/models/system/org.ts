@@ -37,6 +37,9 @@ export interface BaseMemberInfo {
   phone: string;
   gender: boolean; // 性别(false-男/true-女)
   email: string;
+  emailAuthCode: string;
+  wecomId: string;
+  roomid: string;
   name: string;
   departmentId: string | null;
   position: string; // 职位

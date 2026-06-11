@@ -13,22 +13,14 @@
         c.pool_id,
         ct.amount,
         ct.approval_status,
-        ct.stage,
         ct.`owner`,
         ct.start_time,
         ct.end_time,
-        ct.void_reason,
         ct.create_user,
         ct.create_time,
         ct.update_user,
-        ct.update_time,
-        ct.alreadyPayAmount
-        FROM (
-        SELECT ctt.*, IFNULL(SUM(cpr.record_amount), 0) AS alreadyPayAmount
-        FROM contract ctt
-        LEFT JOIN contract_payment_record cpr on cpr.contract_id = ctt.id
-        GROUP BY ctt.id
-        ) ct
+        ct.update_time
+        FROM contract ct
         LEFT JOIN customer c ON ct.customer_id = c.id
         <include refid="fieldConditionJoin">
             <property name="conditions" value="request.filters"/>
@@ -47,7 +39,9 @@
         </include>
 
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on ct.owner = sys_organization_user.user_id
+            join sys_organization_user on sys_organization_user.user_id =
+            <include refid="permissionOwnerUserId"/>
+            and sys_organization_user.organization_id = #{orgId}
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -65,7 +59,7 @@
         </if>
 
         <if test="dataPermission != null and dataPermission.self">
-            and ct.owner = #{userId}
+            and <include refid="permissionOwnerUserId"/> = #{userId}
         </if>
 
         <if test="!source and request.keyword != null and request.keyword != ''">
@@ -103,26 +97,20 @@
         ct.amount,
         ct.number,
         ct.approval_status,
-        ct.stage,
         ct.`owner`,
-        ct.void_reason,
         ct.create_user,
         ct.create_time,
         ct.update_user,
         ct.update_time,
         ct.start_time,
-        ct.end_time,
-        ct.alreadyPayAmount
-        FROM (
-        SELECT ctt.*, IFNULL(SUM(cpr.record_amount), 0) AS alreadyPayAmount
-        FROM contract ctt
-        LEFT JOIN contract_payment_record cpr on cpr.contract_id = ctt.id
-        GROUP BY ctt.id
-        ) ct
+        ct.end_time
+        FROM contract ct
         LEFT JOIN customer c ON ct.customer_id = c.id
 
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on ct.owner = sys_organization_user.user_id
+            join sys_organization_user on sys_organization_user.user_id =
+            <include refid="permissionOwnerUserId"/>
+            and sys_organization_user.organization_id = #{orgId}
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -138,17 +126,40 @@
         </foreach>
 
         <if test="dataPermission != null and dataPermission.self">
-            and ct.owner = #{userId}
+            and <include refid="permissionOwnerUserId"/> = #{userId}
         </if>
     </select>
 
     <!-- common sql start -->
+    <sql id="permissionOwnerUserId">
+        COALESCE(
+            (
+                SELECT owner_org_user.user_id
+                FROM sys_organization_user owner_org_user
+                WHERE owner_org_user.user_id = ct.owner
+                  AND owner_org_user.organization_id = #{orgId}
+                LIMIT 1
+            ),
+            (
+                SELECT owner_name_org_user.user_id
+                FROM sys_user owner_name_user
+                JOIN sys_organization_user owner_name_org_user
+                  ON owner_name_org_user.user_id = owner_name_user.id
+                 AND owner_name_org_user.organization_id = #{orgId}
+                WHERE owner_name_user.name = ct.owner
+                ORDER BY owner_name_org_user.enable DESC, owner_name_user.id ASC
+                LIMIT 1
+            ),
+            ct.create_user
+        )
+    </sql>
+
     <sql id="fieldConditionJoin">
         <if test="${conditions} != null and ${conditions}.size() > 0">
             <foreach collection="${conditions}" item="condition" index="i">
                 <if test="condition.name not in
                 {'name', 'owner', 'createTime', 'updateTime', 'customerId', 'createUser', 'updateUser',
-                 'departmentId', 'number', 'stage', 'amount', 'approvalStatus', 'startTime', 'endTime', 'alreadyPayAmount'}">
+                 'departmentId', 'number', 'amount', 'approvalStatus', 'startTime', 'endTime'}">
                     <if test="condition.multipleValue">
                         left join contract_field_blob ${tablePrefix}_${i}
                         on ct.id = ${tablePrefix}_${i}.resource_id and ${tablePrefix}_${i}.field_id = #{condition.name}
@@ -160,7 +171,8 @@
                 </if>
                 <if test="condition.name == 'departmentId'">
                     left join sys_organization_user ${tablePrefix}_${i}
-                    on ${tablePrefix}_${i}.user_id = ct.owner
+                    on ${tablePrefix}_${i}.user_id = <include refid="permissionOwnerUserId"/>
+                    and ${tablePrefix}_${i}.organization_id = #{orgId}
                 </if>
             </foreach>
         </if>
@@ -168,15 +180,16 @@
 
     <sql id="fieldSortJoin">
         <if test="${sort} != null and ${sort}.valid() and ${sort}.name not in
-                {'name', 'owner', 'customer_id', 'amount', 'stage', 'update_user', 'create_time',
-                 'approval_status', 'update_time', 'create_user', 'department_id', 'startTime', 'endTime', 'already_pay_amount'}">
+                {'name', 'owner', 'customer_id', 'amount', 'update_user', 'create_time',
+                 'approval_status', 'update_time', 'create_user', 'department_id', 'startTime', 'endTime'}">
             <bind name="sortName" value="${sort}.name"/>
             left join contract_field sort_table
             on ct.id = sort_table.resource_id and sort_table.field_id = #{sortName}
             left join sys_module_field module_table on sort_table.field_id = module_table.id
         </if>
         <if test="${sort} != null and ${sort}.valid() and ${sort}.name == 'department_id'">
-            left join sys_organization_user souc_sort on souc_sort.user_id = ct.owner
+            left join sys_organization_user souc_sort on souc_sort.user_id = <include refid="permissionOwnerUserId"/>
+            and souc_sort.organization_id = #{orgId}
         </if>
     </sql>
 
@@ -213,22 +226,10 @@
                     <property name="column" value="ct.amount"/>
                 </include>
             </when>
-            <when test="condition.name == 'alreadyPayAmount'">
-                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
-                    <property name="condition" value="condition"/>
-                    <property name="column" value="ct.alreadyPayAmount"/>
-                </include>
-            </when>
             <when test="condition.name == 'owner'">
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
                     <property name="column" value="ct.owner"/>
-                </include>
-            </when>
-            <when test="condition.name == 'stage'">
-                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
-                    <property name="condition" value="condition"/>
-                    <property name="column" value="ct.stage"/>
                 </include>
             </when>
             <when test="condition.name == 'number'">
@@ -350,12 +351,6 @@
                     <when test="${sort}.name == 'amount'">
                         ct.`amount` ${sortType}, ct.id ASC
                     </when>
-                    <when test="${sort}.name == 'already_pay_amount'">
-                        ct.`alreadyPayAmount` ${sortType}, ct.id ASC
-                    </when>
-                    <when test="${sort}.name == 'stage'">
-                        ct.`stage` ${sortType}, ct.id ASC
-                    </when>
                     <when test="${sort}.name == 'create_time'">
                         ct.`create_time` ${sortType}, ct.id ASC
                     </when>
@@ -407,9 +402,7 @@
                c.pool_id,
                ct.amount,
                ct.approval_status,
-               ct.stage,
                ct.`owner`,
-               ct.void_reason,
                ct.create_user,
                ct.create_time,
                ct.update_user,
@@ -426,7 +419,9 @@
         contract ct
         LEFT JOIN customer c ON ct.customer_id = c.id
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on ct.owner = sys_organization_user.user_id
+            join sys_organization_user on sys_organization_user.user_id =
+            <include refid="permissionOwnerUserId"/>
+            and sys_organization_user.organization_id = #{orgId}
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -436,7 +431,7 @@
         </if>
         where ct.organization_id = #{orgId} and ct.customer_id = #{customerId}
         <if test="dataPermission != null and dataPermission.self">
-            and ct.owner = #{userId}
+            and <include refid="permissionOwnerUserId"/> = #{userId}
         </if>
     </select>
 
@@ -454,7 +449,6 @@
         where organization_id = #{organizationId}
           and end_time <![CDATA[>=]]> #{timestampOld}
           and end_time <![CDATA[<]]> #{timestamp}
-          and stage!='VOID' and stage!='COMPLETED_PERFORMANCE'
     </select>
 
     <update id="updateStatus">
@@ -464,15 +458,6 @@
             update_time     = #{updateTime}
         where id = #{id}
     </update>
-
-    <update id="updateStage">
-        update contract
-        set stage       = #{stage},
-            update_user = #{userId},
-            update_time = #{updateTime}
-        where id = #{id}
-    </update>
-
 
     <select id="searchStatistic" resultType="cn.cordys.crm.contract.dto.response.ContractStatisticResponse">
         SELECT
@@ -494,7 +479,9 @@
             <property name="tablePrefix" value="viewCombine"/>
         </include>
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on ct.owner = sys_organization_user.user_id
+            join sys_organization_user on sys_organization_user.user_id =
+            <include refid="permissionOwnerUserId"/>
+            and sys_organization_user.organization_id = #{orgId}
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -509,7 +496,7 @@
         where ct.organization_id = #{orgId}
 
         <if test="dataPermission != null and dataPermission.self">
-            and ct.owner = #{userId}
+            and <include refid="permissionOwnerUserId"/> = #{userId}
         </if>
 
         <if test="request.keyword != null and request.keyword != ''">

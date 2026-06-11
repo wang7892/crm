@@ -16,9 +16,13 @@ CREATE TABLE IF NOT EXISTS mail_event (
   next_retry_at DATETIME DEFAULT NULL COMMENT '下一次重试时间',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  UNIQUE KEY uk_mail_dedupe (organization_id, message_id),
+  UNIQUE KEY uk_mail_dedupe (organization_id, message_id, from_address),
   INDEX idx_status_retry (process_status, next_retry_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='邮件事件主表';
+
+-- 如果旧库已经建过表，请执行下面语句调整唯一索引：
+-- ALTER TABLE mail_event DROP INDEX uk_mail_dedupe;
+-- ALTER TABLE mail_event ADD UNIQUE KEY uk_mail_dedupe (organization_id, message_id, from_address);
 
 CREATE TABLE IF NOT EXISTS mail_attachment (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',

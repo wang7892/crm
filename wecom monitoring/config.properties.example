@@ -1,0 +1,47 @@
+# 组织与企业微信
+ORGANIZATION_ID=org001
+WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
+
+# 轮询间隔（秒）
+POLL_SECONDS=60
+
+# 监测服务自有库（游标、原始报文、归一化事件）
+DB_ENABLED=false
+DB_JDBC_URL=jdbc:mysql://127.0.0.1:3306/wecom_monitor?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+DB_USERNAME=root
+DB_PASSWORD=replace-with-your-db-password
+
+# CRM 库。监控程序会从这里读取 sys_user.wecom_id，并把企业微信消息写入 CRM 缓冲表。
+# 需先在 CRM 库执行 docs/mysql_cordys_crm_企业微信表.sql。
+CRM_INGESTION_DB_ENABLED=false
+CRM_INGESTION_DB_JDBC_URL=jdbc:mysql://127.0.0.1:3306/cordys_crm?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+CRM_INGESTION_DB_USERNAME=root
+CRM_INGESTION_DB_PASSWORD=replace-with-your-db-password
+
+# 会话存档 Secret（管理后台「会话内容存档」应用或文档指定；用于 Finance SDK Init）
+WECOM_CORP_SECRET=
+
+# 会话存档私钥（二选一：文件路径优先，或直接填 PEM；用于解密 encrypt_random_key）
+WECOM_PRIVATE_KEY_PATH=
+WECOM_PRIVATE_KEY_PEM=
+
+# HTTP 客户端（真实拉取时使用）
+WECOM_API_HOST=https://qyapi.weixin.qq.com
+WECOM_CHATDATA_PATH=/cgi-bin/msgaudit/get_chatdata
+WECOM_HTTP_CONNECT_TIMEOUT_MS=5000
+WECOM_HTTP_READ_TIMEOUT_MS=30000
+WECOM_PULL_LIMIT=200
+# 每轮重复回拉最近的 seq 范围，避免企业微信消息延迟或乱序导致漏取。
+WECOM_SEQ_OVERLAP=200
+# 单轮轮询最多连续拉取的页数，用于处理短时间内大量消息。
+WECOM_MAX_PAGES_PER_POLL=5
+WECOM_ARCHIVE_PROXY=
+WECOM_ARCHIVE_PROXY_PASSWORD=
+WECOM_ARCHIVE_TIMEOUT_SECONDS=5
+
+# 使用 Finance.GetMediaData 下载图片、视频、表情等媒体文件，保存到 CRM 附件目录，
+# 并把 sys_attachment.id 写回 wecom_ingestion_media.crm_asset_ref。
+WECOM_MEDIA_FETCH_ENABLED=true
+WECOM_MEDIA_FETCH_BATCH_SIZE=20
+# 必须指向 CRM 后端 DefaultRepositoryDir 使用的同一个附件根目录。
+CRM_ATTACHMENT_BASE_DIR=/opt/cordys/data/files

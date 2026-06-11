@@ -31,6 +31,7 @@ export default {
     'menu.clue': '线索',
     'menu.customer': '客户',
     'menu.contact': '联系人',
+    'menu.customerWecom': '企微监测',
     'menu.dashboard': '仪表板',
     'menu.agent': '智能体',
     'menu.tender': '标讯',

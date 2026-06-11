@@ -11,7 +11,10 @@ import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.follow.domain.FollowUpRecord;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordAddRequest;
 import cn.cordys.crm.follow.dto.request.FollowUpRecordUpdateRequest;
+import cn.cordys.crm.follow.dto.request.FollowSpecialistCustomerPageRequest;
 import cn.cordys.crm.follow.dto.request.RecordHomePageRequest;
+import cn.cordys.crm.follow.dto.response.FollowSpecialistCustomerResponse;
+import cn.cordys.crm.follow.dto.response.FollowSpecialistResponse;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordDetailResponse;
 import cn.cordys.crm.follow.dto.response.FollowUpRecordListResponse;
 import cn.cordys.crm.follow.service.FollowUpRecordService;
@@ -64,6 +67,26 @@ public class FollowUpRecordController {
         DeptDataPermissionDTO customerDataPermission = dataScopeService.getDeptDataPermission(SessionUtils.getUserId(),
                 OrganizationContext.getOrganizationId(), request.getViewId(), PermissionConstants.CUSTOMER_MANAGEMENT_READ);
         return followUpRecordService.totalList(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), clueDataPermission, customerDataPermission);
+    }
+
+    @PostMapping("/specialist/page")
+    @RequiresPermissions(value = {PermissionConstants.CUSTOMER_FOLLOW_RECORD_READ})
+    @Operation(summary = "联系专员跟进汇总列表")
+    public PagerWithOption<List<FollowSpecialistResponse>> specialistList(@Validated @RequestBody RecordHomePageRequest request) {
+        ConditionFilterUtils.parseCondition(request);
+        DeptDataPermissionDTO customerDataPermission = dataScopeService.getDeptDataPermission(SessionUtils.getUserId(),
+                OrganizationContext.getOrganizationId(), request.getViewId(), PermissionConstants.CUSTOMER_FOLLOW_RECORD_READ);
+        return followUpRecordService.specialistList(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), customerDataPermission);
+    }
+
+    @PostMapping("/specialist/customer/page")
+    @RequiresPermissions(value = {PermissionConstants.CUSTOMER_FOLLOW_RECORD_READ})
+    @Operation(summary = "联系专员跟进客户列表")
+    public PagerWithOption<List<FollowSpecialistCustomerResponse>> specialistCustomerList(@Validated @RequestBody FollowSpecialistCustomerPageRequest request) {
+        ConditionFilterUtils.parseCondition(request);
+        DeptDataPermissionDTO customerDataPermission = dataScopeService.getDeptDataPermission(SessionUtils.getUserId(),
+                OrganizationContext.getOrganizationId(), request.getViewId(), PermissionConstants.CUSTOMER_FOLLOW_RECORD_READ);
+        return followUpRecordService.specialistCustomerList(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), customerDataPermission);
     }
 
     @GetMapping("/delete/{id}")

@@ -19,7 +19,7 @@ export default {
   'module.confirmDeleteCapacity': 'Confirm to delete capacity?',
   'module.confirmDeleteCapacityContent': 'Members will have unlimited capacity after deletion',
   'module.customer.openSea': 'Open Sea Settings',
-  'module.customer.followRecord': 'Follow-up record',
+  'module.customer.followRecord': 'Contact Specialist',
   'module.customer.followPlan': 'Follow-up plan',
   'module.customer.capacitySet': 'Account Capacity Settings',
   'module.customer.addOpenSea': 'Add Open Sea',

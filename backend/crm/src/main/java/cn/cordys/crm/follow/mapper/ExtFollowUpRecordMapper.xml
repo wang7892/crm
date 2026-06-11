@@ -3,6 +3,49 @@
 
 <mapper namespace="cn.cordys.crm.follow.mapper.ExtFollowUpRecordMapper">
 
+    <sql id="monitorSourceCondition">
+        <if test="request.monitorSource != null and request.monitorSource != ''
+            and ((request.followMethodValues != null and request.followMethodValues.size() > 0)
+                or request.monitorSource == 'WECOM' or request.monitorSource == 'MAIL')">
+            <trim prefix="AND (" suffix=")" prefixOverrides="OR">
+                <if test="request.followMethodValues != null and request.followMethodValues.size() > 0">
+                    OR ${recordAlias}.follow_method IN
+                    <foreach collection="request.followMethodValues" item="followMethodValue" open="(" close=")" separator=",">
+                        #{followMethodValue}
+                    </foreach>
+                </if>
+                <choose>
+                    <when test="request.monitorSource == 'WECOM'">
+                        OR EXISTS (
+                            SELECT 1
+                            FROM wecom_ingestion_message_follow_record wimfr
+                            WHERE wimfr.organization_id = #{orgId}
+                              AND wimfr.follow_record_id COLLATE utf8mb4_general_ci = ${recordAlias}.id COLLATE utf8mb4_general_ci
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM wecom_ingestion_message wim
+                            WHERE wim.organization_id = #{orgId}
+                              AND wim.follow_record_id IS NOT NULL
+                              AND TRIM(wim.follow_record_id) != ''
+                              AND wim.follow_record_id COLLATE utf8mb4_general_ci = ${recordAlias}.id COLLATE utf8mb4_general_ci
+                        )
+                    </when>
+                    <when test="request.monitorSource == 'MAIL'">
+                        OR EXISTS (
+                            SELECT 1
+                            FROM email_webhook_event ewe
+                            WHERE ewe.organization_id = #{orgId}
+                              AND ewe.follow_record_id IS NOT NULL
+                              AND TRIM(ewe.follow_record_id) != ''
+                              AND ewe.follow_record_id COLLATE utf8mb4_general_ci = ${recordAlias}.id COLLATE utf8mb4_general_ci
+                        )
+                    </when>
+                </choose>
+            </trim>
+        </if>
+    </sql>
+
     <select id="selectPoolList" resultType="cn.cordys.crm.follow.dto.response.FollowUpRecordListResponse">
         SELECT
             id,
@@ -41,6 +84,15 @@
         <if test="request.keyword != null and request.keyword != ''">
             AND content like concat('%', #{request.keyword},'%')
         </if>
+        <if test="request.startTime != null">
+            AND follow_time &gt;= #{request.startTime}
+        </if>
+        <if test="request.endTime != null">
+            AND follow_time &lt;= #{request.endTime}
+        </if>
+        <include refid="monitorSourceCondition">
+            <property name="recordAlias" value="follow_up_record"/>
+        </include>
         ORDER BY follow_time DESC, create_time DESC
     </select>
 
@@ -80,6 +132,15 @@
             <if test="request.keyword != null and request.keyword != ''">
                 AND content like concat('%', #{request.keyword},'%')
             </if>
+            <if test="request.startTime != null">
+                AND follow_time &gt;= #{request.startTime}
+            </if>
+            <if test="request.endTime != null">
+                AND follow_time &lt;= #{request.endTime}
+            </if>
+            <include refid="monitorSourceCondition">
+                <property name="recordAlias" value="follow_up_record"/>
+            </include>
 
             <if test="customerData != null and !customerData.all and customerData.owner">
                 <if test="customerData.userIds != null and customerData.userIds.size() > 0">
@@ -148,6 +209,15 @@
         </if>
 
         WHERE fur.organization_id = #{orgId} and (c.transition_type is null or c.transition_type != 'CUSTOMER')
+        <include refid="monitorSourceCondition">
+            <property name="recordAlias" value="fur"/>
+        </include>
+        <if test="request.startTime != null">
+            AND fur.follow_time &gt;= #{request.startTime}
+        </if>
+        <if test="request.endTime != null">
+            AND fur.follow_time &lt;= #{request.endTime}
+        </if>
         <!-- 业务数据权限条件 -->
 
         AND (
@@ -209,6 +279,123 @@
         <include refid="sort">
             <property name="sort" value="request.sort"/>
         </include>
+    </select>
+
+    <sql id="customerFollowBaseCondition">
+        fur.organization_id = #{orgId}
+        AND fur.type = 'CUSTOMER'
+        AND fur.customer_id IS NOT NULL
+        AND TRIM(fur.customer_id) != ''
+        <include refid="monitorSourceCondition">
+            <property name="recordAlias" value="fur"/>
+        </include>
+        <if test="request.startTime != null">
+            AND fur.follow_time &gt;= #{request.startTime}
+        </if>
+        <if test="request.endTime != null">
+            AND fur.follow_time &lt;= #{request.endTime}
+        </if>
+        <if test="customerDataPermission != null and customerDataPermission.self">
+            AND fur.owner = #{userId}
+        </if>
+        <if test="customerDataPermission != null and customerDataPermission.deptIds != null and customerDataPermission.deptIds.size() > 0">
+            AND (
+                owner_org.department_id IN
+                <foreach collection="customerDataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
+                    #{deptId}
+                </foreach>
+                <if test="customerDataPermission.viewId == 'ALL'">
+                    OR fur.owner = #{userId}
+                </if>
+            )
+        </if>
+    </sql>
+
+    <select id="selectSpecialistList" resultType="cn.cordys.crm.follow.dto.response.FollowSpecialistResponse">
+        SELECT
+            fur.owner AS owner,
+            su.name AS ownerName,
+            su.phone AS phone,
+            su.email AS email,
+            owner_org.department_id AS departmentId,
+            sd.name AS departmentName,
+            COUNT(DISTINCT fur.customer_id) AS customerCount,
+            COUNT(*) AS recordCount,
+            MAX(fur.follow_time) AS latestFollowTime
+        FROM follow_up_record fur
+        INNER JOIN customer cu
+            ON cu.id COLLATE utf8mb4_general_ci = fur.customer_id COLLATE utf8mb4_general_ci
+           AND cu.organization_id COLLATE utf8mb4_general_ci = fur.organization_id COLLATE utf8mb4_general_ci
+        LEFT JOIN sys_user su
+            ON su.id COLLATE utf8mb4_general_ci = fur.owner COLLATE utf8mb4_general_ci
+        LEFT JOIN sys_organization_user owner_org
+            ON owner_org.user_id COLLATE utf8mb4_general_ci = fur.owner COLLATE utf8mb4_general_ci
+           AND owner_org.organization_id = #{orgId}
+        LEFT JOIN sys_department sd
+            ON sd.id COLLATE utf8mb4_general_ci = owner_org.department_id COLLATE utf8mb4_general_ci
+           AND sd.organization_id = #{orgId}
+        WHERE
+            <include refid="customerFollowBaseCondition"/>
+        <if test="request.keyword != null and request.keyword != ''">
+            AND (
+                su.name LIKE concat('%', #{request.keyword}, '%')
+                OR su.phone LIKE concat('%', #{request.keyword}, '%')
+                OR su.email LIKE concat('%', #{request.keyword}, '%')
+                OR sd.name LIKE concat('%', #{request.keyword}, '%')
+            )
+        </if>
+        GROUP BY
+            fur.owner,
+            su.name,
+            su.phone,
+            su.email,
+            owner_org.department_id,
+            sd.name
+        ORDER BY latestFollowTime DESC, recordCount DESC
+    </select>
+
+    <select id="selectSpecialistCustomerList" resultType="cn.cordys.crm.follow.dto.response.FollowSpecialistCustomerResponse">
+        SELECT
+            cu.id AS customerId,
+            cu.name AS customerName,
+            COUNT(*) AS recordCount,
+            MAX(fur.follow_time) AS latestFollowTime,
+            SUBSTRING_INDEX(GROUP_CONCAT(fur.content ORDER BY fur.follow_time DESC, fur.create_time DESC SEPARATOR '||CORDYS||'), '||CORDYS||', 1) AS latestContent,
+            SUBSTRING_INDEX(GROUP_CONCAT(fur.contact_id ORDER BY fur.follow_time DESC, fur.create_time DESC SEPARATOR '||CORDYS||'), '||CORDYS||', 1) AS contactId,
+            SUBSTRING_INDEX(GROUP_CONCAT(cc.name ORDER BY fur.follow_time DESC, fur.create_time DESC SEPARATOR '||CORDYS||'), '||CORDYS||', 1) AS contactName,
+            SUBSTRING_INDEX(GROUP_CONCAT(cc.phone ORDER BY fur.follow_time DESC, fur.create_time DESC SEPARATOR '||CORDYS||'), '||CORDYS||', 1) AS contactPhone
+        FROM follow_up_record fur
+        INNER JOIN customer cu
+            ON cu.id COLLATE utf8mb4_general_ci = fur.customer_id COLLATE utf8mb4_general_ci
+           AND cu.organization_id COLLATE utf8mb4_general_ci = fur.organization_id COLLATE utf8mb4_general_ci
+        LEFT JOIN customer_contact cc
+            ON cc.id COLLATE utf8mb4_general_ci = fur.contact_id COLLATE utf8mb4_general_ci
+        LEFT JOIN sys_organization_user owner_org
+            ON owner_org.user_id COLLATE utf8mb4_general_ci = fur.owner COLLATE utf8mb4_general_ci
+           AND owner_org.organization_id = #{orgId}
+        WHERE
+            <include refid="customerFollowBaseCondition"/>
+        <if test="request.owner == null or request.owner == ''">
+            AND 1 = 0
+        </if>
+        <if test="request.owner != null and request.owner != ''">
+            AND fur.owner = #{request.owner}
+        </if>
+        <if test="request.customerSource != null and request.customerSource != ''">
+            AND cu.customer_source = #{request.customerSource}
+        </if>
+        <if test="request.keyword != null and request.keyword != ''">
+            AND (
+                cu.name LIKE concat('%', #{request.keyword}, '%')
+                OR fur.content LIKE concat('%', #{request.keyword}, '%')
+                OR cc.name LIKE concat('%', #{request.keyword}, '%')
+                OR cc.phone LIKE concat('%', #{request.keyword}, '%')
+            )
+        </if>
+        GROUP BY
+            cu.id,
+            cu.name
+        ORDER BY latestFollowTime DESC, recordCount DESC
     </select>
 
 
@@ -574,5 +761,182 @@
         </foreach>
           AND ewa.download_url IS NOT NULL
           AND ewa.download_url != ''
+    </select>
+
+    <select id="selectWecomMediaByFollowRecordIds" resultType="cn.cordys.crm.follow.dto.WecomMediaMapping">
+        SELECT
+            link.followRecordId AS followRecordId,
+            CASE
+                WHEN media.msg_media_type IN ('1', '2') THEN 'emotion'
+                ELSE media.msg_media_type
+            END AS msgMediaType,
+            media.media_index AS mediaIndex,
+            media.file_name AS fileName,
+            media.mime_type AS mimeType,
+            media.size_bytes AS sizeBytes,
+            media.duration_ms AS durationMs,
+            media.fetch_status AS fetchStatus,
+            media.crm_asset_ref AS crmAssetRef
+        FROM (
+            SELECT
+                CONVERT(rel.follow_record_id USING utf8mb4) COLLATE utf8mb4_general_ci AS followRecordId,
+                CONVERT(rel.message_id USING utf8mb4) COLLATE utf8mb4_general_ci AS messageId
+            FROM wecom_ingestion_message_follow_record rel
+            WHERE rel.follow_record_id IN
+            <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+            UNION
+            SELECT
+                CONVERT(msg.follow_record_id USING utf8mb4) COLLATE utf8mb4_general_ci AS followRecordId,
+                CONVERT(msg.id USING utf8mb4) COLLATE utf8mb4_general_ci AS messageId
+            FROM wecom_ingestion_message msg
+            WHERE msg.follow_record_id IN
+            <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+              AND msg.follow_record_id IS NOT NULL
+              AND TRIM(msg.follow_record_id) != ''
+            UNION
+            SELECT
+                CONVERT(fur.id USING utf8mb4) COLLATE utf8mb4_general_ci AS followRecordId,
+                CONVERT(msg.id USING utf8mb4) COLLATE utf8mb4_general_ci AS messageId
+            FROM follow_up_record fur
+            JOIN customer c
+              ON c.id COLLATE utf8mb4_general_ci = fur.customer_id COLLATE utf8mb4_general_ci
+             AND c.organization_id COLLATE utf8mb4_general_ci = fur.organization_id COLLATE utf8mb4_general_ci
+            LEFT JOIN sys_user su
+              ON su.id COLLATE utf8mb4_general_ci = fur.owner COLLATE utf8mb4_general_ci
+            JOIN wecom_ingestion_message msg
+              ON msg.organization_id COLLATE utf8mb4_general_ci = fur.organization_id COLLATE utf8mb4_general_ci
+            WHERE fur.id IN
+            <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+              AND LOWER(COALESCE(msg.msg_type, '')) IN ('image', 'video', 'voice', 'file', 'emotion', '1', '2')
+              AND fur.content IS NOT NULL
+              AND fur.content COLLATE utf8mb4_general_ci LIKE CONVERT(CONCAT(
+                    '%',
+                    '[',
+                    DATE_FORMAT(FROM_UNIXTIME(msg.send_time / 1000), '%Y-%m-%d %H:%i:%s'),
+                    '] ',
+                    CASE
+                        WHEN LOWER(COALESCE(msg.message_direction, '')) = 'inbound'
+                            THEN CONCAT(COALESCE(c.name, '客户'), '发来')
+                        ELSE CONCAT(COALESCE(su.name, '联系专员'), '发出')
+                    END,
+                    ' ',
+                    CASE LOWER(COALESCE(msg.msg_type, ''))
+                        WHEN 'text' THEN '文本'
+                        WHEN 'image' THEN '图片'
+                        WHEN 'voice' THEN '语音'
+                        WHEN 'video' THEN '视频'
+                        WHEN 'file' THEN '文件'
+                        WHEN 'emotion' THEN '表情'
+                        WHEN 'redpacket' THEN '红包'
+                        WHEN 'voiptext' THEN '语音通话'
+                        WHEN 'meeting_voice_call' THEN '语音通话'
+                        WHEN 'voice_call' THEN '语音通话'
+                        WHEN 'voip_doc_share' THEN '视频通话'
+                        WHEN 'meeting_video_call' THEN '视频通话'
+                        WHEN 'video_call' THEN '视频通话'
+                        ELSE COALESCE(msg.msg_type, '消息')
+                    END,
+                    CHAR(10),
+                    COALESCE(msg.content_text, ''),
+                    '%'
+                ) USING utf8mb4) COLLATE utf8mb4_general_ci
+        ) link
+        JOIN wecom_ingestion_message msg
+          ON msg.id COLLATE utf8mb4_general_ci = link.messageId COLLATE utf8mb4_general_ci
+        JOIN wecom_ingestion_media media
+          ON (
+            media.message_id COLLATE utf8mb4_general_ci = msg.id COLLATE utf8mb4_general_ci
+            OR media.event_id COLLATE utf8mb4_general_ci = msg.id COLLATE utf8mb4_general_ci
+          )
+        WHERE LOWER(media.msg_media_type) IN ('image', 'video', 'voice', 'file', 'emotion', '1', '2')
+        ORDER BY link.followRecordId, msg.send_time, media.media_index
+    </select>
+
+    <select id="selectWecomVoipByFollowRecordIds" resultType="cn.cordys.crm.follow.dto.WecomVoipMapping">
+        SELECT
+            link.followRecordId AS followRecordId,
+            msg.send_time AS sendTime,
+            msg.content_text AS contentText,
+            msg.extra_json AS extraJson
+        FROM (
+            SELECT
+                CONVERT(rel.follow_record_id USING utf8mb4) COLLATE utf8mb4_general_ci AS followRecordId,
+                CONVERT(rel.message_id USING utf8mb4) COLLATE utf8mb4_general_ci AS messageId
+            FROM wecom_ingestion_message_follow_record rel
+            WHERE rel.follow_record_id IN
+            <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+            UNION
+            SELECT
+                CONVERT(msg.follow_record_id USING utf8mb4) COLLATE utf8mb4_general_ci AS followRecordId,
+                CONVERT(msg.id USING utf8mb4) COLLATE utf8mb4_general_ci AS messageId
+            FROM wecom_ingestion_message msg
+            WHERE msg.follow_record_id IN
+            <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+              AND msg.follow_record_id IS NOT NULL
+              AND TRIM(msg.follow_record_id) != ''
+            UNION
+            SELECT
+                CONVERT(fur.id USING utf8mb4) COLLATE utf8mb4_general_ci AS followRecordId,
+                CONVERT(msg.id USING utf8mb4) COLLATE utf8mb4_general_ci AS messageId
+            FROM follow_up_record fur
+            JOIN customer c
+              ON c.id COLLATE utf8mb4_general_ci = fur.customer_id COLLATE utf8mb4_general_ci
+             AND c.organization_id COLLATE utf8mb4_general_ci = fur.organization_id COLLATE utf8mb4_general_ci
+            LEFT JOIN sys_user su
+              ON su.id COLLATE utf8mb4_general_ci = fur.owner COLLATE utf8mb4_general_ci
+            JOIN wecom_ingestion_message msg
+              ON msg.organization_id COLLATE utf8mb4_general_ci = fur.organization_id COLLATE utf8mb4_general_ci
+            WHERE fur.id IN
+            <foreach collection="followRecordIds" item="id" open="(" close=")" separator=",">
+                #{id}
+            </foreach>
+              AND LOWER(COALESCE(msg.msg_type, '')) = 'voiptext'
+              AND fur.content IS NOT NULL
+              AND fur.content COLLATE utf8mb4_general_ci LIKE CONVERT(CONCAT(
+                    '%',
+                    '[',
+                    DATE_FORMAT(FROM_UNIXTIME(msg.send_time / 1000), '%Y-%m-%d %H:%i:%s'),
+                    '] ',
+                    CASE
+                        WHEN LOWER(COALESCE(msg.message_direction, '')) = 'inbound'
+                            THEN CONCAT(COALESCE(c.name, '客户'), '发来')
+                        ELSE CONCAT(COALESCE(su.name, '联系专员'), '发出')
+                    END,
+                    ' ',
+                    CASE LOWER(COALESCE(msg.msg_type, ''))
+                        WHEN 'text' THEN '文本'
+                        WHEN 'image' THEN '图片'
+                        WHEN 'voice' THEN '语音'
+                        WHEN 'video' THEN '视频'
+                        WHEN 'file' THEN '文件'
+                        WHEN 'emotion' THEN '表情'
+                        WHEN 'redpacket' THEN '红包'
+                        WHEN 'voiptext' THEN '语音通话'
+                        WHEN 'meeting_voice_call' THEN '语音通话'
+                        WHEN 'voice_call' THEN '语音通话'
+                        WHEN 'voip_doc_share' THEN '视频通话'
+                        WHEN 'meeting_video_call' THEN '视频通话'
+                        WHEN 'video_call' THEN '视频通话'
+                        ELSE COALESCE(msg.msg_type, '消息')
+                    END,
+                    CHAR(10),
+                    COALESCE(msg.content_text, ''),
+                    '%'
+                ) USING utf8mb4) COLLATE utf8mb4_general_ci
+        ) link
+        JOIN wecom_ingestion_message msg
+          ON msg.id COLLATE utf8mb4_general_ci = link.messageId COLLATE utf8mb4_general_ci
+        WHERE LOWER(msg.msg_type) = 'voiptext'
+        ORDER BY link.followRecordId, msg.send_time, msg.id
     </select>
 </mapper>

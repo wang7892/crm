@@ -84,6 +84,10 @@ public class PermissionConstants {
     public static final String CUSTOMER_MANAGEMENT_CONTACT_IMPORT = "CUSTOMER_MANAGEMENT_CONTACT:IMPORT";
     /*------ end: CUSTOMER_MANAGEMENT_CONTACT ------*/
 
+    /*------ start: CUSTOMER_FOLLOW_RECORD ------*/
+    public static final String CUSTOMER_FOLLOW_RECORD_READ = "CUSTOMER_FOLLOW_RECORD:READ";
+    /*------ end: CUSTOMER_FOLLOW_RECORD ------*/
+
     /*------ start: PRODUCT_MANAGEMENT ------*/
     public static final String PRODUCT_MANAGEMENT_READ = "PRODUCT_MANAGEMENT:READ";
     public static final String PRODUCT_MANAGEMENT_ADD = "PRODUCT_MANAGEMENT:ADD";
@@ -186,8 +190,7 @@ public class PermissionConstants {
     public static final String CONTRACT_UPDATE = "CONTRACT:UPDATE";
     public static final String CONTRACT_DELETE = "CONTRACT:DELETE";
     public static final String CONTRACT_EXPORT = "CONTRACT:EXPORT";
-    public static final String CONTRACT_APPROVAL = "CONTRACT:APPROVAL";
-    public static final String CONTRACT_STAGE = "CONTRACT:STAGE";
+    public static final String CONTRACT_IMPORT = "CONTRACT:IMPORT";
     public static final String CONTRACT_PAYMENT = "CONTRACT:PAYMENT";
 
     /*------ end: CONTRACT ------*/
@@ -243,4 +246,3 @@ public class PermissionConstants {
     public static final String ORDER_DOWNLOAD = "ORDER:DOWNLOAD";
     /*------ end: ORDER_ROLE ------*/
 }
-

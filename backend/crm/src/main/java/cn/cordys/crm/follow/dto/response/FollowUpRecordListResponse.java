@@ -1,6 +1,7 @@
 package cn.cordys.crm.follow.dto.response;
 
 import cn.cordys.common.domain.BaseModuleFieldValue;
+import cn.cordys.crm.follow.dto.WecomMediaMapping;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -95,4 +96,7 @@ public class FollowUpRecordListResponse {
 
     @Schema(description = "邮件附件下载链接列表")
     private List<String> attachmentUrls;
+
+    @Schema(description = "企业微信图片/视频等媒体预览列表")
+    private List<WecomMediaMapping> wecomMediaList;
 }

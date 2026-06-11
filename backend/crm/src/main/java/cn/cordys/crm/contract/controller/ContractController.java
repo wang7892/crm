@@ -23,17 +23,19 @@ import cn.cordys.crm.customer.dto.request.ContractOrderPageRequest;
 import cn.cordys.crm.order.dto.response.OrderListResponse;
 import cn.cordys.crm.order.service.OrderService;
 import cn.cordys.crm.system.constants.ExportConstants;
-import cn.cordys.crm.system.dto.response.BatchAffectSkipResponse;
+import cn.cordys.crm.system.dto.response.ImportResponse;
 import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
 import cn.cordys.crm.system.service.ModuleFormCacheService;
 import cn.cordys.security.SessionUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletResponse;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -83,14 +85,6 @@ public class ContractController {
         return contractService.update(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
     }
 
-    @PostMapping("/stage/update")
-    @RequiresPermissions(PermissionConstants.CONTRACT_STAGE)
-    @Operation(summary = "更新合同阶段")
-    public void updateStage(@Validated @RequestBody ContractStageRequest request) {
-        contractService.updateStage(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
-    }
-
-
     @GetMapping("/delete/{id}")
     @RequiresPermissions(PermissionConstants.CONTRACT_DELETE)
     @Operation(summary = "删除")
@@ -128,27 +122,6 @@ public class ContractController {
         DeptDataPermissionDTO deptDataPermission = dataScopeService.getDeptDataPermission(SessionUtils.getUserId(),
                 OrganizationContext.getOrganizationId(), request.getViewId(), PermissionConstants.CONTRACT_READ);
         return contractService.list(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), deptDataPermission, false);
-    }
-
-
-    @PostMapping("/approval")
-    @RequiresPermissions(PermissionConstants.CONTRACT_APPROVAL)
-    @Operation(summary = "审核通过/不通过")
-    public void approval(@Validated @RequestBody ContractApprovalRequest request) {
-        contractService.approvalContract(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
-    }
-
-    @GetMapping("/revoke/{id}")
-    @Operation(summary = "撤销审批")
-    public String revoke(@PathVariable("id") String id) {
-        return contractService.revoke(id, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
-    }
-
-    @PostMapping("/batch/approval")
-    @RequiresPermissions(PermissionConstants.CONTRACT_APPROVAL)
-    @Operation(summary = "批量审核通过/不通过")
-    public BatchAffectSkipResponse batchApproval(@Validated @RequestBody ContractApprovalBatchRequest request) {
-        return contractService.batchApprovalContract(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
     }
 
 
@@ -223,6 +196,27 @@ public class ContractController {
                 .formKey(FormKey.CONTRACT.getKey())
                 .build();
         return contractExportService.exportAllWithMergeStrategy(exportDTO);
+    }
+
+    @GetMapping("/template/download")
+    @RequiresPermissions(PermissionConstants.CONTRACT_IMPORT)
+    @Operation(summary = "下载导入模板")
+    public void downloadImportTpl(HttpServletResponse response) {
+        contractService.downloadImportTpl(response, OrganizationContext.getOrganizationId());
+    }
+
+    @PostMapping("/import/pre-check")
+    @Operation(summary = "导入检查")
+    @RequiresPermissions(PermissionConstants.CONTRACT_IMPORT)
+    public ImportResponse preCheck(@RequestPart(value = "file") MultipartFile file) {
+        return contractService.importPreCheck(file, OrganizationContext.getOrganizationId());
+    }
+
+    @PostMapping("/import")
+    @Operation(summary = "导入")
+    @RequiresPermissions(PermissionConstants.CONTRACT_IMPORT)
+    public ImportResponse realImport(@RequestPart(value = "file") MultipartFile file) {
+        return contractService.realImport(file, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
     }
 
     @PostMapping("/invoice/page")

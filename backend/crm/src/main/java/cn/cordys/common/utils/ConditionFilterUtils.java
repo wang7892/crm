@@ -252,10 +252,12 @@ public class ConditionFilterUtils {
      *
      * @param validConditions
      */
+    @SuppressWarnings("unchecked")
     private static void replaceCurrentUser(List<FilterCondition> validConditions) {
         for (FilterCondition validCondition : validConditions) {
             Object value = validCondition.getCombineValue();
-            if (value instanceof List arrayValues) {
+            if (value instanceof List<?> values) {
+                List<Object> arrayValues = (List<Object>) values;
                 for (int i = 0; i < arrayValues.size(); i++) {
                     Object arrayValue = arrayValues.get(i);
                     if (arrayValue != null && Strings.CS.equals(arrayValue.toString(), InternalUserView.CURRENT_USER)) {

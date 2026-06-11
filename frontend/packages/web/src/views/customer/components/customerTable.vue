@@ -134,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-  import { useRoute } from 'vue-router';
+  import { useRoute, useRouter } from 'vue-router';
   import { DataTableRowKey, NButton, useMessage } from 'naive-ui';
 
   import { CustomerSearchTypeEnum } from '@lib/shared/enums/customerEnum';
@@ -183,7 +183,9 @@
   const { openModal } = useModal();
   const { t } = useI18n();
   const route = useRoute();
+  const router = useRouter();
   const { currentLocale } = useLocale(Message.loading);
+  const FOLLOW_SPECIALIST_DETAIL_SOURCE = 'followSpecialist';
 
   const props = defineProps<{
     formKey: FormDesignKeyEnum.CUSTOMER | FormDesignKeyEnum.SEARCH_ADVANCED_CUSTOMER;
@@ -492,6 +494,30 @@
   const handleAdvanceFilter = ref<null | ((...args: any[]) => void)>(null);
   const handleSearchData = ref<null | ((...args: any[]) => void)>(null);
 
+  function getQueryText(value: unknown) {
+    if (Array.isArray(value)) {
+      return value[0] ? String(value[0]) : '';
+    }
+    return value ? String(value) : '';
+  }
+
+  function backToFollowSpecialistCustomer() {
+    const owner = getQueryText(route.query.owner);
+    if (!owner) return;
+    const query: Record<string, string> = {
+      owner,
+      ownerName: getQueryText(route.query.ownerName),
+    };
+    const customerSource = getQueryText(route.query.customerSource);
+    if (customerSource) {
+      query.customerSource = customerSource;
+    }
+    router.replace({
+      name: CustomerRouteEnum.CUSTOMER_FOLLOW_RECORD_CUSTOMER,
+      query,
+    });
+  }
+
   defineExpose({
     handleAdvanceFilter,
     handleSearchData,
@@ -762,6 +788,15 @@
     (val) => {
       if (val) {
         removeItemFromList(val);
+      }
+    }
+  );
+
+  watch(
+    () => showOverviewDrawer.value,
+    (visible, oldVisible) => {
+      if (!visible && oldVisible && getQueryText(route.query.source) === FOLLOW_SPECIALIST_DETAIL_SOURCE) {
+        backToFollowSpecialistCustomer();
       }
     }
   );

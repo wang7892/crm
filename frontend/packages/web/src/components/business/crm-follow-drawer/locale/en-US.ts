@@ -2,6 +2,7 @@ export default {
   'eventDrawer.record.all': 'All Records',
   'eventDrawer.record.my': 'My Records',
   'eventDrawer.record.depart': 'Department Records',
+  'eventDrawer.record.specialist': 'Contact Specialist',
   'eventDrawer.record.converted': 'Converted to Follow-up Record',
   'eventDrawer.record.content': 'Follow-up Content',
   'eventDrawer.plan.all': 'All Plans',

@@ -5,7 +5,6 @@ import cn.cordys.crm.contract.domain.Contract;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 @Data
@@ -34,9 +33,6 @@ public class ContractListResponse extends Contract {
 
     @Schema(description = "部门名称")
     private String departmentName;
-
-	@Schema(description = "已回款金额")
-	private BigDecimal alreadyPayAmount;
 
     @Schema(description = "自定义字段")
     private List<BaseModuleFieldValue> moduleFields;

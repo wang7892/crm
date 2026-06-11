@@ -65,7 +65,7 @@ public class MailMonitorService {
     }
 
     private void handleIncomingEvent(MailEvent event) {
-        if (!event.getFromAddress().equalsIgnoreCase(sourceMailbox)) {
+        if (!event.getFromAddress().equalsIgnoreCase(event.getSourceMailbox())) {
             return;
         }
         String matchedTarget = findMatchedMailbox(event.getToAddresses());
@@ -100,7 +100,7 @@ public class MailMonitorService {
             crmAttachmentRepository.saveForEvent(
                     response.getEventId(),
                     organizationId,
-                    sourceMailbox,
+                    event.getSourceMailbox(),
                     event.getAttachments(),
                     attachmentPublicBaseUrl,
                     attachmentDownloadPath,
@@ -127,7 +127,7 @@ public class MailMonitorService {
         List<WebhookAttachment> attachments = buildAttachments(event);
         return new WebhookPushRequest(
                 organizationId,
-                sourceMailbox,
+                event.getSourceMailbox(),
                 event.getMessageId(),
                 event.getThreadId(),
                 event.getFromAddress(),

@@ -155,7 +155,7 @@ export const pathMap: PathMapItem[] = [
   },
   {
     key: 'FOLLOW_UP_RECORD',
-    route: AppRouteEnum.OPPORTUNITY_OPT, // TODO lmy 跟进记录
+    route: AppRouteEnum.CUSTOMER_FOLLOW_RECORD_INDEX,
     locale: 'module.customer.followRecord',
   },
   {

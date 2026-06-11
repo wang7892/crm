@@ -120,12 +120,6 @@ public class NotificationConstants {
         @Schema(description = "message.business_quotation_expiring")
         String BUSINESS_QUOTATION_EXPIRING = "BUSINESS_QUOTATION_EXPIRING";
 
-        @Schema(description = "message.contract_archived")
-        String CONTRACT_ARCHIVED = "CONTRACT_ARCHIVED";
-
-        @Schema(description = "message.contract_void")
-        String CONTRACT_VOID = "CONTRACT_VOID";
-
         @Schema(description = "message.contract_expired")
         String CONTRACT_EXPIRED = "CONTRACT_EXPIRED";
 
@@ -259,11 +253,7 @@ public class NotificationConstants {
         String BUSINESS_QUOTATION_EXPIRED_TEXT = "BUSINESS_QUOTATION_EXPIRED_TEXT";
 
         //您负责的${customerName}合同已被归档；
-        @Schema(description = "message.contract_archived_text")
-        String CONTRACT_ARCHIVED_TEXT = "CONTRACT_ARCHIVED_TEXT";
         //您负责的${customerName}合同已被作废；
-        @Schema(description = "message.contract_void_text")
-        String CONTRACT_VOID_TEXT = "CONTRACT_VOID_TEXT";
         //您负责的${customerName}合同还有${expireDays}天到期；
         @Schema(description = "message.contract_expiring_text")
         String CONTRACT_EXPIRING_TEXT = "CONTRACT_EXPIRING_TEXT";

@@ -1,6 +1,22 @@
 <template>
   <div class="w-full">
+    <n-input-group v-if="props.manualInput && !props.multiple">
+      <n-input
+        :value="manualInputValue"
+        :placeholder="t('common.pleaseInput')"
+        :disabled="props.disabled"
+        clearable
+        :status="props.status"
+        @update:value="handleManualInputUpdate"
+      />
+      <n-button :disabled="props.disabled" @click="handleShowSelectDrawer">
+        <template #icon>
+          <CrmIcon type="iconicon_member_single_choice" />
+        </template>
+      </n-button>
+    </n-input-group>
     <n-select
+      v-else
       v-model:value="modelValue"
       filterable
       multiple
@@ -35,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-  import { NSelect, SelectOption } from 'naive-ui';
+  import { NButton, NInput, NInputGroup, NSelect, SelectOption } from 'naive-ui';
 
   import { MemberApiTypeEnum } from '@lib/shared/enums/moduleEnum';
   import { DeptNodeTypeEnum } from '@lib/shared/enums/systemEnum';
@@ -62,6 +78,7 @@
     fetchMemberParams?: Record<string, any>; // 成员入参
     baseParams?: Record<string, any>; // 基础公共入参
     status?: 'error' | 'success' | 'warning';
+    manualInput?: boolean;
   };
   const props = withDefaults(defineProps<UserTagSelectorProps>(), {
     multiple: true,
@@ -81,6 +98,11 @@
 
   const showSelectDrawer = ref(false);
   const crmSelectUserDrawerRef = ref<InstanceType<typeof CrmSelectUserDrawer>>();
+  const manualInputValue = computed(() => {
+    const selectedId = modelValue.value?.[0];
+    return selectedList.value?.find((item) => item.id === selectedId)?.name || selectedId || '';
+  });
+
   function handleShowSelectDrawer() {
     if (props.disabled) return;
     showSelectDrawer.value = true;
@@ -93,6 +115,20 @@
       selectedList.value = params;
     }
     showSelectDrawer.value = false;
+    emit('confirm');
+  }
+
+  function handleManualInputUpdate(inputValue: string) {
+    const nextValue = inputValue || '';
+    selectedList.value = nextValue
+      ? [
+          {
+            id: nextValue,
+            name: nextValue,
+          },
+        ]
+      : [];
+    modelValue.value = nextValue ? [nextValue] : [];
     emit('confirm');
   }
   const renderTag = ({ option, handleClose }: { option: SelectOption; handleClose: () => void }) => {

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.Strings;
 import org.apache.shiro.SecurityUtils;
+import org.apache.shiro.UnavailableSecurityManagerException;
 import org.apache.shiro.session.Session;
 import org.apache.shiro.subject.Subject;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -44,6 +45,8 @@ public class SessionUtils {
             Subject subject = SecurityUtils.getSubject();
             Session session = subject.getSession();
             return (SessionUser) session.getAttribute(ATTR_USER);
+        } catch (UnavailableSecurityManagerException e) {
+            return null;
         } catch (Exception e) {
             log.warn("后台获取在线用户失败: {}", e.getMessage());
             return null;

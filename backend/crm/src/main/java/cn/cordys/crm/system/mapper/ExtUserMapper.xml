@@ -24,6 +24,20 @@
         </foreach>
     </select>
 
+    <select id="selectUserOptionByNames" resultType="cn.cordys.common.dto.OptionDTO">
+        SELECT su.id, su.name
+        FROM sys_user su
+        JOIN sys_organization_user sou
+          ON sou.user_id = su.id
+         AND sou.organization_id = #{orgId}
+        WHERE su.name IN
+        <foreach collection="names" item="name" index="index"
+                 open="(" close=")" separator=",">
+            #{name}
+        </foreach>
+        ORDER BY sou.enable DESC, su.id ASC
+    </select>
+
     <select id="getUserRole" resultType="cn.cordys.crm.system.dto.convert.UserRoleConvert">
         SELECT sr.id, sr.name, sur.user_id
         FROM sys_role sr
@@ -46,6 +60,9 @@
                su.gender,
                su.phone,
                su.email,
+               su.email_auth_code emailAuthCode,
+               su.wecom_id wecomId,
+               su.roomid,
                sou.supervisor_id,
                sou.employee_id,
                sou.position,
@@ -70,6 +87,9 @@
         su.gender,
         su.phone,
         su.email,
+        su.email_auth_code emailAuthCode,
+        su.wecom_id wecomId,
+        su.roomid,
         sou.supervisor_id,
         sou.employee_id,
         sou.position,
@@ -283,5 +303,23 @@
         update sys_user
         set email = #{user.id}
         where id = #{user.userId}
+    </update>
+
+    <update id="updateEmailAuthCodeById">
+        update sys_user
+        set email_auth_code = #{emailAuthCode}
+        where id = #{id}
+    </update>
+
+    <update id="updateWecomIdById">
+        update sys_user
+        set wecom_id = #{wecomId}
+        where id = #{id}
+    </update>
+
+    <update id="updateRoomidById">
+        update sys_user
+        set roomid = #{roomid}
+        where id = #{id}
     </update>
 </mapper>

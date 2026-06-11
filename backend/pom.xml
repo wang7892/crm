@@ -8,6 +8,7 @@
         <groupId>cn.cordys</groupId>
         <artifactId>cordys-crm</artifactId>
         <version>${revision}</version>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
     <packaging>pom</packaging>

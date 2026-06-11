@@ -25,6 +25,42 @@ public class CustomerGetResponse {
     @Schema(description = "负责人")
     private String owner;
 
+    @Schema(description = "Customer WeCom external ID")
+    private String wecomExternalId;
+
+    @Schema(description = "企业微信群聊 roomid，多个 roomid 可用英文逗号分隔")
+    private String roomid;
+
+    @Schema(description = "Email")
+    private String email;
+
+    @Schema(description = "Full name")
+    private String fullName;
+
+    @Schema(description = "Credit limit")
+    private String creditLimit;
+
+    @Schema(description = "Customs code")
+    private String customsCode;
+
+    @Schema(description = "Region")
+    private String region;
+
+    @Schema(description = "Phone")
+    private String phone;
+
+    @Schema(description = "Address")
+    private String address;
+
+    @Schema(description = "Remark")
+    private String remark;
+
+    @Schema(description = "Customer available")
+    private String customerAvailable;
+
+    @Schema(description = "Customer source")
+    private String customerSource;
+
     @Schema(description = "负责人名称")
     private String ownerName;
 

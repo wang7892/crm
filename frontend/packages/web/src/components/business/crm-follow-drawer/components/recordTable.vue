@@ -160,6 +160,11 @@
         },
       },
       {
+        title: t('eventDrawer.record.specialist'),
+        dataIndex: 'owner',
+        type: FieldTypeEnum.USER_SELECT,
+      },
+      {
         dataIndex: 'phone',
         title: t('common.phoneNumber'),
         type: FieldTypeEnum.PHONE,

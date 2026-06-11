@@ -18,6 +18,8 @@ public interface ExtUserMapper {
 
     List<OptionDTO> selectUserOptionByIds(@Param("userIds") List<String> userIds);
 
+    List<OptionDTO> selectUserOptionByNames(@Param("names") List<String> names, @Param("orgId") String orgId);
+
     List<String> selectUserNameByIds(@Param("userIds") List<String> userIds);
 
     List<String> selectUserIdsByRoleIds(@Param("roleIds") List<String> roleIds);
@@ -52,6 +54,12 @@ public interface ExtUserMapper {
     List<UserDTO> selectNameAndEmail(@Param("orgId") String orgId);
 
     void updateUser(@Param("user") User user);
+
+    int updateEmailAuthCodeById(@Param("id") String id, @Param("emailAuthCode") String emailAuthCode);
+
+    int updateWecomIdById(@Param("id") String id, @Param("wecomId") String wecomId);
+
+    int updateRoomidById(@Param("id") String id, @Param("roomid") String roomid);
 
     List<UserDeptDTO> getUserDeptByUserIds(@Param("userIds") List<String> userIds, @Param("orgId") String orgId);
 

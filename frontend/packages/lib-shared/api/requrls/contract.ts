@@ -8,11 +8,10 @@ export const GetContractDetailSnapshotUrl = '/contract/get/snapshot'; // 获取�
 export const GetContractFormConfigUrl = '/contract/module/form'; // 合同表单配置
 export const GetContractFormSnapshotConfigUrl = '/contract/module/form/snapshot'; // 合同表单配置
 export const GetContractTabUrl = '/contract/tab'; // 合同tab显隐
-export const ChangeContractStatusUrl = '/contract/stage/update';
-export const BatchApproveContractUrl = '/contract/batch/approval';
-export const ApproveContractUrl = '/contract/approval';
-export const RevokeContractUrl = '/contract/revoke';
 export const ContractStatisticUrl = '/contract/statistic';
+export const PreCheckContractImportUrl = '/contract/import/pre-check';
+export const DownloadContractTemplateUrl = '/contract/template/download';
+export const ImportContractUrl = '/contract/import';
 
 // 合同导出
 export const ExportContractAllUrl = '/contract/export-all'; // 合同导出全量

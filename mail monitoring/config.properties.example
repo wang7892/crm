@@ -1,15 +1,22 @@
 ORGANIZATION_ID=org001
-SOURCE_MAILBOX=19714514739@163.com
-TARGET_MAILBOXES=3485069195@qq.com,customer2@xx.com,customer3@yy.com
 POLL_SECONDS=10
 
 USE_IMAP=true
 IMAP_HOST=imap.163.com
 IMAP_PORT=993
-IMAP_USER=19714514739@163.com
-IMAP_AUTH_CODE=replace-with-your-imap-auth-code
 IMAP_FOLDER=已发送邮件
 ATTACHMENT_SAVE_DIR=./attachments
+
+# Dynamic mailbox loading from CRM database (customer targets use customer.email)
+MAILBOX_DYNAMIC_LOAD_ENABLED=true
+MAILBOX_REFRESH_SECONDS=60
+# Dynamic mailbox query uses CRM_ATTACHMENT_DB_* connection
+
+# Optional: static mailbox fallback when MAILBOX_DYNAMIC_LOAD_ENABLED=false
+SOURCE_MAILBOX=19714514739@163.com
+TARGET_MAILBOXES=3485069195@qq.com,customer2@xx.com,customer3@yy.com
+IMAP_USER=19714514739@163.com
+IMAP_AUTH_CODE=replace-with-your-imap-auth-code
 
 DB_ENABLED=true
 DB_JDBC_URL=jdbc:mysql://127.0.0.1:3306/cordys_crm?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8

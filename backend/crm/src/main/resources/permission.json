@@ -219,6 +219,15 @@
             "id": "CUSTOMER_MANAGEMENT_CONTACT:EXPORT"
           }
         ]
+      },
+      {
+        "id": "CUSTOMER_FOLLOW_RECORD",
+        "name": "permission.customer.follow_record.name",
+        "permissions": [
+          {
+            "id": "CUSTOMER_FOLLOW_RECORD:READ"
+          }
+        ]
       }
     ]
   },
@@ -535,11 +544,7 @@
             "license": false
           },
           {
-            "id": "CONTRACT:STAGE",
-            "license": false
-          },
-          {
-            "id": "CONTRACT:APPROVAL",
+            "id": "CONTRACT:IMPORT",
             "license": false
           },
           {

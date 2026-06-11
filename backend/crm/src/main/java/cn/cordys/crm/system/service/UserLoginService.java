@@ -51,6 +51,8 @@ import java.util.stream.Collectors;
 @Service
 @Transactional(rollbackFor = Exception.class)
 public class UserLoginService {
+    private static final String DEFAULT_PASSWORD_SEED = "CordysCRM";
+
     @Resource
     private BaseMapper<User> userMapper;
 
@@ -165,9 +167,9 @@ public class UserLoginService {
      * @param userDTO
      */
     private void checkDefaultPwd(UserDTO userDTO) {
-        String defaultPwd = "";
+        String defaultPwd = CodingUtils.md5(DEFAULT_PASSWORD_SEED);
         if (Strings.CI.equals(userDTO.getId(), InternalUser.ADMIN.getValue())) {
-            defaultPwd = CodingUtils.md5("CordysCRM");
+            defaultPwd = CodingUtils.md5(DEFAULT_PASSWORD_SEED);
         } else {
             if (StringUtils.isNotBlank(userDTO.getPhone())) {
                 defaultPwd = CodingUtils.md5(userDTO.getPhone().substring(userDTO.getPhone().length() - 6));

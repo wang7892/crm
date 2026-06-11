@@ -144,7 +144,11 @@ public class RestControllerExceptionHandler {
      * @return ResponseEntity 返回响应实体，包含错误信息
      */
     @ExceptionHandler({Exception.class})
-    public ResponseEntity<ResultHolder> handleException(Exception e) {
+    public ResponseEntity<?> handleException(HttpServletRequest request, HttpServletResponse response, Exception e) {
+        if (isEventStreamRequest(request, response)) {
+            log.debug("SSE request ended with exception, uri={}, err={}", requestUri(request), e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
         return ResponseEntity.internalServerError()
                 .body(ResultHolder.error(CrmHttpResultCode.FAILED.getCode(),
                         e.getMessage(), getStackTraceAsString(e)));
@@ -174,8 +178,12 @@ public class RestControllerExceptionHandler {
      * @return ResponseEntity 返回响应实体，包含错误信息
      */
     @ExceptionHandler({EofException.class})
-    public ResponseEntity<Object> handleEofException(HttpServletRequest request, Exception e) {
+    public ResponseEntity<?> handleEofException(HttpServletRequest request, Exception e) {
         String requestURI = request.getRequestURI();
+        if (isEventStreamRequest(request, null)) {
+            log.debug("SSE/client stream closed, uri={}, err={}", requestURI, e.getMessage());
+            return ResponseEntity.noContent().build();
+        }
         if (requestURI != null && (requestURI.startsWith("/assets")
                 || requestURI.startsWith("/fonts")
                 || requestURI.startsWith("/images")
@@ -218,7 +226,23 @@ public class RestControllerExceptionHandler {
     }
 
     @ExceptionHandler(AsyncRequestNotUsableException.class)
-    public ResultHolder asyncRequestNotUsableExceptionHandler(HttpServletRequest request, HttpServletResponse response, Exception exception) {
-        return null;
+    public ResponseEntity<Void> asyncRequestNotUsableExceptionHandler(HttpServletRequest request, HttpServletResponse response, Exception exception) {
+        log.debug("async request no longer usable, uri={}, err={}", requestUri(request), exception.getMessage());
+        return ResponseEntity.noContent().build();
+    }
+
+    private boolean isEventStreamRequest(HttpServletRequest request, HttpServletResponse response) {
+        String requestURI = requestUri(request);
+        if (StringUtils.startsWith(requestURI, "/sse/")) {
+            return true;
+        }
+        String accept = request == null ? null : request.getHeader("Accept");
+        String responseContentType = response == null ? null : response.getContentType();
+        return StringUtils.containsIgnoreCase(accept, "text/event-stream")
+                || StringUtils.containsIgnoreCase(responseContentType, "text/event-stream");
+    }
+
+    private String requestUri(HttpServletRequest request) {
+        return request == null ? "" : StringUtils.defaultString(request.getRequestURI());
     }
 }

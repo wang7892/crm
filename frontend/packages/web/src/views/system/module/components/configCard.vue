@@ -152,7 +152,6 @@
   const renderLeadReasonConfig = ref<VNode<RendererElement, { [key: string]: any }> | null>(null);
   const renderOptReasonConfig = ref<VNode<RendererElement, { [key: string]: any }> | null>(null);
   const renderQuotationApprovalConfig = ref<VNode<RendererElement, { [key: string]: any }> | null>(null);
-  const renderContractApprovalConfig = ref<VNode<RendererElement, { [key: string]: any }> | null>(null);
   const renderInvoiceApprovalConfig = ref<VNode<RendererElement, { [key: string]: any }> | null>(null);
   const renderValidateConfig = ref<VNode<RendererElement, { [key: string]: any }> | null>(null);
   // 是否已配置原因
@@ -170,7 +169,6 @@
   const showOptReasonDrawer = ref(false);
 
   // 全局审批开关配置
-  const enableConstructApproval = ref(false);
   const enableInvoiceApproval = ref(false);
   const enableQuotationApproval = ref(false);
 
@@ -316,11 +314,6 @@
     {
       label: t('module.contract.invoiceFormSetting'),
       key: 'invoiceFormSetting',
-    },
-    {
-      label: t('module.approvalSwitch'),
-      key: 'approval',
-      render: renderContractApprovalConfig.value,
     },
     {
       label: t('module.approvalSwitch'),
@@ -713,11 +706,6 @@
       name: () => t('menu.quotation'),
       enable: enableQuotationApproval,
     },
-    [FormDesignKeyEnum.CONTRACT]: {
-      renderRef: renderContractApprovalConfig,
-      name: () => t('module.contract'),
-      enable: enableConstructApproval,
-    },
     [FormDesignKeyEnum.INVOICE]: {
       renderRef: renderInvoiceApprovalConfig,
       name: () => t('module.invoiceApproval'),
@@ -727,7 +715,6 @@
 
   const apiParamsKey: Record<approvalConfigType, string> = {
     [FormDesignKeyEnum.OPPORTUNITY_QUOTATION]: ReasonTypeEnum.QUOTATION_APPROVAL,
-    [FormDesignKeyEnum.CONTRACT]: ReasonTypeEnum.CONTRACT_APPROVAL,
     [FormDesignKeyEnum.INVOICE]: ReasonTypeEnum.INVOICE_APPROVAL,
   };
 
@@ -809,7 +796,6 @@
   onMounted(() => {
     initRenderReasonSwitch();
     initRenderApprovalConfig(FormDesignKeyEnum.OPPORTUNITY_QUOTATION);
-    initRenderApprovalConfig(FormDesignKeyEnum.CONTRACT);
     initRenderApprovalConfig(FormDesignKeyEnum.INVOICE);
     initRenderBusinessNameConfig();
     if (route.query.openCluePoolDrawer === 'Y') {

@@ -1,21 +1,23 @@
-// 跟进记录
-export const GetFollowRecordPageUrl = '/follow/record/page'; // 跟进记录列表
-export const GetFollowRecordTabUrl = '/follow/record/tab'; // 数据权限TAB
-export const DeleteFollowRecordUrl = '/follow/record/delete'; // 删除跟进记录
-export const GetFollowRecordUrl = '/follow/record/get'; // 跟进记录详情
+// Follow record
+export const GetFollowRecordPageUrl = '/follow/record/page';
+export const GetFollowSpecialistPageUrl = '/follow/record/specialist/page';
+export const GetFollowSpecialistCustomerPageUrl = '/follow/record/specialist/customer/page';
+export const GetFollowRecordTabUrl = '/follow/record/tab';
+export const DeleteFollowRecordUrl = '/follow/record/delete';
+export const GetFollowRecordUrl = '/follow/record/get';
 export const UpdateFollowRecordUrl = '/follow/record/update';
 export const AddFollowRecordUrl = '/follow/record/add';
 
-// 跟进计划
-export const UpdateFollowPlanStatusUrl = '/follow/plan/status/update'; // 更新跟进计划状态
-export const GetFollowPlanPageUrl = '/follow/plan/page'; // 跟进计划列表
-export const GetFollowPlanTabUrl = '/follow/plan/tab'; // 数据权限TAB
-export const DeleteFollowPlanUrl = '/follow/plan/delete'; // 删除跟进计划
-export const GetFollowPlanUrl = '/follow/plan/get'; // 跟进计划详情
+// Follow plan
+export const UpdateFollowPlanStatusUrl = '/follow/plan/status/update';
+export const GetFollowPlanPageUrl = '/follow/plan/page';
+export const GetFollowPlanTabUrl = '/follow/plan/tab';
+export const DeleteFollowPlanUrl = '/follow/plan/delete';
+export const GetFollowPlanUrl = '/follow/plan/get';
 export const UpdateFollowPlanUrl = '/follow/plan/update';
 export const AddFollowPlanUrl = '/follow/plan/add';
 
-// 视图
+// Views
 export const AddFollowRecordViewUrl = '/follow/record/view/add';
 export const UpdateFollowRecordViewUrl = '/follow/record/view/update';
 export const GetFollowRecordViewListUrl = '/follow/record/view/list';

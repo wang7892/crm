@@ -158,9 +158,9 @@ public class CrmAuthHelper {
 
 ## 8. 监控系统最小实现流程
 
-当检测到 `邮箱A -> 邮箱B` 邮件时：
+当检测到 `联系专员邮箱A -> 客户邮箱B` 邮件时：
 
-1. 检查幂等（`organizationId + mailbox + messageId`）
+1. 检查幂等（`organizationId + sourceMailbox + messageId`）
 2. 组装跟进请求体
 3. 生成签名并调用 `POST /follow/record/add`
 4. 成功后记录 `followRecordId`

@@ -171,6 +171,8 @@
     advancedOriginalForm?: FilterForm;
     poolId?: string | number;
     routeName?: string;
+    defaultActiveTab?: string;
+    ignoreCachedActiveTabs?: string[];
   }>();
 
   const emit = defineEmits<{
@@ -205,6 +207,10 @@
 
   const { tabList, initTab } = useHiddenTab(props.type);
 
+  function getAvailableViewId(id?: string) {
+    return id && sortData.value.some((item) => item.id === id) ? id : '';
+  }
+
   onMounted(async () => {
     await initTab();
     await viewStore.loadInternalViews(props.type, tabList.value as TabPaneProps[]);
@@ -212,10 +218,15 @@
     nextTick(async () => {
       // 如果上一次的值存在则取上一次，不存在就取固定视图的第一个
       const lastTab = await viewStore.getActiveView(props.type);
-      if (lastTab && sortData.value.find((item) => item.id === lastTab)) {
+      if (
+        lastTab &&
+        !props.ignoreCachedActiveTabs?.includes(lastTab) &&
+        sortData.value.find((item) => item.id === lastTab)
+      ) {
         activeTab.value = lastTab;
       } else {
-        activeTab.value = tags.value[0].id;
+        activeTab.value =
+          getAvailableViewId(props.defaultActiveTab) || tags.value[0]?.id || sortData.value[0]?.id || '';
       }
     });
   });
@@ -223,7 +234,9 @@
   watch(
     () => activeTab.value,
     async (val) => {
-      viewStore.setActiveView(props.type, val);
+      if (val) {
+        viewStore.setActiveView(props.type, val);
+      }
     }
   );
 

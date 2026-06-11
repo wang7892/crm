@@ -16,6 +16,7 @@ import cn.cordys.crm.system.service.OrganizationConfigService;
 import cn.cordys.crm.system.service.OrganizationUserService;
 import cn.cordys.crm.system.service.RoleService;
 import cn.cordys.security.SessionUtils;
+import lombok.extern.slf4j.Slf4j;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import io.swagger.v3.oas.annotations.Operation;
@@ -33,6 +34,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/user")
 @Tag(name = "用户(员工)")
+@Slf4j
 public class OrganizationUserController {
 
     @Resource
@@ -56,6 +58,10 @@ public class OrganizationUserController {
     @RequiresPermissions(PermissionConstants.SYS_ORGANIZATION_ADD)
     @Operation(summary = "用户(员工)-添加员工")
     public void addUser(@Validated @RequestBody UserAddRequest request) {
+        String authCode = request.getEmailAuthCode();
+        log.warn("[ORG_USER] controller addUser emailAuthCodeLen={}, email={}",
+                authCode == null ? 0 : authCode.length(),
+                request.getEmail());
         organizationUserService.addUser(request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
     }
 
@@ -71,6 +77,10 @@ public class OrganizationUserController {
     @RequiresPermissions(PermissionConstants.SYS_ORGANIZATION_UPDATE)
     @Operation(summary = "用户(员工)-更新")
     public void updateUser(@Validated @RequestBody UserUpdateRequest request) {
+        String authCode = request.getEmailAuthCode();
+        log.warn("[ORG_USER] controller updateUser emailAuthCodeLen={}, email={}",
+                authCode == null ? 0 : authCode.length(),
+                request.getEmail());
         organizationUserService.updateUser(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
     }
 
