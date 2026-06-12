@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -97,7 +98,7 @@ public class AttachmentHttpServer {
                 headers.set("Cache-Control", "private, max-age=60");
 
                 String disposition = shouldInline(contentType, fileName) ? "inline" : "attachment";
-                headers.set("Content-Disposition", disposition + "; filename=\"" + escapeHeaderFileName(fileName) + "\"");
+                headers.set("Content-Disposition", contentDisposition(disposition, fileName));
 
                 long length = Files.size(file);
                 exchange.sendResponseHeaders(200, length);
@@ -106,6 +107,7 @@ public class AttachmentHttpServer {
                     in.transferTo(out);
                 }
             } catch (Exception ex) {
+                ex.printStackTrace(System.err);
                 try {
                     writeText(exchange, 500, "Internal Server Error");
                 } catch (Exception ignored) {
@@ -145,11 +147,28 @@ public class AttachmentHttpServer {
             return true;
         }
 
-        private String escapeHeaderFileName(String fileName) {
-            if (fileName == null) {
+        private String contentDisposition(String disposition, String fileName) {
+            String fallback = asciiFileNameFallback(fileName);
+            String encoded = URLEncoder.encode(fileName == null ? fallback : fileName, StandardCharsets.UTF_8)
+                    .replace("+", "%20");
+            return disposition + "; filename=\"" + fallback + "\"; filename*=UTF-8''" + encoded;
+        }
+
+        private String asciiFileNameFallback(String fileName) {
+            if (fileName == null || fileName.isBlank()) {
                 return "file";
             }
-            return fileName.replace("\\", "_").replace("\"", "_");
+            StringBuilder builder = new StringBuilder(fileName.length());
+            for (int i = 0; i < fileName.length(); i++) {
+                char ch = fileName.charAt(i);
+                if (ch >= 0x20 && ch <= 0x7E && ch != '"' && ch != '\\' && ch != ';') {
+                    builder.append(ch);
+                } else {
+                    builder.append('_');
+                }
+            }
+            String fallback = builder.toString().trim();
+            return fallback.isBlank() ? "file" : fallback;
         }
 
         private void writeText(HttpExchange exchange, int status, String text) throws Exception {
