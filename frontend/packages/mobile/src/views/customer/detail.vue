@@ -10,13 +10,6 @@
         <div v-if="tab.name === 'info'" class="relative h-full overflow-auto bg-[var(--text-n9)] pt-[16px]">
           <CrmDescription :description="descriptions" />
         </div>
-        <CrmContactList
-          v-else-if="tab.name === 'contact'"
-          :source-id="route.query.id?.toString()"
-          :customer-name="route.query.name?.toString()"
-          :form-key="FormDesignKeyEnum.CUSTOMER_CONTACT"
-          :readonly="!hasAnyPermission(['CUSTOMER_MANAGEMENT:UPDATE']) || collaborationType === 'READ_ONLY'"
-        />
         <CrmFollowRecordList
           v-else-if="tab.name === 'record'"
           ref="recordListRef"
@@ -70,7 +63,6 @@
   import CrmDescription from '@/components/pure/crm-description/index.vue';
   import CrmPageWrapper from '@/components/pure/crm-page-wrapper/index.vue';
   import CrmActionButtons, { CrmActionButtonsItem } from '@/components/business/crm-action-buttons/index.vue';
-  import CrmContactList from '@/components/business/crm-contact-list/index.vue';
   import CrmFollowPlanList from '@/components/business/crm-follow-list/followPlan.vue';
   import CrmFollowRecordList from '@/components/business/crm-follow-list/followRecord.vue';
   import CrmHeaderList from '@/components/business/crm-header-list/index.vue';
@@ -103,10 +95,6 @@
       {
         name: 'info',
         title: t('customer.info'),
-      },
-      {
-        name: 'contact',
-        title: t('menu.contact'),
       },
       {
         name: 'record',

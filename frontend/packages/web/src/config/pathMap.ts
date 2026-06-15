@@ -64,11 +64,6 @@ export const pathMap: PathMapItem[] = [
         locale: 'menu.customer',
       },
       {
-        key: 'CUSTOMER_CONTACT',
-        route: AppRouteEnum.CUSTOMER_CONTACT,
-        locale: 'menu.contact',
-      },
-      {
         key: 'CUSTOMER_POOL',
         route: AppRouteEnum.CUSTOMER_OPEN_SEA,
         locale: 'module.openSea',

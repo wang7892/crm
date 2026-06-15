@@ -7,4 +7,7 @@ export default {
   'order.my': 'My Orders',
   'order.deleteContent': 'The current order has been associated with the contract and cannot be deleted!',
   'order.exportingPdf': 'Order PDF export in progress ...',
+  'order.syncExternal': 'Sync Orders',
+  'order.syncExternalSuccess': 'Sync complete: {created} created, {updated} updated, {skipped} skipped',
+  'order.syncExternalNotConfigured': 'External order data source is not configured',
 };

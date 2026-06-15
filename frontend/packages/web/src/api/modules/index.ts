@@ -80,6 +80,7 @@ export const {
   downloadOrder,
   deleteOrderStatus,
   getOrderStatistic,
+  syncExternalOrderInfo,
 } = orderApi;
 
 export const {

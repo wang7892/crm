@@ -22,6 +22,15 @@
       >
         {{ t('order.new') }}
       </n-button>
+      <n-button
+        v-if="!props.readonly && !props.isCustomerTab && !props.isContractTab"
+        v-permission="['ORDER:ADD']"
+        :loading="syncLoading"
+        secondary
+        @click="handleSyncExternalOrder"
+      >
+        {{ t('order.syncExternal') }}
+      </n-button>
     </template>
     <template #actionRight>
       <CrmAdvanceFilter
@@ -40,6 +49,8 @@
         v-if="!props.isContractTab && !props.isCustomerTab"
         v-model:active-tab="activeTab"
         :type="FormDesignKeyEnum.ORDER"
+        default-active-tab="ALL"
+        :ignore-cached-active-tabs="['SELF']"
         :custom-fields-config-list="customFieldsFilterConfig"
         :filter-config-list="filterConfigList"
         @refresh-table-data="searchData"
@@ -110,7 +121,7 @@
   import CrmViewSelect from '@/components/business/crm-view-select/index.vue';
   import DetailDrawer from './detail.vue';
 
-  import { deleteOrder, getOrderStatistic, getOrderStatusConfig } from '@/api/modules';
+  import { deleteOrder, getOrderStatistic, getOrderStatusConfig, syncExternalOrderInfo } from '@/api/modules';
   import { baseFilterConfigList } from '@/config/clue';
   import useFormCreateApi from '@/hooks/useFormCreateApi';
   import useFormCreateTable from '@/hooks/useFormCreateTable';
@@ -215,15 +226,8 @@
     },
     {
       title: t('order.status'),
-      dataIndex: 'stage',
-      type: FieldTypeEnum.SELECT_MULTIPLE,
-      selectProps: {
-        options:
-          stageConfig.value?.stageConfigList.map((e: any) => ({
-            label: e.name,
-            value: e.id,
-          })) || [],
-      },
+      dataIndex: 'status',
+      type: FieldTypeEnum.INPUT,
     },
     ...baseFilterConfigList,
   ]);
@@ -404,8 +408,21 @@
               { default: () => row.customerName, trigger: () => row.customerName }
             );
       },
+      owner: (row: OrderItem) => {
+        const ownerText = row.ownerName || row.owner || '-';
+        return h(
+          CrmNameTooltip,
+          { text: ownerText },
+          {
+            default: () => ownerText,
+          }
+        );
+      },
+      status: (row: OrderItem) => {
+        return row.status || '-';
+      },
       stage: (row: OrderItem) => {
-        return row.stageName || '-';
+        return row.stageName || row.status || '-';
       },
     },
     containerClass: `.crm-order-table-${props.formKey}`,
@@ -474,6 +491,59 @@
     getStatistic(val);
     if (!refreshId) {
       crmTableRef.value?.scrollTo({ top: 0 });
+    }
+  }
+
+  const syncLoading = ref(false);
+  async function handleSyncExternalOrder() {
+    try {
+      syncLoading.value = true;
+      let configured = true;
+      const summary = {
+        created: 0,
+        updated: 0,
+        skipped: 0,
+      };
+      const warnings: string[] = [];
+
+      const syncNextBatch = async (minId?: number): Promise<void> => {
+        const result = await syncExternalOrderInfo({ limit: 20000, minId });
+        if (!result.configured) {
+          configured = false;
+          Message.warning(result.warnings?.[0] || t('order.syncExternalNotConfigured'));
+          return;
+        }
+        summary.created += result.created;
+        summary.updated += result.updated;
+        summary.skipped += result.skipped;
+        warnings.push(...(result.warnings ?? []));
+
+        const { nextMinId } = result;
+        if (result.hasMore && nextMinId != null && nextMinId !== minId) {
+          await syncNextBatch(nextMinId);
+        }
+      };
+
+      await syncNextBatch();
+      if (!configured) {
+        return;
+      }
+      Message.success(
+        t('order.syncExternalSuccess', {
+          created: summary.created,
+          updated: summary.updated,
+          skipped: summary.skipped,
+        })
+      );
+      if (warnings.length) {
+        Message.warning(warnings[0]);
+      }
+      searchData();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(error);
+    } finally {
+      syncLoading.value = false;
     }
   }
 

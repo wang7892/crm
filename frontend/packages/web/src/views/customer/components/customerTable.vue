@@ -728,15 +728,6 @@
     } else {
       searchData();
     }
-    if (activeFormKey.value === FormDesignKeyEnum.CUSTOMER && !needInitDetail.value) {
-      // 新建客户后打开新建联系人
-      activeSourceId.value = res.id;
-      initialSourceName.value = res.name;
-      activeFormKey.value = FormDesignKeyEnum.CONTACT;
-      nextTick(() => {
-        formCreateDrawerVisible.value = true;
-      });
-    }
   }
 
   function handleGeneratedChart(res: FilterResult, form: FilterForm) {

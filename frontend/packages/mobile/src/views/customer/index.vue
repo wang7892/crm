@@ -8,7 +8,6 @@
           </div>
         </template>
         <customer v-if="tab.name === 'customer'" />
-        <contact v-else-if="tab.name === 'contact'" />
         <open-sea v-else-if="tab.name === 'openSea'" />
       </van-tab>
     </van-tabs>
@@ -19,7 +18,6 @@
   import { useI18n } from '@lib/shared/hooks/useI18n';
 
   import customer from './components/customer.vue';
-  import contact from './contact/index.vue';
   import openSea from './openSea/index.vue';
 
   import { hasAnyPermission } from '@/utils/permission';
@@ -37,11 +35,6 @@
         name: 'customer',
         title: t('menu.customer'),
         permission: ['CUSTOMER_MANAGEMENT:READ'],
-      },
-      {
-        name: 'contact',
-        title: t('menu.contact'),
-        permission: ['CUSTOMER_MANAGEMENT_CONTACT:READ'],
       },
       {
         name: 'openSea',

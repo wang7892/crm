@@ -114,7 +114,7 @@
   const { t } = useI18n();
   const message = useMessage();
 
-  const dataPermission = ref('ALL');
+  const dataPermission = ref('SELF');
   const dataPermissionOptions = [
     { label: t('role.dataPermissionAll'), value: 'ALL' },
     { label: t('role.departmentData'), value: 'DEPT_AND_CHILD' },
@@ -205,7 +205,7 @@
         transferData(res.permissions);
       } else if (props.isNew) {
         const res = await getPermissions();
-        dataPermission.value = 'ALL';
+        dataPermission.value = 'SELF';
         departments.value = [];
         transferData(res, true);
       } else {

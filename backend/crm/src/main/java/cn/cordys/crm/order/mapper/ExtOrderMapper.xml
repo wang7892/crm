@@ -5,16 +5,31 @@
     <select id="list" resultType="cn.cordys.crm.order.dto.response.OrderListResponse">
         SELECT
         so.id,
-        so.name,
+        so.order_no AS name,
         so.customer_id,
         so.contract_id,
-        so.number,
+        so.order_no,
+        so.process_order_no,
+        so.processor,
+        so.merchandiser,
+        so.status,
+        so.status AS stage,
+        so.color,
+        so.color_code,
+        so.composition,
+        so.material_name,
+        so.material_type,
+        so.process_technology,
+        so.order_time,
+        so.quantity,
+        so.unit,
+        so.unit_price,
+        so.currency,
         c.`name` AS contractName,
         cc.in_shared_pool AS inCustomerPool,
         cc.pool_id,
         cc.name as customerName,
         so.amount,
-        so.stage,
         so.`owner`,
         so.create_user,
         so.create_time,
@@ -40,7 +55,9 @@
         </include>
 
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on so.owner = sys_organization_user.user_id
+            join sys_user owner_user on (so.owner = owner_user.id or so.owner = owner_user.name)
+            join sys_organization_user on so.organization_id = sys_organization_user.organization_id
+            and sys_organization_user.user_id = owner_user.id
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -62,18 +79,21 @@
         </if>
 
         <if test="dataPermission != null and dataPermission.self">
-            and so.owner = #{userId}
+            and (
+                so.owner = #{userId}
+                or so.owner = (select name from sys_user where id = #{userId})
+            )
         </if>
 
         <if test="!source and request.keyword != null and request.keyword != ''">
             and (
-            so.name like concat('%', #{request.keyword},'%')
+            so.order_no like concat('%', #{request.keyword},'%')
             or c.name like concat('%', #{request.keyword},'%')
             or cc.name like concat('%', #{request.keyword},'%')
             )
         </if>
         <if test="source and request.keyword != null and request.keyword != ''">
-            and so.name like concat('%', #{request.keyword},'%')
+            and so.order_no like concat('%', #{request.keyword},'%')
         </if>
 
         <include refid="filters">
@@ -93,13 +113,28 @@
     <select id="getListByIds" resultType="cn.cordys.crm.order.dto.response.OrderListResponse">
         SELECT
         so.id,
-        so.name,
+        so.order_no AS name,
         so.customer_id,
         so.contract_id,
-        so.number,
+        so.order_no,
+        so.process_order_no,
+        so.processor,
+        so.merchandiser,
+        so.status,
+        so.status AS stage,
+        so.color,
+        so.color_code,
+        so.composition,
+        so.material_name,
+        so.material_type,
+        so.process_technology,
+        so.order_time,
+        so.quantity,
+        so.unit,
+        so.unit_price,
+        so.currency,
         c.`name` AS contractName,
         so.amount,
-        so.stage,
         so.`owner`,
         so.create_user,
         so.create_time,
@@ -108,7 +143,9 @@
         FROM sales_order so
         LEFT JOIN contract c ON so.contract_id = c.id
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on so.owner = sys_organization_user.user_id
+            join sys_user owner_user on (so.owner = owner_user.id or so.owner = owner_user.name)
+            join sys_organization_user on so.organization_id = sys_organization_user.organization_id
+            and sys_organization_user.user_id = owner_user.id
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -124,7 +161,10 @@
         </foreach>
 
         <if test="dataPermission != null and dataPermission.self">
-            and so.owner = #{userId}
+            and (
+                so.owner = #{userId}
+                or so.owner = (select name from sys_user where id = #{userId})
+            )
         </if>
     </select>
 
@@ -134,7 +174,9 @@
             <foreach collection="${conditions}" item="condition" index="i">
                 <if test="condition.name not in
                 {'name', 'owner', 'createTime', 'updateTime', 'customerId', 'contractId', 'createUser', 'updateUser',
-                 'departmentId', 'number', 'stage', 'amount', 'startTime', 'endTime'}">
+                 'departmentId', 'number', 'orderNo', 'processOrderNo', 'processor', 'merchandiser', 'status', 'color',
+                 'colorCode', 'composition', 'materialName', 'materialType', 'processTechnology', 'orderTime',
+                 'quantity', 'unit', 'unitPrice', 'currency', 'stage', 'amount', 'startTime', 'endTime'}">
                     <if test="condition.multipleValue">
                         left join sales_order_field_blob ${tablePrefix}_${i}
                         on so.id = ${tablePrefix}_${i}.resource_id and ${tablePrefix}_${i}.field_id = #{condition.name}
@@ -145,8 +187,11 @@
                     </if>
                 </if>
                 <if test="condition.name == 'departmentId'">
+                    left join sys_user ${tablePrefix}_user_${i}
+                    on (so.owner = ${tablePrefix}_user_${i}.id or so.owner = ${tablePrefix}_user_${i}.name)
                     left join sys_organization_user ${tablePrefix}_${i}
-                    on ${tablePrefix}_${i}.user_id = so.owner
+                    on ${tablePrefix}_${i}.organization_id = so.organization_id
+                    and ${tablePrefix}_${i}.user_id = ${tablePrefix}_user_${i}.id
                 </if>
             </foreach>
         </if>
@@ -154,15 +199,19 @@
 
     <sql id="fieldSortJoin">
         <if test="${sort} != null and ${sort}.valid() and ${sort}.name not in
-                {'name', 'number', 'owner', 'name', 'amount', 'stage', 'update_user', 'create_time', 'customer_id',
-                 'contract_id', 'update_time', 'create_user', 'department_id'}">
+                {'name', 'number', 'orderNo', 'processOrderNo', 'processor', 'merchandiser', 'status', 'color',
+                 'colorCode', 'composition', 'materialName', 'materialType', 'processTechnology', 'orderTime',
+                 'quantity', 'unit', 'unitPrice', 'currency', 'owner', 'name', 'amount', 'stage', 'update_user',
+                 'create_time', 'customer_id', 'contract_id', 'update_time', 'create_user', 'department_id'}">
             <bind name="sortName" value="${sort}.name"/>
             left join sales_order_field sort_table
             on so.id = sort_table.resource_id and sort_table.field_id = #{sortName}
             left join sys_module_field module_table on sort_table.field_id = module_table.id
         </if>
         <if test="${sort} != null and ${sort}.valid() and ${sort}.name == 'department_id'">
-            left join sys_organization_user souc_sort on souc_sort.user_id = so.owner
+            left join sys_user souc_sort_user on (so.owner = souc_sort_user.id or so.owner = souc_sort_user.name)
+            left join sys_organization_user souc_sort on souc_sort.organization_id = so.organization_id
+            and souc_sort.user_id = souc_sort_user.id
         </if>
     </sql>
 
@@ -184,7 +233,7 @@
             <when test="condition.name == 'name'">
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
-                    <property name="column" value="so.name"/>
+                    <property name="column" value="so.order_no"/>
                 </include>
             </when>
             <when test="condition.name == 'customerId'">
@@ -221,13 +270,109 @@
             <when test="condition.name == 'stage'">
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
-                    <property name="column" value="so.stage"/>
+                    <property name="column" value="so.status"/>
                 </include>
             </when>
             <when test="condition.name == 'number'">
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
-                    <property name="column" value="so.number"/>
+                    <property name="column" value="so.order_no"/>
+                </include>
+            </when>
+            <when test="condition.name == 'orderNo'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.order_no"/>
+                </include>
+            </when>
+            <when test="condition.name == 'processOrderNo'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.process_order_no"/>
+                </include>
+            </when>
+            <when test="condition.name == 'processor'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.processor"/>
+                </include>
+            </when>
+            <when test="condition.name == 'merchandiser'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.merchandiser"/>
+                </include>
+            </when>
+            <when test="condition.name == 'status'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.status"/>
+                </include>
+            </when>
+            <when test="condition.name == 'color'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.color"/>
+                </include>
+            </when>
+            <when test="condition.name == 'colorCode'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.color_code"/>
+                </include>
+            </when>
+            <when test="condition.name == 'composition'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.composition"/>
+                </include>
+            </when>
+            <when test="condition.name == 'materialName'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.material_name"/>
+                </include>
+            </when>
+            <when test="condition.name == 'materialType'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.material_type"/>
+                </include>
+            </when>
+            <when test="condition.name == 'processTechnology'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.process_technology"/>
+                </include>
+            </when>
+            <when test="condition.name == 'orderTime'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.order_time"/>
+                </include>
+            </when>
+            <when test="condition.name == 'quantity'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.quantity"/>
+                </include>
+            </when>
+            <when test="condition.name == 'unit'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.unit"/>
+                </include>
+            </when>
+            <when test="condition.name == 'unitPrice'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.unit_price"/>
+                </include>
+            </when>
+            <when test="condition.name == 'currency'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="so.currency"/>
                 </include>
             </when>
             <when test="condition.name == 'departmentId'">
@@ -314,7 +459,7 @@
                 order by
                 <choose>
                     <when test="${sort}.name == 'name'">
-                        so.`name` ${sortType}, so.id ASC
+                        so.`order_no` ${sortType}, so.id ASC
                     </when>
                     <when test="${sort}.name == 'contract_id'">
                         c.`name` ${sortType}, so.id ASC
@@ -329,10 +474,58 @@
                         so.`amount` ${sortType}, so.id ASC
                     </when>
                     <when test="${sort}.name == 'stage'">
-                        so.`stage` ${sortType}, so.id ASC
+                        so.`status` ${sortType}, so.id ASC
                     </when>
                     <when test="${sort}.name == 'number'">
-                        so.`number` ${sortType}, so.id ASC
+                        so.`order_no` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'orderNo'">
+                        so.`order_no` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'processOrderNo'">
+                        so.`process_order_no` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'processor'">
+                        so.`processor` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'merchandiser'">
+                        so.`merchandiser` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'status'">
+                        so.`status` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'color'">
+                        so.`color` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'colorCode'">
+                        so.`color_code` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'composition'">
+                        so.`composition` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'materialName'">
+                        so.`material_name` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'materialType'">
+                        so.`material_type` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'processTechnology'">
+                        so.`process_technology` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'orderTime'">
+                        so.`order_time` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'quantity'">
+                        so.`quantity` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'unit'">
+                        so.`unit` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'unitPrice'">
+                        so.`unit_price` ${sortType}, so.id ASC
+                    </when>
+                    <when test="${sort}.name == 'currency'">
+                        so.`currency` ${sortType}, so.id ASC
                     </when>
                     <when test="${sort}.name == 'create_time'">
                         so.`create_time` ${sortType}, so.id ASC
@@ -368,13 +561,28 @@
 
     <select id="getDetail" resultType="cn.cordys.crm.order.dto.response.OrderGetResponse">
         SELECT  so.id,
-                so.name,
+                so.order_no AS name,
                 so.customer_id,
                 so.contract_id,
-                so.number,
+                so.order_no,
+                so.process_order_no,
+                so.processor,
+                so.merchandiser,
+                so.status,
+                so.status AS stage,
+                so.color,
+                so.color_code,
+                so.composition,
+                so.material_name,
+                so.material_type,
+                so.process_technology,
+                so.order_time,
+                so.quantity,
+                so.unit,
+                so.unit_price,
+                so.currency,
                 c.`name` AS contractName,
                 so.amount,
-                so.stage,
                 so.`owner`,
                 so.create_user,
                 so.create_time,
@@ -387,7 +595,7 @@
 
     <select id="countByStage" resultType="java.lang.Integer">
         select count(id) from sales_order
-        where stage = #{stage}
+        where status = #{stage}
     </select>
 
     <select id="searchStatistic" resultType="cn.cordys.crm.order.dto.response.OrderStatisticResponse">
@@ -410,7 +618,9 @@
             <property name="tablePrefix" value="viewCombine"/>
         </include>
         <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
-            join sys_organization_user on so.owner = sys_organization_user.user_id
+            join sys_user owner_user on (so.owner = owner_user.id or so.owner = owner_user.name)
+            join sys_organization_user on so.organization_id = sys_organization_user.organization_id
+            and sys_organization_user.user_id = owner_user.id
             and (
             sys_organization_user.department_id in
             <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
@@ -425,13 +635,15 @@
         where so.organization_id = #{orgId}
 
         <if test="dataPermission != null and dataPermission.self">
-            and so.owner = #{userId}
+            and (
+                so.owner = #{userId}
+                or so.owner = (select name from sys_user where id = #{userId})
+            )
         </if>
 
         <if test="request.keyword != null and request.keyword != ''">
             and (
-            so.name like concat('%', #{request.keyword},'%')
-            or so.name like concat('%', #{request.keyword},'%')
+            so.order_no like concat('%', #{request.keyword},'%')
             )
         </if>
 
@@ -447,4 +659,52 @@
         </include>
 
     </select>
+
+    <select id="findByOrderInfoColumns" resultType="cn.cordys.crm.order.domain.Order">
+        SELECT
+            id,
+            customer_id,
+            contract_id,
+            order_no,
+            process_order_no,
+            processor,
+            merchandiser,
+            status,
+            color,
+            color_code,
+            composition,
+            material_name,
+            material_type,
+            process_technology,
+            order_time,
+            quantity,
+            unit,
+            unit_price,
+            amount,
+            currency,
+            owner,
+            organization_id,
+            create_time,
+            update_time,
+            create_user,
+            update_user
+        FROM sales_order
+        WHERE organization_id = #{orgId}
+          AND order_no = #{order.orderNo}
+          AND (process_order_no &lt;=&gt; #{order.processOrderNo})
+          AND (color_code &lt;=&gt; #{order.colorCode})
+          AND (material_name &lt;=&gt; #{order.materialName})
+          AND (material_type &lt;=&gt; #{order.materialType})
+          AND (process_technology &lt;=&gt; #{order.processTechnology})
+        ORDER BY create_time ASC, id ASC
+        LIMIT 1
+    </select>
+
+    <update id="updateContractRelation">
+        UPDATE sales_order
+        SET customer_id = #{order.customerId},
+            contract_id = #{order.contractId},
+            owner = #{order.owner}
+        WHERE id = #{order.id}
+    </update>
 </mapper>

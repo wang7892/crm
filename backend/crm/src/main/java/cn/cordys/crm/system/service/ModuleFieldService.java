@@ -263,6 +263,9 @@ public class ModuleFieldService {
      */
     private void initOrderProducts() {
         ModuleField orderProducts = selectFieldByInternalKey("orderProducts");
+        if (orderProducts == null) {
+            return;
+        }
         ModuleFieldBlob orderProductsFieldBlob = moduleFieldBlobMapper.selectByPrimaryKey(orderProducts.getId());
         Map<String, Object> orderProductsField = JSON.parseMap(orderProductsFieldBlob.getProp());
 
@@ -282,12 +285,18 @@ public class ModuleFieldService {
                 orderProductAmount = subField;
             }
         }
+        if (orderProductAmount == null || StringUtils.isAnyBlank(orderProductPriceId, orderProductNumberId)) {
+            return;
+        }
         orderProductAmount.put("formula", getOrderProductAmountFormula(orderProductPriceId, orderProductNumberId));
 
         orderProductsFieldBlob.setProp(JSON.toJSONString(orderProductsField));
         moduleFieldBlobMapper.updateById(orderProductsFieldBlob);
 
         ModuleField orderAmount = selectFieldByInternalKey("orderAmount");
+        if (orderAmount == null) {
+            return;
+        }
         String orderAmountFormulaId = orderProductsField.get("id").toString() + "." + orderProductAmount.get("id").toString();
         ModuleFieldBlob orderAmountFieldBlob = moduleFieldBlobMapper.selectByPrimaryKey(orderAmount.getId());
         Map<String, Object> orderAmountField = JSON.parseMap(orderAmountFieldBlob.getProp());
@@ -373,8 +382,11 @@ public class ModuleFieldService {
      * 订单合同字段增加订单客户过滤条件
      */
     private void initOrderContractFilter() {
-        ModuleField orderContract = selectFieldByInternalKey(BusinessModuleField.ORDER_CONTRACT.getKey());
-        ModuleField orderCustomer = selectFieldByInternalKey(BusinessModuleField.ORDER_CUSTOMER.getKey());
+        ModuleField orderContract = selectFieldByInternalKey("orderContract");
+        ModuleField orderCustomer = selectFieldByInternalKey("orderCustomer");
+        if (orderContract == null || orderCustomer == null) {
+            return;
+        }
         ModuleFieldBlob orderContractFieldBlob = moduleFieldBlobMapper.selectByPrimaryKey(orderContract.getId());
         DatasourceField datasourceField = JSON.parseObject(orderContractFieldBlob.getProp(), DatasourceField.class);
         String customerConditionJson = String.format("""

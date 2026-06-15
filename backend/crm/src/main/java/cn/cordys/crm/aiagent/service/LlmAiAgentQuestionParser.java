@@ -162,6 +162,8 @@ public class LlmAiAgentQuestionParser {
                 - CRM_DATABASE_QUERY：通用数据库查询。例：“客户来源是展会客户的客户有哪些？”、“名字中带有印尼的客户有哪些？”、“赵芳有哪些客户她没有跟进？”、“每个销售名下客户数量是多少？”、“MLS_242241 这个订单是什么状态？”
                 
                 参数抽取规则：
+                - 用户明确问“订单、订单号、加工单号、加工商、跟单员、联系专员、订单状态、颜色、色号、成分、原料名称、原料类型、加工工艺、下单时间、数量、单价、金额、币种”时，优先使用 CRM_DATABASE_QUERY，entity=sales_order。
+                - 普通订单问题不要默认使用 contract_info；contract_info 只用于用户明确说“外部订单/外部合同/contract_info”时。
                 - “小郑有哪些客户？”中，小郑是 specialistName，不是 customerName。
                 - “名字中带有印尼的客户有哪些？”、“客户名称包含印尼的客户有哪些？”不是查询销售名下客户，必须使用 CRM_DATABASE_QUERY，不要把“名字中带有印尼”提取成 specialistName。
                 - “DAISY签订的合同有哪些？”中，DAISY 是 customerName，不要提取成 DAISY签订。
@@ -174,7 +176,9 @@ public class LlmAiAgentQuestionParser {
                 - “赵芳有哪些客户她没有跟进？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=LIST，filter field=owner_name/operator=like/value=赵芳，再加 filter field=follow_time/operator=is_null。
                 - “某销售没有跟进的客户有哪些？”不要只返回该销售客户列表，必须把“没有跟进”作为数据库过滤条件。
                 - “每个销售名下客户数量是多少？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=AGGREGATE，groupBy=owner_name，metric=count(id)。
-                - “MLS_242241 这个订单是什么状态？”使用 CRM_DATABASE_QUERY，entity=contract_info，queryType=LIST，filter field=order_no/operator=like/value=MLS_242241。
+                - “黄雪梅负责的订单有哪些？”使用 CRM_DATABASE_QUERY，entity=sales_order，queryType=LIST，filter field=owner_name/operator=like/value=黄雪梅，selectFields=order_no,customer_name,contract_name,owner_name,status,material_name,composition,order_time,amount。
+                - “黄雪梅负责的订单原料都有哪些？”使用 CRM_DATABASE_QUERY，entity=sales_order，queryType=LIST，filter field=owner_name/operator=like/value=黄雪梅，selectFields=order_no,customer_name,owner_name,material_name,material_type,composition,status。
+                - “MLS_242241 这个订单是什么状态？”使用 CRM_DATABASE_QUERY，entity=sales_order，queryType=LIST，filter field=order_no/operator=like/value=MLS_242241，selectFields=order_no,customer_name,owner_name,status,material_name,composition,order_time。
                 - 相对时间范围（本月、近30天、本季度等）在 queryPlan filter 中使用 operator=between，value=CURRENT_TIME_WINDOW。
                 
                 %s

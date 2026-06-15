@@ -10,13 +10,16 @@ import java.util.List;
 @Data
 public class OrderListResponse extends Order {
 
+    @Schema(description = "订单名称")
+    private String name;
+
     @Schema(description = "客户名称")
     private String customerName;
 
     @Schema(description = "合同名称")
     private String  contractName;
 
-    @Schema(description = "负责人名称")
+    @Schema(description = "联系专员名称")
     private String ownerName;
 
     @Schema(description = "创建人名称")
@@ -39,6 +42,9 @@ public class OrderListResponse extends Order {
 
     @Schema(description = "商机阶段")
     private String stageName;
+
+    @Schema(description = "订单状态")
+    private String stage;
 
     @Schema(description = "自定义字段")
     private List<BaseModuleFieldValue> moduleFields;

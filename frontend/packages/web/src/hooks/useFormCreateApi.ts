@@ -95,6 +95,38 @@ export default function useFormCreateApi(props: FormCreateApiProps) {
   // 详情
   const detail = ref<Record<string, any>>({});
   const linkFormFieldMap = ref<Record<string, any>>({}); // 关联表单字段信息映射
+  const followFormKeysWithoutContact = [
+    FormDesignKeyEnum.FOLLOW_PLAN_CUSTOMER,
+    FormDesignKeyEnum.FOLLOW_RECORD_CUSTOMER,
+    FormDesignKeyEnum.FOLLOW_PLAN_CLUE,
+    FormDesignKeyEnum.FOLLOW_RECORD_CLUE,
+    FormDesignKeyEnum.FOLLOW_PLAN_BUSINESS,
+    FormDesignKeyEnum.FOLLOW_RECORD_BUSINESS,
+    FormDesignKeyEnum.FOLLOW_RECORD,
+    FormDesignKeyEnum.FOLLOW_PLAN,
+  ];
+
+  function shouldFilterFormField(field: FormCreateField) {
+    return (
+      followFormKeysWithoutContact.includes(props.formKey.value) &&
+      (field.businessKey === 'contactId' || ['recordContact', 'planContact'].includes(field.internalKey || ''))
+    );
+  }
+
+  function filterFormFields(fields: FormCreateField[]) {
+    const hiddenFieldIds = new Set(fields.filter(shouldFilterFormField).map((field) => field.id));
+    return fields
+      .filter((field) => !hiddenFieldIds.has(field.id))
+      .map((field) => ({
+        ...field,
+        showControlRules: field.showControlRules
+          ?.map((rule) => ({
+            ...rule,
+            fieldIds: rule.fieldIds.filter((fieldId) => !hiddenFieldIds.has(fieldId)),
+          }))
+          .filter((rule) => rule.fieldIds.length),
+      }));
+  }
   const opportunityInternalFields = [
     {
       title: t('org.department'),
@@ -1104,6 +1136,7 @@ export default function useFormCreateApi(props: FormCreateApiProps) {
   }
 
   function initFormFieldConfig(fields: FormCreateField[]) {
+    fieldShowControlMap.value = {};
     fieldList.value = fields.map((item) => {
       const { defaultValue, initialOptions } = specialFormFieldInit(item);
       if (item.showControlRules?.length) {
@@ -1145,8 +1178,9 @@ export default function useFormCreateApi(props: FormCreateApiProps) {
       loading.value = true;
       const api = getFormConfigApiMap[props.formKey.value];
       const res = await api(props.sourceId?.value ?? '');
-      moduleFormConfig.value = cloneDeep(res);
-      initFormFieldConfig(res.fields);
+      const fields = filterFormFields(res.fields);
+      moduleFormConfig.value = cloneDeep({ ...res, fields });
+      initFormFieldConfig(fields);
       formConfig.value = res.formProp;
       nextTick(() => {
         unsaved.value = false;

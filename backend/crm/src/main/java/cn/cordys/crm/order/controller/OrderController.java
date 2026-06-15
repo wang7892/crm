@@ -1,6 +1,7 @@
 package cn.cordys.crm.order.controller;
 
 import cn.cordys.common.constants.FormKey;
+import cn.cordys.common.constants.InternalUserView;
 import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.dto.DeptDataPermissionDTO;
 import cn.cordys.common.dto.ResourceTabEnableDTO;
@@ -10,13 +11,16 @@ import cn.cordys.common.service.DataScopeService;
 import cn.cordys.common.utils.ConditionFilterUtils;
 import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.order.domain.Order;
+import cn.cordys.crm.order.dto.request.ExternalOrderSyncRequest;
 import cn.cordys.crm.order.dto.request.OrderAddRequest;
 import cn.cordys.crm.order.dto.request.OrderPageRequest;
 import cn.cordys.crm.order.dto.request.OrderStageRequest;
 import cn.cordys.crm.order.dto.request.OrderUpdateRequest;
+import cn.cordys.crm.order.dto.response.ExternalOrderSyncResult;
 import cn.cordys.crm.order.dto.response.OrderGetResponse;
 import cn.cordys.crm.order.dto.response.OrderListResponse;
 import cn.cordys.crm.order.dto.response.OrderStatisticResponse;
+import cn.cordys.crm.order.service.ExternalOrderInfoSyncService;
 import cn.cordys.crm.order.service.OrderService;
 import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
 import cn.cordys.crm.system.service.ModuleFormCacheService;
@@ -41,6 +45,8 @@ public class OrderController {
     private DataScopeService dataScopeService;
     @Resource
     private ModuleFormCacheService moduleFormCacheService;
+    @Resource
+    private ExternalOrderInfoSyncService externalOrderInfoSyncService;
 
     @GetMapping("/module/form")
     @RequiresPermissions(PermissionConstants.ORDER_READ)
@@ -104,9 +110,10 @@ public class OrderController {
     @Operation(summary = "列表")
     public PagerWithOption<List<OrderListResponse>> list(@Validated @RequestBody OrderPageRequest request) {
         ConditionFilterUtils.parseCondition(request);
-        DeptDataPermissionDTO deptDataPermission = dataScopeService.getDeptDataPermission(SessionUtils.getUserId(),
-                OrganizationContext.getOrganizationId(), request.getViewId(), PermissionConstants.ORDER_READ);
-        return orderService.list(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), deptDataPermission, false);
+        String userId = SessionUtils.getUserId();
+        String orgId = OrganizationContext.getOrganizationId();
+        DeptDataPermissionDTO deptDataPermission = getOrderDataPermission(userId, orgId, request.getViewId());
+        return orderService.list(request, userId, orgId, deptDataPermission, false);
     }
 
     @GetMapping("/tab")
@@ -129,9 +136,26 @@ public class OrderController {
     @Operation(summary = "订单统计")
     public OrderStatisticResponse searchStatistic(@Validated @RequestBody BaseCondition request) {
         ConditionFilterUtils.parseCondition(request);
-        DeptDataPermissionDTO deptDataPermission = dataScopeService.getDeptDataPermission(SessionUtils.getUserId(),
-                OrganizationContext.getOrganizationId(), request.getViewId(), PermissionConstants.ORDER_READ);
-        return orderService.searchStatistic(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), deptDataPermission);
+        String userId = SessionUtils.getUserId();
+        String orgId = OrganizationContext.getOrganizationId();
+        DeptDataPermissionDTO deptDataPermission = getOrderDataPermission(userId, orgId, request.getViewId());
+        return orderService.searchStatistic(request, userId, orgId, deptDataPermission);
+    }
+
+    private DeptDataPermissionDTO getOrderDataPermission(String userId, String orgId, String viewId) {
+        DeptDataPermissionDTO basePermission = dataScopeService.getDeptDataPermission(userId, orgId, PermissionConstants.ORDER_READ);
+        if (Boolean.TRUE.equals(basePermission.getAll()) && InternalUserView.isSelf(viewId)) {
+            basePermission.setViewId(viewId);
+            return basePermission;
+        }
+        return dataScopeService.getDeptDataPermission(userId, orgId, viewId, PermissionConstants.ORDER_READ);
+    }
+
+    @PostMapping("/sync/external-order-info")
+    @RequiresPermissions(PermissionConstants.ORDER_ADD)
+    @Operation(summary = "同步外部订单数据库 order_info")
+    public ExternalOrderSyncResult syncExternalOrderInfo(@RequestBody(required = false) ExternalOrderSyncRequest request) {
+        return externalOrderInfoSyncService.sync(request, SessionUtils.getUserId(), OrganizationContext.getOrganizationId());
     }
 
 }

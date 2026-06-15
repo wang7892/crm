@@ -244,7 +244,7 @@
       id,
       name: t('role.newRole'),
       internal: false,
-      dataScope: 'ALL',
+      dataScope: 'SELF',
       description: '',
       isNew: true,
     });

@@ -74,6 +74,38 @@ export default function useFormCreateApi(props: FormCreateApiProps) {
   const formDetail = ref<Record<string, any>>({});
   const originFormDetail = ref<Record<string, any>>({});
   const detail = ref<Record<string, any>>({}); // 详情
+  const followFormKeysWithoutContact = [
+    FormDesignKeyEnum.FOLLOW_PLAN_CUSTOMER,
+    FormDesignKeyEnum.FOLLOW_RECORD_CUSTOMER,
+    FormDesignKeyEnum.FOLLOW_PLAN_CLUE,
+    FormDesignKeyEnum.FOLLOW_RECORD_CLUE,
+    FormDesignKeyEnum.FOLLOW_PLAN_BUSINESS,
+    FormDesignKeyEnum.FOLLOW_RECORD_BUSINESS,
+    FormDesignKeyEnum.FOLLOW_RECORD,
+    FormDesignKeyEnum.FOLLOW_PLAN,
+  ];
+
+  function shouldFilterFormField(field: FormCreateField) {
+    return (
+      followFormKeysWithoutContact.includes(props.formKey) &&
+      (field.businessKey === 'contactId' || ['recordContact', 'planContact'].includes(field.internalKey || ''))
+    );
+  }
+
+  function filterFormFields(fields: FormCreateField[]) {
+    const hiddenFieldIds = new Set(fields.filter(shouldFilterFormField).map((field) => field.id));
+    return fields
+      .filter((field) => !hiddenFieldIds.has(field.id))
+      .map((field) => ({
+        ...field,
+        showControlRules: field.showControlRules
+          ?.map((rule) => ({
+            ...rule,
+            fieldIds: rule.fieldIds.filter((fieldId) => !hiddenFieldIds.has(fieldId)),
+          }))
+          .filter((rule) => rule.fieldIds.length),
+      }));
+  }
 
   function initFormShowControl() {
     // 读取整个显隐控制映射
@@ -565,8 +597,10 @@ export default function useFormCreateApi(props: FormCreateApiProps) {
     try {
       loading.value = true;
       const res = await getFormConfigApiMap[props.formKey]();
+      const fields = filterFormFields(res.fields);
       formConfig.value = res.formProp;
-      fieldList.value = res.fields.map((item) => {
+      fieldShowControlMap.value = {};
+      fieldList.value = fields.map((item) => {
         const { defaultValue, initialOptions } = specialFormFieldInit(item);
         if (item.showControlRules?.length) {
           // 将字段的控制显隐规则存储到 fieldShowControlMap 中

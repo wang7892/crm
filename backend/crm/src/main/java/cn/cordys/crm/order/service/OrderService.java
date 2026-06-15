@@ -7,6 +7,7 @@ import cn.cordys.aspectj.context.OperationLogContext;
 import cn.cordys.aspectj.dto.LogDTO;
 import cn.cordys.common.constants.BusinessModuleField;
 import cn.cordys.common.constants.FormKey;
+import cn.cordys.common.constants.OrderPromotedField;
 import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.domain.BaseModuleFieldValue;
 import cn.cordys.common.dto.*;
@@ -104,34 +105,38 @@ public class OrderService {
      * @param orgId
      * @return
      */
-    @OperationLog(module = LogModule.ORDER_INDEX, type = LogType.ADD, resourceName = "{#request.name}")
+    @OperationLog(module = LogModule.ORDER_INDEX, type = LogType.ADD, resourceName = "{#request.orderNo}")
     public Order add(OrderAddRequest request, String operatorId, String orgId) {
         List<BaseModuleFieldValue> moduleFields = request.getModuleFields();
         ModuleFormConfigDTO moduleFormConfigDTO = request.getModuleFormConfigDTO();
-        if (CollectionUtils.isEmpty(moduleFields)) {
-            throw new GenericException(Translator.get("order.field.required"));
+        if (moduleFields == null) {
+            moduleFields = new ArrayList<>();
         }
         if (moduleFormConfigDTO == null) {
             throw new GenericException(Translator.get("order.form.config.required"));
         }
-        List<OrderStageConfigResponse> stageConfigList = extOrderStageConfigMapper.getStageConfigList(orgId);
         ModuleFormConfigDTO saveModuleFormConfigDTO = JSON.parseObject(JSON.toJSONString(moduleFormConfigDTO), ModuleFormConfigDTO.class);
         Order order = new Order();
         BeanUtils.copyBean(order, request);
+        moduleFields = extractPromotedModuleFields(order, moduleFields, moduleFormConfigDTO);
         order.setId(IDGenerator.nextStr());
-        order.setNumber(createOrderNumber(moduleFormConfigDTO, orgId, request.getNumber()));
-        if (order.getNumber().length() > MAX_NUMBER_LENGTH) {
+        order.setOrderNo(createOrderNumber(moduleFormConfigDTO, orgId, order.getOrderNo()));
+        if (StringUtils.isBlank(order.getOrderNo())) {
+            throw new GenericException(Translator.get("order.number.required"));
+        }
+        if (order.getOrderNo().length() > MAX_NUMBER_LENGTH) {
             throw new GenericException(Translator.get("order.number.length.exceed"));
         }
-        order.setStage(stageConfigList.getFirst().getId());
         order.setOrganizationId(orgId);
         order.setCreateTime(System.currentTimeMillis());
         order.setCreateUser(operatorId);
         order.setUpdateTime(System.currentTimeMillis());
         order.setUpdateUser(operatorId);
-
-        //判断总金额
         setAmount(request.getAmount(), order);
+
+        fillOwnerFromMerchandiser(order, orgId);
+        fillCustomerFromContract(order);
+        fillDefaultStatus(order, orgId);
 
         //自定义字段
         orderFieldService.saveModuleField(order, orgId, operatorId, moduleFields, false);
@@ -155,7 +160,16 @@ public class OrderService {
         if (numberField != null) {
             return serialNumGenerator.generateByRules(((SerialNumberField) numberField).getSerialNumberRules(prefix), orgId, FormKey.ORDER.getKey());
         }
-        return null;
+        return StringUtils.trimToNull(prefix);
+    }
+
+    private String resolveUpdateOrderNumber(ModuleFormConfigDTO moduleFormConfigDTO, String requestNumber, String oldOrderNo) {
+        boolean serialNumber = moduleFormConfigDTO.getFields().stream()
+                .anyMatch(field -> field.isSerialNumber() && StringUtils.isNotEmpty(field.getBusinessKey()));
+        if (serialNumber) {
+            return oldOrderNo;
+        }
+        return StringUtils.defaultIfBlank(StringUtils.trimToNull(requestNumber), oldOrderNo);
     }
 
 
@@ -185,7 +199,7 @@ public class OrderService {
         if (getResponse == null) {
             throw new GenericException(CrmHttpResultCode.NOT_FOUND);
         }
-        dataScopeService.checkDataPermission(userId, orgId, getResponse.getOwner(), PermissionConstants.ORDER_READ);
+        dataScopeService.checkDataPermission(userId, orgId, resolveOwnerId(getResponse.getOwner(), orgId), PermissionConstants.ORDER_READ);
         return getResponse;
     }
 
@@ -194,7 +208,7 @@ public class OrderService {
         if (getResponse == null) {
             throw new GenericException(CrmHttpResultCode.NOT_FOUND);
         }
-        dataScopeService.checkDataPermission(userId, orgId, getResponse.getOwner(), PermissionConstants.ORDER_READ);
+        dataScopeService.checkDataPermission(userId, orgId, resolveOwnerId(getResponse.getOwner(), orgId), PermissionConstants.ORDER_READ);
         return getResponse;
     }
 
@@ -205,12 +219,15 @@ public class OrderService {
         String id = order.getId();
         // 获取模块字段
         moduleFormService.processBusinessFieldValues(orderGetResponse, orderFields, orderFormConfig);
+        orderGetResponse.setName(orderDisplayName(order));
+        orderGetResponse.setStage(order.getStatus());
         orderFields = orderFieldService.setBusinessRefFieldValue(List.of(orderGetResponse),
                 moduleFormService.getFlattenFormFields(FormKey.ORDER.getKey(), order.getOrganizationId()), new HashMap<>(Map.of(id, orderFields))).get(id);
 
         Map<String, List<OptionDTO>> optionMap = moduleFormService.getOptionMap(orderFormConfig, orderFields);
 
-        // 补充负责人选项
+        orderGetResponse.setOwnerName(resolveOwnerName(orderGetResponse.getOwner(), order.getOrganizationId()));
+        // 补充联系专员选项
         List<OptionDTO> ownerFieldOption = moduleFormService.getBusinessFieldOption(orderGetResponse,
                 OrderGetResponse::getOwner, OrderGetResponse::getOwnerName);
         optionMap.put(BusinessModuleField.ORDER_OWNER.getBusinessKey(), ownerFieldOption);
@@ -221,22 +238,22 @@ public class OrderService {
         Map<String, String> stageNameMap = extOrderStageConfigMapper.getStageConfigList(order.getOrganizationId()).stream()
                 .collect(Collectors.toMap(OrderStageConfigResponse::getId,
                         OrderStageConfigResponse::getName));
-        orderGetResponse.setStageName(stageNameMap.get(order.getStage()));
+        orderGetResponse.setStageName(StringUtils.defaultIfBlank(stageNameMap.get(order.getStatus()), order.getStatus()));
 
         if (customer != null) {
             orderGetResponse.setCustomerName(customer.getName());
-            optionMap.put(BusinessModuleField.ORDER_CUSTOMER.getBusinessKey(), Collections.singletonList(new OptionDTO(customer.getId(), customer.getName())));
+            optionMap.put("customerId", Collections.singletonList(new OptionDTO(customer.getId(), customer.getName())));
         }
         if (contract != null) {
             orderGetResponse.setContractName(contract.getName());
-            optionMap.put(BusinessModuleField.ORDER_CONTRACT.getBusinessKey(), Collections.singletonList(new OptionDTO(contract.getId(), contract.getName())));
+            optionMap.put("contractId", Collections.singletonList(new OptionDTO(contract.getId(), contract.getName())));
         }
 
         orderGetResponse.setOptionMap(optionMap);
         orderGetResponse.setModuleFields(orderFields);
 
         if (orderGetResponse.getOwner() != null) {
-            UserDeptDTO userDeptDTO = baseService.getUserDeptMapByUserId(orderGetResponse.getOwner(), order.getOrganizationId());
+            UserDeptDTO userDeptDTO = baseService.getUserDeptMapByUserId(resolveOwnerId(orderGetResponse.getOwner(), order.getOrganizationId()), order.getOrganizationId());
             if (userDeptDTO != null) {
                 orderGetResponse.setDepartmentId(userDeptDTO.getDeptId());
                 orderGetResponse.setDepartmentName(userDeptDTO.getDeptName());
@@ -275,27 +292,35 @@ public class OrderService {
         Order oldOrder = orderMapper.selectByPrimaryKey(request.getId());
         List<BaseModuleFieldValue> moduleFields = request.getModuleFields();
         ModuleFormConfigDTO moduleFormConfigDTO = request.getModuleFormConfigDTO();
-        if (CollectionUtils.isEmpty(moduleFields)) {
-            throw new GenericException(Translator.get("order.field.required"));
+        if (moduleFields == null) {
+            moduleFields = new ArrayList<>();
         }
         if (moduleFormConfigDTO == null) {
             throw new GenericException(Translator.get("order.form.config.required"));
         }
+        List<BaseModuleFieldValue> normalizedModuleFields = moduleFields;
         ModuleFormConfigDTO saveModuleFormConfigDTO = JSON.parseObject(JSON.toJSONString(moduleFormConfigDTO), ModuleFormConfigDTO.class);
         Optional.ofNullable(oldOrder).ifPresentOrElse(item -> {
 
             List<BaseModuleFieldValue> originFields = orderFieldService.getModuleFieldValuesByResourceId(request.getId());
             Order order = BeanUtils.copyBean(new Order(), request);
+            List<BaseModuleFieldValue> updateModuleFields = extractPromotedModuleFields(order, normalizedModuleFields, moduleFormConfigDTO);
             order.setUpdateTime(System.currentTimeMillis());
             order.setUpdateUser(userId);
-            // 保留不可更改的字段
-            order.setNumber(oldOrder.getNumber());
+            order.setOrderNo(resolveUpdateOrderNumber(moduleFormConfigDTO, order.getOrderNo(), oldOrder.getOrderNo()));
+            if (StringUtils.isBlank(order.getOrderNo())) {
+                throw new GenericException(Translator.get("order.number.required"));
+            }
+            if (order.getOrderNo().length() > MAX_NUMBER_LENGTH) {
+                throw new GenericException(Translator.get("order.number.length.exceed"));
+            }
             order.setCreateUser(oldOrder.getCreateUser());
             order.setCreateTime(oldOrder.getCreateTime());
-            order.setStage(oldOrder.getStage());
-            //判断总金额
             setAmount(request.getAmount(), order);
-            updateFields(moduleFields, order, orgId, userId);
+            fillOwnerFromMerchandiser(order, orgId);
+            fillCustomerFromContract(order);
+            fillDefaultStatus(order, orgId);
+            updateFields(updateModuleFields, order, orgId, userId);
             orderMapper.update(order);
             //删除快照
             LambdaQueryWrapper<OrderSnapshot> delWrapper = new LambdaQueryWrapper<>();
@@ -311,17 +336,144 @@ public class OrderService {
             }
             snapshotBaseMapper.deleteByLambda(delWrapper);
             //保存快照
-            List<BaseModuleFieldValue> resolveFieldValues = moduleFormService.resolveSnapshotFields(moduleFields, moduleFormConfigDTO, orderFieldService, order.getId());
+            List<BaseModuleFieldValue> resolveFieldValues = moduleFormService.resolveSnapshotFields(updateModuleFields, moduleFormConfigDTO, orderFieldService, order.getId());
             // get 方法需要使用orgId
             order.setOrganizationId(orgId);
             OrderGetResponse response = get(order, resolveFieldValues, moduleFormConfigDTO);
             saveSnapshot(order, saveModuleFormConfigDTO, response);
+            baseService.handleUpdateLogWithSubTable(oldOrder, order, originFields, updateModuleFields, request.getId(), orderDisplayName(order), Translator.get("products_info"), moduleFormConfigDTO);
             // 处理日志上下文
-            baseService.handleUpdateLogWithSubTable(oldOrder, order, originFields, moduleFields, request.getId(), order.getName(), Translator.get("products_info"), moduleFormConfigDTO);
         }, () -> {
             throw new GenericException(CrmHttpResultCode.NOT_FOUND);
         });
         return orderMapper.selectByPrimaryKey(request.getId());
+    }
+
+    private List<BaseModuleFieldValue> extractPromotedModuleFields(Order order, List<BaseModuleFieldValue> moduleFields,
+                                                                   ModuleFormConfigDTO moduleFormConfigDTO) {
+        if (CollectionUtils.isEmpty(moduleFields)) {
+            return moduleFields;
+        }
+        Map<String, OrderPromotedField> promotedFieldMap = Optional.ofNullable(moduleFormConfigDTO)
+                .map(ModuleFormConfigDTO::getFields)
+                .orElse(List.of())
+                .stream()
+                .map(field -> Map.entry(field.getId(), OrderPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey())))
+                .filter(entry -> entry.getValue() != null)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (first, second) -> first));
+
+        return moduleFields.stream()
+                .filter(fieldValue -> {
+                    OrderPromotedField promotedField = promotedFieldMap.get(fieldValue.getFieldId());
+                    if (promotedField == null) {
+                        return true;
+                    }
+                    setPromotedFieldValue(order, promotedField, fieldValue.getFieldValue());
+                    return false;
+                })
+                .toList();
+    }
+
+    private void setPromotedFieldValue(Order order, OrderPromotedField promotedField, Object fieldValue) {
+        switch (promotedField) {
+            case PROCESS_ORDER_NO -> order.setProcessOrderNo(toStringValue(fieldValue));
+            case PROCESSOR -> order.setProcessor(toStringValue(fieldValue));
+            case MERCHANDISER -> order.setMerchandiser(toStringValue(fieldValue));
+            case STATUS -> order.setStatus(toStringValue(fieldValue));
+            case COLOR -> order.setColor(toStringValue(fieldValue));
+            case COLOR_CODE -> order.setColorCode(toStringValue(fieldValue));
+            case COMPOSITION -> order.setComposition(toStringValue(fieldValue));
+            case MATERIAL_NAME -> order.setMaterialName(toStringValue(fieldValue));
+            case MATERIAL_TYPE -> order.setMaterialType(toStringValue(fieldValue));
+            case PROCESS_TECHNOLOGY -> order.setProcessTechnology(toStringValue(fieldValue));
+            case ORDER_TIME -> order.setOrderTime(toLongValue(fieldValue));
+            case QUANTITY -> order.setQuantity(toBigDecimalValue(fieldValue));
+            case UNIT -> order.setUnit(toStringValue(fieldValue));
+            case UNIT_PRICE -> order.setUnitPrice(toBigDecimalValue(fieldValue));
+            case AMOUNT -> order.setAmount(toBigDecimalValue(fieldValue));
+            case CURRENCY -> order.setCurrency(toStringValue(fieldValue));
+        }
+    }
+
+    private void fillOwnerFromMerchandiser(Order order, String orgId) {
+        if (StringUtils.isBlank(order.getOwner()) && StringUtils.isNotBlank(order.getMerchandiser())) {
+            order.setOwner(resolveOwnerName(order.getMerchandiser(), orgId));
+        }
+        if (StringUtils.isNotBlank(order.getOwner())) {
+            order.setOwner(resolveOwnerName(order.getOwner(), orgId));
+        }
+        if (StringUtils.isBlank(order.getMerchandiser()) && StringUtils.isNotBlank(order.getOwner())) {
+            order.setMerchandiser(order.getOwner());
+        }
+    }
+
+    private String resolveOwnerId(String owner, String orgId) {
+        return StringUtils.defaultIfBlank(baseService.resolveUserIdByIdOrName(owner, orgId), owner);
+    }
+
+    private String resolveOwnerName(String owner, String orgId) {
+        if (StringUtils.isBlank(owner)) {
+            return null;
+        }
+        String ownerId = baseService.resolveUserIdByIdOrName(owner, orgId);
+        if (StringUtils.isNotBlank(ownerId)) {
+            return StringUtils.defaultIfBlank(baseService.getUserName(ownerId), owner);
+        }
+        return owner;
+    }
+
+    private String toStringValue(Object value) {
+        return value == null ? null : StringUtils.trimToNull(value.toString());
+    }
+
+    private Long toLongValue(Object value) {
+        if (value == null || StringUtils.isBlank(value.toString())) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        return Long.valueOf(value.toString());
+    }
+
+    private BigDecimal toBigDecimalValue(Object value) {
+        if (value == null || StringUtils.isBlank(value.toString())) {
+            return null;
+        }
+        if (value instanceof BigDecimal bigDecimal) {
+            return bigDecimal;
+        }
+        if (value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
+        }
+        return new BigDecimal(value.toString());
+    }
+
+    private void fillCustomerFromContract(Order order) {
+        if (StringUtils.isNotBlank(order.getCustomerId()) || StringUtils.isBlank(order.getContractId())) {
+            return;
+        }
+        Contract contract = contractMapper.selectByPrimaryKey(order.getContractId());
+        if (contract != null) {
+            order.setCustomerId(contract.getCustomerId());
+        }
+    }
+
+    private void fillDefaultStatus(Order order, String orgId) {
+        if (StringUtils.isNotBlank(order.getStatus())) {
+            return;
+        }
+        List<OrderStageConfigResponse> stageConfigList = extOrderStageConfigMapper.getStageConfigList(orgId);
+        if (CollectionUtils.isNotEmpty(stageConfigList)) {
+            order.setStatus(stageConfigList.getFirst().getId());
+        }
+    }
+
+    private String orderDisplayName(Order order) {
+        if (order == null) {
+            return null;
+        }
+        return StringUtils.firstNonBlank(order.getOrderNo(), order.getProcessOrderNo(), order.getId());
     }
 
     private void setAmount(String amount, Order order) {
@@ -330,7 +482,7 @@ public class OrderService {
             if (order.getAmount().compareTo(MAX_AMOUNT) > 0) {
                 throw new GenericException(Translator.get("order.amount.exceed.max"));
             }
-        } else {
+        } else if (order.getAmount() == null) {
             order.setAmount(BigDecimal.ZERO);
         }
     }
@@ -373,7 +525,7 @@ public class OrderService {
         wrapper.eq(OrderSnapshot::getOrderId, id);
         snapshotBaseMapper.deleteByLambda(wrapper);
         // 添加日志上下文
-        OperationLogContext.setResourceName(order.getName());
+        OperationLogContext.setResourceName(orderDisplayName(order));
     }
 
 
@@ -431,7 +583,7 @@ public class OrderService {
         List<BaseModuleFieldValue> moduleFieldValues = moduleFormService.getBaseModuleFieldValues(list, OrderListResponse::getModuleFields);
         // 获取选项值对应的 option
         Map<String, List<OptionDTO>> optionMap = moduleFormService.getOptionMap(formConfig, moduleFieldValues);
-        // 补充负责人选项
+        // 补充联系专员选项
         List<OptionDTO> ownerFieldOption = moduleFormService.getBusinessFieldOption(buildList,
                 OrderListResponse::getOwner, OrderListResponse::getOwnerName);
         optionMap.put(BusinessModuleField.ORDER_OWNER.getBusinessKey(), ownerFieldOption);
@@ -453,10 +605,12 @@ public class OrderService {
         Map<String, List<BaseModuleFieldValue>> resolvefieldValueMap = orderFieldService.setBusinessRefFieldValue(list, moduleFormService.getFlattenFormFields(FormKey.ORDER.getKey(), orgId), orderFiledMap);
 
 
-        List<String> ownerIds = list.stream()
+        List<String> ownerValues = list.stream()
                 .map(OrderListResponse::getOwner)
                 .distinct()
                 .toList();
+        Map<String, String> ownerIdMap = baseService.resolveUserIdsByIdsOrNames(ownerValues, orgId);
+        List<String> ownerIds = ownerIdMap.values().stream().distinct().toList();
         Map<String, String> userNameMap = baseService.getUserNameMap(ownerIds);
         Map<String, UserDeptDTO> userDeptMap = baseService.getUserDeptMapByUserIds(ownerIds, orgId);
 
@@ -465,13 +619,16 @@ public class OrderService {
                         OrderStageConfigResponse::getName));
 
         list.forEach(item -> {
-            item.setOwnerName(userNameMap.get(item.getOwner()));
-            UserDeptDTO userDeptDTO = userDeptMap.get(item.getOwner());
+            item.setName(orderDisplayName(item));
+            item.setStage(item.getStatus());
+            String ownerId = ownerIdMap.get(item.getOwner());
+            item.setOwnerName(StringUtils.defaultIfBlank(userNameMap.get(ownerId), item.getOwner()));
+            UserDeptDTO userDeptDTO = userDeptMap.get(ownerId);
             if (userDeptDTO != null) {
                 item.setDepartmentId(userDeptDTO.getDeptId());
                 item.setDepartmentName(userDeptDTO.getDeptName());
             }
-            item.setStageName(stageNameMap.get(item.getStage()));
+            item.setStageName(StringUtils.defaultIfBlank(stageNameMap.get(item.getStatus()), item.getStatus()));
             // 获取自定义字段
             List<BaseModuleFieldValue> orderFields = resolvefieldValueMap.get(item.getId());
             item.setModuleFields(orderFields);
@@ -519,6 +676,7 @@ public class OrderService {
         if (first != null) {
             OrderGetResponse response = JSON.parseObject(first.getOrderValue(), OrderGetResponse.class);
             response.setStage(stage);
+            response.setStatus(stage);
             first.setOrderValue(JSON.toJSONString(response));
             snapshotBaseMapper.update(first);
         }
@@ -535,9 +693,9 @@ public class OrderService {
         }
 
         Map<String, String> oldMap = new HashMap<>();
-        oldMap.put("orderStage", Translator.get("order.stage." + order.getStage().toLowerCase()));
+        oldMap.put("orderStage", StringUtils.defaultString(order.getStatus()));
 
-        order.setStage(request.getStage());
+        order.setStatus(request.getStage());
 
         order.setUpdateTime(System.currentTimeMillis());
         order.setUpdateUser(userId);
@@ -545,9 +703,9 @@ public class OrderService {
 
         updateStageSnapshot(request.getId(), request.getStage());
 
-        LogDTO logDTO = new LogDTO(orgId, request.getId(), userId, LogType.UPDATE, LogModule.ORDER_INDEX, order.getName());
+        LogDTO logDTO = new LogDTO(orgId, request.getId(), userId, LogType.UPDATE, LogModule.ORDER_INDEX, orderDisplayName(order));
         Map<String, String> newMap = new HashMap<>();
-        newMap.put("orderStage", Translator.get("order.stage." + request.getStage().toLowerCase()));
+        newMap.put("orderStage", StringUtils.defaultString(request.getStage()));
         logDTO.setOriginalValue(oldMap);
         logDTO.setModifiedValue(newMap);
         logService.add(logDTO);
@@ -592,7 +750,7 @@ public class OrderService {
         }
         List<Order> records = orderMapper.selectByIds(ids);
         if (CollectionUtils.isNotEmpty(records)) {
-            List<String> names = records.stream().map(Order::getName).toList();
+            List<String> names = records.stream().map(this::orderDisplayName).toList();
             return String.join(",", names);
         }
         return StringUtils.EMPTY;
@@ -607,14 +765,14 @@ public class OrderService {
      */
     public List<Order> getOrderListByNames(List<String> names) {
         LambdaQueryWrapper<Order> lambdaQueryWrapper = new LambdaQueryWrapper<>();
-        lambdaQueryWrapper.in(Order::getName, names);
+        lambdaQueryWrapper.in(Order::getOrderNo, names);
         return orderMapper.selectListByLambda(lambdaQueryWrapper);
     }
 
     public Object getOrderName(String id) {
         Order order = orderMapper.selectByPrimaryKey(id);
         if (order != null) {
-            return order.getName();
+            return orderDisplayName(order);
         }
         return null;
     }

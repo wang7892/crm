@@ -875,8 +875,7 @@
           "value": "CUSTOMER",
           "fieldIds": [
             "recordCustomer",
-            "recordOpportunity",
-            "recordContact"
+            "recordOpportunity"
           ]
         },
         {
@@ -929,22 +928,6 @@
       "readable": true,
       "editable": true,
       "fieldWidth": 1,
-      "mobile": true
-    },
-    {
-      "name": "联系人",
-      "internalKey": "recordContact",
-      "type": "DATA_SOURCE",
-      "dataSourceType": "CONTACT",
-      "showLabel": true,
-      "readable": true,
-      "editable": true,
-      "fieldWidth": 1,
-      "rules": [
-        {
-          "key": "required"
-        }
-      ],
       "mobile": true
     },
     {
@@ -1067,8 +1050,7 @@
           "value": "CUSTOMER",
           "fieldIds": [
             "planCustomer",
-            "planOpportunity",
-            "planContact"
+            "planOpportunity"
           ]
         },
         {
@@ -1121,22 +1103,6 @@
       "readable": true,
       "editable": true,
       "fieldWidth": 1,
-      "mobile": true
-    },
-    {
-      "name": "联系人",
-      "internalKey": "planContact",
-      "type": "DATA_SOURCE",
-      "dataSourceType": "CONTACT",
-      "showLabel": true,
-      "readable": true,
-      "editable": true,
-      "fieldWidth": 1,
-      "rules": [
-        {
-          "key": "required"
-        }
-      ],
       "mobile": true
     },
     {
@@ -2354,57 +2320,10 @@
       "titleColor": "#323535"
     },
     {
-      "name": "订单编号",
+      "name": "订单号",
       "internalKey": "orderNo",
-      "type": "SERIAL_NUMBER",
-      "placeholder": "无需录入, 自动生成",
-      "showLabel": true,
-      "serialNumberRules": [
-        "XSDD",
-        "-",
-        "yyyyMM",
-        "-",
-        "6"
-      ],
-      "readable": true,
-      "editable": false,
-      "fieldWidth": 1,
-      "mobile": true,
-      "disableProps": [
-        "serialNumberRules"
-      ]
-    },
-    {
-      "name": "关联客户",
-      "internalKey": "orderCustomer",
-      "type": "DATA_SOURCE",
-      "dataSourceType": "CUSTOMER",
-      "showLabel": true,
-      "readable": true,
-      "editable": true,
-      "fieldWidth": 1,
-      "rules": [
-        {
-          "key": "required"
-        }
-      ],
-      "mobile": true
-    },
-    {
-      "name": "关联合同",
-      "internalKey": "orderContract",
-      "type": "DATA_SOURCE",
-      "dataSourceType": "CONTRACT",
-      "showLabel": true,
-      "readable": true,
-      "editable": true,
-      "fieldWidth": 1,
-      "mobile": true
-    },
-    {
-      "name": "订单名称",
-      "internalKey": "orderName",
       "type": "INPUT",
+      "placeholder": "请输入订单号",
       "showLabel": true,
       "readable": true,
       "editable": true,
@@ -2413,14 +2332,11 @@
       "rules": [
         {
           "key": "required"
-        },
-        {
-          "key": "unique"
         }
       ]
     },
     {
-      "name": "负责人",
+      "name": "联系专员",
       "internalKey": "orderOwner",
       "type": "MEMBER",
       "hasCurrentUser": true,
@@ -2506,22 +2422,6 @@
           "showThousandsSeparator": true
         }
       ]
-    },
-    {
-      "name": "订单金额",
-      "internalKey": "orderAmount",
-      "type": "FORMULA",
-      "showLabel": true,
-      "readable": true,
-      "editable": false,
-      "fieldWidth": 1,
-      "rules": [
-        {
-          "key": "required"
-        }
-      ],
-      "mobile": true,
-      "showThousandsSeparator": true
     },
     {
       "name": "订单收货信息",

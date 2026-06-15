@@ -10,7 +10,7 @@ const customer: AppRouteRecordRaw = {
   component: DEFAULT_LAYOUT,
   meta: {
     locale: 'module.customerManagement',
-    permissions: ['CUSTOMER_MANAGEMENT:READ', 'CUSTOMER_MANAGEMENT_POOL:READ', 'CUSTOMER_MANAGEMENT_CONTACT:READ'],
+    permissions: ['CUSTOMER_MANAGEMENT:READ', 'CUSTOMER_MANAGEMENT_POOL:READ'],
     icon: 'iconicon_customer',
     hideChildrenInMenu: true,
     collapsedLocale: 'menu.customer',
@@ -24,16 +24,6 @@ const customer: AppRouteRecordRaw = {
         locale: 'menu.customer',
         isTopMenu: true,
         permissions: ['CUSTOMER_MANAGEMENT:READ'],
-      },
-    },
-    {
-      path: 'contact',
-      name: CustomerRouteEnum.CUSTOMER_CONTACT,
-      component: () => import('@/views/customer/contact.vue'),
-      meta: {
-        locale: 'menu.contact',
-        isTopMenu: true,
-        permissions: ['CUSTOMER_MANAGEMENT_CONTACT:READ'],
       },
     },
     {

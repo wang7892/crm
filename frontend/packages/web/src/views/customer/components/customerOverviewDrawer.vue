@@ -36,16 +36,8 @@
     </template>
     <template #right>
       <div class="h-full pt-[16px]">
-        <ContactTable
-          v-if="activeTab === 'contact'"
-          :refresh-key="refreshKey"
-          :source-id="props.sourceId"
-          :initial-source-name="sourceName"
-          :readonly="collaborationType === 'READ_ONLY' || props.readonly"
-          :form-key="FormDesignKeyEnum.CUSTOMER_CONTACT"
-        />
         <FollowDetail
-          v-else-if="['followRecord', 'followPlan'].includes(activeTab) && show"
+          v-if="['followRecord', 'followPlan'].includes(activeTab) && show"
           :active-type="(activeTab as 'followRecord'| 'followPlan')"
           wrapper-class="h-[calc(100vh-162px)]"
           virtual-scroll-height="calc(100vh - 254px)"
@@ -142,7 +134,6 @@
 
   import CrmCard from '@/components/pure/crm-card/index.vue';
   import type { ActionsItem } from '@/components/pure/crm-more-action/type';
-  import ContactTable from '@/components/business/crm-form-create-table/contactTable.vue';
   import CrmFormDescription from '@/components/business/crm-form-description/index.vue';
   import CrmHeaderTable from '@/components/business/crm-header-table/index.vue';
   import CrmMoveModal from '@/components/business/crm-move-modal/index.vue';
@@ -236,19 +227,13 @@
     ];
   });
 
-  const activeTab = ref('contact');
+  const activeTab = ref('followRecord');
   const tabList = computed<TabContentItem[]>(() => {
     const fullList = [
       {
         name: 'followRecord',
         tab: t('crmFollowRecord.followRecord'),
         enable: true,
-      },
-      {
-        name: 'contact',
-        tab: t('opportunity.contactInfo'),
-        enable: true,
-        permission: ['CUSTOMER_MANAGEMENT_CONTACT:READ'],
       },
       {
         name: 'followPlan',

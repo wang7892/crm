@@ -102,10 +102,15 @@ export default async function useSearchTable(props: SearchTableProps) {
   }
 
   function openNewPageCustomerContact(row: any) {
-    openNewPage(CustomerRouteEnum.CUSTOMER_CONTACT, {
+    if (row.inSharedPool) {
+      openNewPage(CustomerRouteEnum.CUSTOMER_OPEN_SEA, {
+        id: row.customerId,
+        poolId: row.poolId,
+      });
+      return;
+    }
+    openNewPage(CustomerRouteEnum.CUSTOMER_INDEX, {
       id: row.customerId,
-      inSharedPool: row.inSharedPool,
-      poolId: row.poolId,
     });
   }
 

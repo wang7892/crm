@@ -18,6 +18,15 @@
         <n-form-item require-mark-placement="left" label-placement="left" path="name" :label="t('org.userName')">
           <n-input v-model:value="form.name" type="text" :placeholder="t('common.pleaseInput')" :maxlength="255" />
         </n-form-item>
+        <n-form-item require-mark-placement="left" label-placement="left" path="roleIds" :label="t('org.role')">
+          <n-select
+            v-model:value="form.roleIds"
+            multiple
+            filterable
+            :placeholder="t('common.pleaseSelect')"
+            :options="roleOptions"
+          />
+        </n-form-item>
         <n-form-item require-mark-placement="left" label-placement="left" path="gender" :label="t('org.gender')">
           <n-radio-group v-model:value="form.gender" name="radiogroup">
             <n-space>
@@ -142,15 +151,6 @@
             :label="t('org.workingCity')"
           >
             <CrmCitySelect v-model:value="form.workCity" />
-          </n-form-item>
-          <n-form-item require-mark-placement="left" label-placement="left" path="roleIds" :label="t('org.role')">
-            <n-select
-              v-model:value="form.roleIds"
-              multiple
-              filterable
-              :placeholder="t('common.pleaseSelect')"
-              :options="roleOptions"
-            />
           </n-form-item>
           <n-form-item
             require-mark-placement="left"
@@ -312,6 +312,9 @@
     phone: [{ validator: validateUserPhone, trigger: ['input', 'blur'] }],
     email: [{ validator: validateUserEmail, trigger: ['input', 'blur'] }],
     departmentId: [{ required: true, message: t('common.pleaseSelect'), trigger: ['input', 'blur'] }],
+    roleIds: [
+      { type: 'array', required: true, min: 1, message: t('common.pleaseSelect'), trigger: ['change', 'blur'] },
+    ],
   };
 
   const showForm = ref(false);

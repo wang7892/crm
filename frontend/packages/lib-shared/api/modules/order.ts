@@ -27,11 +27,12 @@ import {
   DeleteOrderStatusUrl,
   DownloadOrderUrl,
   OrderStatisticUrl,
+  SyncExternalOrderInfoUrl,
 } from '@lib/shared/api/requrls/order';
 import type { FormDesignConfigDetailParams } from '@lib/shared/models/system/module';
 import type { CommonList, TableDraggedParams } from '@lib/shared/models/common';
 import type { CustomerTabHidden } from '@lib/shared/models/customer';
-import type { OrderItem, UpdateOrderParams } from '@lib/shared/models/order';
+import type { ExternalOrderSyncResult, OrderItem, UpdateOrderParams } from '@lib/shared/models/order';
 import type { TableQueryParams } from '@lib/shared/models/common';
 
 import type { ViewItem, ViewParams } from '@lib/shared/models/view';
@@ -174,6 +175,10 @@ export default function useOrderApi(CDR: CordysAxios) {
     return CDR.post({ url: OrderStatisticUrl, data }, { ignoreCancelToken: true });
   }
 
+  function syncExternalOrderInfo(data?: { minId?: number; limit?: number }) {
+    return CDR.post<ExternalOrderSyncResult>({ url: SyncExternalOrderInfoUrl, data: data ?? {} });
+  }
+
   return {
     getOrderFormConfig,
     getOrderFormSnapshotConfig,
@@ -202,5 +207,6 @@ export default function useOrderApi(CDR: CordysAxios) {
     updateOrderStage,
     downloadOrder,
     getOrderStatistic,
+    syncExternalOrderInfo,
   };
 }

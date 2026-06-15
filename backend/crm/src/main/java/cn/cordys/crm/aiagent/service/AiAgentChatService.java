@@ -18,6 +18,7 @@ import cn.cordys.crm.aiagent.dto.internal.AiAgentUnansweredQuestionRow;
 import cn.cordys.crm.aiagent.dto.internal.ExternalOrderQueryResult;
 import cn.cordys.crm.aiagent.dto.internal.ExternalOrderRow;
 import cn.cordys.crm.aiagent.dto.query.AiAgentQueryFilter;
+import cn.cordys.crm.aiagent.dto.query.AiAgentQueryMetric;
 import cn.cordys.crm.aiagent.dto.query.AiAgentQueryOrder;
 import cn.cordys.crm.aiagent.dto.query.AiAgentQueryPlan;
 import cn.cordys.crm.aiagent.dto.request.AiAgentChatRequest;
@@ -44,6 +45,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 @Transactional(rollbackFor = Exception.class)
@@ -124,6 +127,7 @@ public class AiAgentChatService {
                 userId, orgId, viewId, PermissionConstants.CUSTOMER_MANAGEMENT_READ);
         DeptDataPermissionDTO contractDataPermission = dataScopeService.getDeptDataPermission(
                 userId, orgId, viewId, PermissionConstants.CONTRACT_READ);
+        DeptDataPermissionDTO orderDataPermission = getOrderDataPermission(userId, orgId, viewId);
 
         AiAgentSession session = aiAgentAuditService.ensureSession(request.getSessionId(), request.getQuestion(), userId, orgId);
         AiAgentMessage userMessage = aiAgentAuditService.saveMessage(
@@ -136,6 +140,7 @@ public class AiAgentChatService {
         context.setDataPermission(customerDataPermission);
         context.setCustomerDataPermission(customerDataPermission);
         context.setContractDataPermission(contractDataPermission);
+        context.setOrderDataPermission(orderDataPermission);
         context.setLlmProvider(request.getLlmProvider());
         context.setTimeWindow(resolveTimeWindow(request.getQuestion(), request.getTimeRange()));
 
@@ -333,6 +338,9 @@ public class AiAgentChatService {
         if (isVisibleCustomerListQuestion(question)) {
             return visibleCustomerList(question, context);
         }
+        if (isCrmOrderQuestion(question)) {
+            return salesOrderDatabaseQuery(question, context);
+        }
         if (isSpecialistNoFollowQuestion(question)) {
             String specialistName = extractSpecialistName(question);
             if (StringUtils.isNotBlank(specialistName)) {
@@ -486,6 +494,167 @@ public class AiAgentChatService {
                 && !containsAny(question, "某客户", "客户最近沟通"));
     }
 
+    private boolean isCrmOrderQuestion(String question) {
+        if (StringUtils.isBlank(question) || !containsAny(question, "订单", "订单号", "加工单号", "生产单号")) {
+            return false;
+        }
+        if (containsAny(question, "外部订单", "外部合同", "contract_info")) {
+            return false;
+        }
+        return containsAny(question,
+                "订单", "订单号", "加工单号", "生产单号", "原料", "成分", "加工商", "跟单员", "联系专员",
+                "订单状态", "下单时间", "颜色", "色号", "加工工艺", "数量", "单价", "金额", "币种",
+                "负责的订单", "订单有哪些", "有哪些订单", "最近订单", "订单总数", "订单总金额");
+    }
+
+    private AiAgentChatResponse salesOrderDatabaseQuery(String question, AiAgentContext context) {
+        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
+        queryPlan.setIntent("CRM_DATABASE_QUERY");
+        queryPlan.setEntity("sales_order");
+        queryPlan.setLimit(20);
+
+        List<AiAgentQueryFilter> filters = new ArrayList<>();
+        String ownerName = extractOrderOwnerName(question);
+        if (StringUtils.isNotBlank(ownerName)) {
+            filters.add(filter("owner_name", "like", ownerName));
+        }
+        String orderNo = extractOrderNo(question);
+        if (StringUtils.isNotBlank(orderNo)) {
+            filters.add(filter("order_no", "like", orderNo));
+        }
+        String processOrderNo = extractProcessOrderNo(question);
+        if (StringUtils.isNotBlank(processOrderNo)) {
+            filters.add(filter("process_order_no", "like", processOrderNo));
+        }
+        String customerName = extractOrderCustomerName(question);
+        if (StringUtils.isNotBlank(customerName)) {
+            filters.add(filter("customer_name", "like", customerName));
+        }
+        String status = extractOrderStatus(question);
+        if (StringUtils.isNotBlank(status)) {
+            filters.add(filter("status", "like", status));
+        }
+        if (containsAny(question, "最近", "本月", "这个月", "近7天", "最近7天", "近30天", "本季度", "今年")) {
+            filters.add(filter("order_time", "between", "CURRENT_TIME_WINDOW"));
+        }
+        queryPlan.setFilters(filters);
+
+        if (containsAny(question, "总数", "多少条", "多少个")) {
+            queryPlan.setQueryType("COUNT");
+            return aiAgentDatabaseQueryService.answer(queryPlan, context);
+        }
+        if (containsAny(question, "每个联系专员", "每个销售", "各联系专员", "各销售")) {
+            queryPlan.setQueryType("AGGREGATE");
+            queryPlan.setGroupBy(List.of("owner_name"));
+            AiAgentQueryMetric metric = new AiAgentQueryMetric();
+            metric.setFunction("count");
+            metric.setField("id");
+            metric.setAlias("count_value");
+            queryPlan.setMetrics(List.of(metric));
+            return aiAgentDatabaseQueryService.answer(queryPlan, context);
+        }
+        if (containsAny(question, "总金额", "金额合计", "合计金额")) {
+            queryPlan.setQueryType("AGGREGATE");
+            AiAgentQueryMetric metric = new AiAgentQueryMetric();
+            metric.setFunction("sum");
+            metric.setField("amount");
+            metric.setAlias("total_amount");
+            queryPlan.setMetrics(List.of(metric));
+            return aiAgentDatabaseQueryService.answer(queryPlan, context);
+        }
+
+        queryPlan.setQueryType("LIST");
+        queryPlan.setSelectFields(defaultSalesOrderSelectFields(question));
+        AiAgentQueryOrder order = new AiAgentQueryOrder();
+        order.setField(containsAny(question, "最近", "新订单", "下单") ? "order_time" : "create_time");
+        order.setDirection("desc");
+        queryPlan.setOrderBy(List.of(order));
+        return aiAgentDatabaseQueryService.answer(queryPlan, context);
+    }
+
+    private List<String> defaultSalesOrderSelectFields(String question) {
+        if (containsAny(question, "原料", "成分")) {
+            return List.of("order_no", "customer_name", "owner_name", "material_name", "material_type", "composition", "status");
+        }
+        if (containsAny(question, "加工单号", "生产单号", "加工商", "跟单员", "加工工艺")) {
+            return List.of("order_no", "process_order_no", "processor", "merchandiser", "process_technology", "owner_name", "status");
+        }
+        if (containsAny(question, "金额", "单价", "数量", "币种")) {
+            return List.of("order_no", "customer_name", "owner_name", "quantity", "unit", "unit_price", "amount", "currency", "status");
+        }
+        return List.of("order_no", "customer_name", "contract_name", "owner_name", "status", "material_name", "composition", "order_time", "amount");
+    }
+
+    private AiAgentQueryFilter filter(String field, String operator, Object value) {
+        AiAgentQueryFilter filter = new AiAgentQueryFilter();
+        filter.setField(field);
+        filter.setOperator(operator);
+        filter.setValue(value);
+        return filter;
+    }
+
+    private String extractOrderOwnerName(String question) {
+        String text = cleanupLeadingWords(question);
+        for (String marker : List.of("负责的订单", "负责订单", "的订单有哪些", "有哪些订单", "订单有哪些",
+                "负责的客户订单", "名下订单", "联系专员", "销售")) {
+            int index = text.indexOf(marker);
+            if (index > 0) {
+                String value = cleanupName(text.substring(0, index));
+                if (StringUtils.isNotBlank(value) && !containsAny(value, "客户", "订单", "最近", "本月", "所有", "全部")) {
+                    return value;
+                }
+            }
+        }
+        return "";
+    }
+
+    private String extractOrderCustomerName(String question) {
+        if (!containsAny(question, "客户")) {
+            return "";
+        }
+        String text = cleanupLeadingWords(question);
+        for (String marker : List.of("客户的订单", "这个客户", "的订单", "订单有哪些", "最近有哪些订单")) {
+            int index = text.indexOf(marker);
+            if (index > 0) {
+                String value = cleanupName(text.substring(0, index));
+                if (StringUtils.isNotBlank(value) && !containsAny(value, "销售", "联系专员", "负责")) {
+                    return value;
+                }
+            }
+        }
+        return "";
+    }
+
+    private String extractOrderNo(String question) {
+        Matcher matcher = Pattern.compile("(?i)(MLS[_\\-]?[A-Za-z0-9]+|[A-Z]{2,}[_\\-]?[0-9][A-Za-z0-9_\\-]*)").matcher(question);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        String value = extractAfterAny(question, "订单号");
+        if (StringUtils.isBlank(value) || containsAny(value, "状态", "是什么", "多少", "哪些", "有哪些", "订单")) {
+            return "";
+        }
+        return value;
+    }
+
+    private String extractProcessOrderNo(String question) {
+        if (!containsAny(question, "加工单号", "生产单号")) {
+            return "";
+        }
+        String value = extractAfterAny(question, "加工单号", "生产单号");
+        if (StringUtils.isBlank(value) || containsAny(value, "是什么", "多少", "哪些", "有哪些", "订单")) {
+            return "";
+        }
+        return value;
+    }
+
+    private String extractOrderStatus(String question) {
+        if (!containsAny(question, "状态为", "状态是", "订单状态为", "订单状态是")) {
+            return "";
+        }
+        return cleanupName(extractAfterAny(question, "订单状态为", "订单状态是", "状态为", "状态是"));
+    }
+
     private void logLlmParsedQuestion(String question, ParsedAiAgentQuestion parsedQuestion) {
         if (parsedQuestion == null) {
             log.debug("AI agent LLM parse skipped or empty: question={}", abbreviateForLog(question));
@@ -561,6 +730,7 @@ public class AiAgentChatService {
             return null;
         }
         applyDeterministicParameterHints(parsedQuestion);
+        rewriteCrmOrderQueryToSalesOrder(parsedQuestion);
         if (parsedQuestion.isNeedClarification()) {
             AiAgentChatResponse response = clarification(parsedQuestion);
             addLlmReasoningTrace(response, parsedQuestion);
@@ -573,6 +743,11 @@ public class AiAgentChatService {
         }
         if (StringUtils.isBlank(parsedQuestion.getIntent())) {
             return null;
+        }
+        if (isCrmOrderQuestion(parsedQuestion.getRawQuestion()) && shouldUseSalesOrderQuery(parsedQuestion.getIntent())) {
+            AiAgentChatResponse response = salesOrderDatabaseQuery(parsedQuestion.getRawQuestion(), context);
+            addLlmReasoningTrace(response, parsedQuestion);
+            return response;
         }
         if (isSpecialistIntent(parsedQuestion.getIntent())
                 && isCustomerNameKeywordQuestion(parsedQuestion.getRawQuestion())) {
@@ -641,6 +816,78 @@ public class AiAgentChatService {
         };
         addLlmReasoningTrace(response, parsedQuestion);
         return response;
+    }
+
+    private void rewriteCrmOrderQueryToSalesOrder(ParsedAiAgentQuestion parsedQuestion) {
+        if (!StringUtils.equals(parsedQuestion.getIntent(), "CRM_DATABASE_QUERY")
+                || parsedQuestion.getQueryPlan() == null
+                || !isCrmOrderQuestion(parsedQuestion.getRawQuestion())) {
+            return;
+        }
+        AiAgentQueryPlan plan = parsedQuestion.getQueryPlan();
+        if (!StringUtils.equalsAny(plan.getEntity(), "contract_info", "contract")) {
+            return;
+        }
+        plan.setEntity("sales_order");
+        if (plan.getSelectFields() == null || plan.getSelectFields().isEmpty()
+                || plan.getSelectFields().contains("product_name")
+                || plan.getSelectFields().contains("manager")
+                || plan.getSelectFields().contains("order_status")) {
+            plan.setSelectFields(defaultSalesOrderSelectFields(parsedQuestion.getRawQuestion()));
+        } else {
+            plan.setSelectFields(plan.getSelectFields().stream()
+                    .map(this::mapOrderFieldToSalesOrderField)
+                    .distinct()
+                    .toList());
+        }
+        if (plan.getFilters() != null) {
+            for (AiAgentQueryFilter filter : plan.getFilters()) {
+                filter.setField(mapOrderFieldToSalesOrderField(filter.getField()));
+            }
+        }
+        if (plan.getGroupBy() != null) {
+            plan.setGroupBy(plan.getGroupBy().stream()
+                    .map(this::mapOrderFieldToSalesOrderField)
+                    .distinct()
+                    .toList());
+        }
+        if (plan.getOrderBy() != null) {
+            for (AiAgentQueryOrder order : plan.getOrderBy()) {
+                order.setField(mapOrderFieldToSalesOrderField(order.getField()));
+            }
+        }
+        if (plan.getMetrics() != null) {
+            for (AiAgentQueryMetric metric : plan.getMetrics()) {
+                metric.setField(mapOrderFieldToSalesOrderField(metric.getField()));
+            }
+        }
+    }
+
+    private String mapOrderFieldToSalesOrderField(String field) {
+        return switch (StringUtils.defaultString(field)) {
+            case "manager" -> "owner_name";
+            case "order_status", "approval_status" -> "status";
+            case "product_name" -> "material_name";
+            case "customer" -> "customer_name";
+            case "number" -> "order_no";
+            default -> field;
+        };
+    }
+
+    private boolean shouldUseSalesOrderQuery(String intent) {
+        return switch (StringUtils.defaultString(intent)) {
+            case "ORDER_AMOUNT_INSIGHT",
+                 "ORDER_DELIVERY_SIGNAL_LIST",
+                 "ORDER_STATUS_BY_NO",
+                 "PRODUCT_ORDER_LIST",
+                 "SALES_CUSTOMER_NEW_ORDER_CHECK",
+                 "SALES_CUSTOMER_ACTIVE_ORDER_LIST",
+                 "SALES_RECENT_ORDER_LIST",
+                 "CUSTOMER_NEW_ORDER_CHECK",
+                 "CUSTOMER_ACTIVE_ORDER_LIST",
+                 "CUSTOMER_CONTRACT_STATUS_LIST" -> true;
+            default -> false;
+        };
     }
 
     private AiAgentChatResponse clarification(ParsedAiAgentQuestion parsedQuestion) {
@@ -751,18 +998,22 @@ public class AiAgentChatService {
 
     private AiAgentChatResponse dataSourceGuide(String question) {
         AiAgentChatResponse response = base("AI_AGENT_DATA_SOURCE_GUIDE");
-        response.setAnswer("当前智能体主要使用 CRM 客户、跟进、企微、邮件，以及外部订单/合同数据源回答问题。");
+        response.setAnswer("当前智能体主要使用 CRM 客户、订单、合同、跟进、企微和邮件数据回答问题。");
         response.getEvidence().add("customer");
+        response.getEvidence().add("sales_order");
+        response.getEvidence().add("contract");
         response.getEvidence().add("follow_up_record");
         response.getEvidence().add("wecom_ingestion_message");
         response.getEvidence().add("email_webhook_event");
         response.getEvidence().add("mls_agent_data.contract_info");
         response.getTools().add(tool("data_source_guide", "SUCCESS", "返回 AI Agent 数据来源说明", 0L));
         response.getPoints().add("客户基础信息来自 customer。");
+        response.getPoints().add("订单信息优先来自 CRM 主订单表 sales_order，包含订单号、客户、合同、联系专员、状态、原料、成分、下单时间、金额等字段。");
+        response.getPoints().add("合同信息来自 contract。");
         response.getPoints().add("跟进记录来自 follow_up_record。");
         response.getPoints().add("企微统计来自 wecom_ingestion_message，只返回统计，不返回聊天正文。");
         response.getPoints().add("邮件统计来自 email_webhook_event，只返回统计，不返回邮件正文。");
-        response.getPoints().add("订单/合同来自外部 mls_agent_data.contract_info，只读查询。");
+        response.getPoints().add("外部 mls_agent_data.contract_info 仅作为历史外部合同/订单明细数据源，不再作为普通订单问题的默认来源。");
         if (question.contains("聊天正文")) {
             response.getWarnings().add("聊天正文、邮件正文和敏感字段默认不返回。");
         }
@@ -1884,6 +2135,15 @@ public class AiAgentChatService {
             return InternalUserView.DEPARTMENT.name();
         }
         return InternalUserView.ALL.name();
+    }
+
+    private DeptDataPermissionDTO getOrderDataPermission(String userId, String orgId, String viewId) {
+        DeptDataPermissionDTO basePermission = dataScopeService.getDeptDataPermission(userId, orgId, PermissionConstants.ORDER_READ);
+        if (basePermission != null && Boolean.TRUE.equals(basePermission.getAll()) && InternalUserView.isSelf(viewId)) {
+            basePermission.setViewId(viewId);
+            return basePermission;
+        }
+        return dataScopeService.getDeptDataPermission(userId, orgId, viewId, PermissionConstants.ORDER_READ);
     }
 
     private boolean isSensitiveOrUnauthorizedProbe(String question) {

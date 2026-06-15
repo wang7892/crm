@@ -2,6 +2,7 @@ package cn.cordys.crm.order.mapper;
 
 import cn.cordys.common.dto.DeptDataPermissionDTO;
 import cn.cordys.common.dto.condition.BaseCondition;
+import cn.cordys.crm.order.domain.Order;
 import cn.cordys.crm.order.dto.request.OrderPageRequest;
 import cn.cordys.crm.order.dto.response.OrderGetResponse;
 import cn.cordys.crm.order.dto.response.OrderListResponse;
@@ -23,4 +24,8 @@ public interface ExtOrderMapper {
     int countByStage(@Param("stage") String stage);
 
     OrderStatisticResponse searchStatistic(@Param("request") BaseCondition request, @Param("orgId") String orgId, @Param("userId") String userId, @Param("dataPermission") DeptDataPermissionDTO dataPermission);
+
+    Order findByOrderInfoColumns(@Param("order") Order order, @Param("orgId") String orgId);
+
+    int updateContractRelation(@Param("order") Order order);
 }

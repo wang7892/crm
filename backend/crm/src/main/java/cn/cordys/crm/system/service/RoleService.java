@@ -217,13 +217,16 @@ public class RoleService {
             // 内置角色名称不能修改
             role.setName(null);
         }
+        if (originRole.getInternal() && Strings.CS.equals(originRole.getId(), InternalRole.SALES_STAFF.getValue())) {
+            role.setDataScope(RoleDataScope.SELF.name());
+        }
         role.setUpdateTime(System.currentTimeMillis());
         role.setUpdateUser(userId);
         roleMapper.update(role);
 
         RoleGetResponse roleGetResponse = get(role.getId());
 
-        String dataScope = request.getDataScope();
+        String dataScope = role.getDataScope();
         if (StringUtils.isNotBlank(dataScope)
                 && Strings.CS.equals(originRole.getDataScope(), RoleDataScope.DEPT_CUSTOM.name())
                 && !Strings.CS.equals(dataScope, RoleDataScope.DEPT_CUSTOM.name())) {

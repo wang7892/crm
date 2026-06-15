@@ -24,6 +24,7 @@ public class AiAgentQueryPermissionService {
             case CUSTOMER -> customerPermission("c", context.getDataPermission(), context);
             case CUSTOMER_JOIN -> customerJoinPermission(context);
             case CONTRACT -> ownerPermission("ct", context.getContractDataPermission(), context, true);
+            case ORDER -> orderPermission(context);
             case ORGANIZATION -> organizationPermission(entity, context);
             case USER_ORGANIZATION -> userOrganizationPermission(context);
             case EXTERNAL_CONTRACT -> externalContractPermission(context);
@@ -113,6 +114,57 @@ public class AiAgentQueryPermissionService {
         return new PermissionSql(join.toString(), where.toString());
     }
 
+    private PermissionSql orderPermission(AiAgentContext context) {
+        DeptDataPermissionDTO dataPermission = context.getOrderDataPermission() == null
+                ? context.getDataPermission()
+                : context.getOrderDataPermission();
+        StringBuilder join = new StringBuilder();
+        StringBuilder where = new StringBuilder(" AND so.organization_id = :orgId");
+        if (dataPermission == null) {
+            where.append(" AND 1 = 0");
+            return new PermissionSql(join.toString(), where.toString());
+        }
+        if (Boolean.TRUE.equals(dataPermission.getAll())) {
+            return new PermissionSql(join.toString(), where.toString());
+        }
+        if (Boolean.TRUE.equals(dataPermission.getSelf())) {
+            where.append("""
+                     AND (
+                        CONVERT(so.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                            CONVERT(:userId USING utf8mb4) COLLATE utf8mb4_general_ci
+                        OR CONVERT(so.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                            (SELECT CONVERT(su_perm_self.name USING utf8mb4) COLLATE utf8mb4_general_ci
+                               FROM sys_user su_perm_self
+                              WHERE CONVERT(su_perm_self.id USING utf8mb4) COLLATE utf8mb4_general_ci =
+                                    CONVERT(:userId USING utf8mb4) COLLATE utf8mb4_general_ci
+                              LIMIT 1)
+                    )
+                    """);
+            return new PermissionSql(join.toString(), where.toString());
+        }
+        if (dataPermission.getDeptIds() != null && !dataPermission.getDeptIds().isEmpty()) {
+            join.append("""
+                    JOIN sys_user order_owner_perm ON (
+                        CONVERT(so.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                            CONVERT(order_owner_perm.id USING utf8mb4) COLLATE utf8mb4_general_ci
+                        OR CONVERT(so.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                            CONVERT(order_owner_perm.name USING utf8mb4) COLLATE utf8mb4_general_ci
+                    )
+                    JOIN sys_organization_user sou_perm ON CONVERT(order_owner_perm.id USING utf8mb4) COLLATE utf8mb4_general_ci =
+                        CONVERT(sou_perm.user_id USING utf8mb4) COLLATE utf8mb4_general_ci
+                     AND sou_perm.organization_id = :orgId
+                     AND (sou_perm.department_id IN (:deptIds)
+                    """);
+            if (StringUtils.equals(dataPermission.getViewId(), "ALL")) {
+                join.append(" OR sou_perm.user_id = :userId");
+            }
+            join.append(")\n");
+            return new PermissionSql(join.toString(), where.toString());
+        }
+        where.append(" AND 1 = 0");
+        return new PermissionSql(join.toString(), where.toString());
+    }
+
     private PermissionSql organizationPermission(AiAgentSemanticSchemaService.EntitySpec entity, AiAgentContext context) {
         String alias = switch (entity.name()) {
             case "wecom_ingestion_session_day" -> "ws";
@@ -180,6 +232,9 @@ public class AiAgentQueryPermissionService {
             case CONTRACT, EXTERNAL_CONTRACT -> context.getContractDataPermission() == null
                     ? context.getDataPermission()
                     : context.getContractDataPermission();
+            case ORDER -> context.getOrderDataPermission() == null
+                    ? context.getDataPermission()
+                    : context.getOrderDataPermission();
             default -> context.getDataPermission();
         };
         if (dataPermission != null && dataPermission.getDeptIds() != null && !dataPermission.getDeptIds().isEmpty()) {

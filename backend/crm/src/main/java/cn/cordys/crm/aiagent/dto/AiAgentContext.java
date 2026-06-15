@@ -10,6 +10,7 @@ public class AiAgentContext {
     private DeptDataPermissionDTO dataPermission;
     private DeptDataPermissionDTO customerDataPermission;
     private DeptDataPermissionDTO contractDataPermission;
+    private DeptDataPermissionDTO orderDataPermission;
     private String dataScope;
     private String llmProvider;
     private AiAgentTimeWindow timeWindow;

@@ -11,6 +11,7 @@ export const GetOrderTabUrl = '/order/tab';
 export const OrderInContractPageUrl = '/contract/order/page';
 export const DownloadOrderUrl = '/order/download';
 export const OrderStatisticUrl = '/order/statistic';
+export const SyncExternalOrderInfoUrl = '/order/sync/external-order-info';
 
 // 订单视图
 export const AddOrderViewUrl = '/order/view/add';

@@ -1,0 +1,1 @@
+ALTER TABLE sales_order MODIFY COLUMN owner VARCHAR(32) NULL COMMENT '联系专员';

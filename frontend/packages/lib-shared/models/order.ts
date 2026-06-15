@@ -3,12 +3,29 @@ import type { FormDesignConfigDetailParams } from '@lib/shared/models/system/mod
 
 export interface SaveOrderParams {
   name: string;
-  customerId: string; // 客户id
-  contractId: string; 
-  amount?: number; // 金额
-  owner: string; // 负责人
-  moduleFields?: ModuleField[]; // 自定义字段
+  customerId: string;
+  contractId: string;
+  amount?: number;
+  owner: string;
+  moduleFields?: ModuleField[];
   moduleFormConfigDTO?: FormDesignConfigDetailParams;
+  number?: string;
+  orderNo?: string;
+  processOrderNo?: string;
+  processor?: string;
+  merchandiser?: string;
+  status?: string;
+  color?: string;
+  colorCode?: string;
+  composition?: string;
+  materialName?: string;
+  materialType?: string;
+  processTechnology?: string;
+  orderTime?: number;
+  quantity?: number;
+  unit?: string;
+  unitPrice?: number;
+  currency?: string;
 }
 
 export interface UpdateOrderParams extends SaveOrderParams {
@@ -20,12 +37,29 @@ export interface OrderItem {
   name: string;
   contractName: string;
   contractId: string;
-  moduleFields: ModuleField[]; // 自定义字段
+  moduleFields: ModuleField[];
   createUser: string;
   updateUser: string;
   customerId: string;
   owner: string;
+  ownerName?: string;
   number: string;
+  orderNo?: string;
+  processOrderNo?: string;
+  processor?: string;
+  merchandiser?: string;
+  status?: string;
+  color?: string;
+  colorCode?: string;
+  composition?: string;
+  materialName?: string;
+  materialType?: string;
+  processTechnology?: string;
+  orderTime?: number;
+  quantity?: number;
+  unit?: string;
+  unitPrice?: number;
+  currency?: string;
   stage: string;
   stageName: string;
   organizationId: string;
@@ -34,11 +68,22 @@ export interface OrderItem {
   updateUserName: string;
   departmentId: string;
   departmentName: string;
-  createTime:number;
-  updateTime:number;
-  amount:number;
+  createTime: number;
+  updateTime: number;
+  amount: number;
   inCustomerPool: boolean;
   poolId: string;
   optionMap?: Record<string, any>;
   attachmentMap?: Record<string, any>;
+}
+
+export interface ExternalOrderSyncResult {
+  total: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  nextMinId?: number;
+  hasMore?: boolean;
+  configured: boolean;
+  warnings: string[];
 }

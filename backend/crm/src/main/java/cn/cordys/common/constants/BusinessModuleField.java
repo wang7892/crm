@@ -279,12 +279,8 @@ public enum BusinessModuleField {
     /*------ end: CONTRACT_PAYMENT_RECORD 合同回款记录  ------*/
 
     /*------ start: ORDER ------*/
-    ORDER_NAME("orderName", "name", Set.of("rules.required", "mobile", "readable"), FormKey.ORDER.getKey()),
-    ORDER_CUSTOMER("orderCustomer", "customerId", Set.of("dataSourceType"), FormKey.ORDER.getKey()),
-    ORDER_CONTRACT("orderContract", "contractId", Set.of("dataSourceType"), FormKey.ORDER.getKey()),
     ORDER_OWNER("orderOwner", "owner", Set.of(), FormKey.ORDER.getKey()),
-    ORDER_NO("orderNo", "number", Set.of("rules.required"), FormKey.ORDER.getKey()),
-    ORDER_TOTAL_AMOUNT("orderAmount", "amount", Set.of("rules.required", "mobile", "readable"), FormKey.ORDER.getKey()),
+    ORDER_NO("orderNo", "orderNo", Set.of("rules.required"), FormKey.ORDER.getKey()),
     /*------ end: ORDER ------*/
 
 

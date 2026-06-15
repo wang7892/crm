@@ -24,6 +24,7 @@ public class AiAgentSemanticSchemaService {
     public enum PermissionKind {
         CUSTOMER,
         CONTRACT,
+        ORDER,
         CUSTOMER_JOIN,
         ORGANIZATION,
         USER_ORGANIZATION,
@@ -115,6 +116,7 @@ public class AiAgentSemanticSchemaService {
         register(map, customerEntity());
         register(map, sysUserEntity());
         register(map, contractEntity());
+        register(map, salesOrderEntity());
         register(map, followRecordEntity());
         register(map, wecomSessionDayEntity());
         register(map, wecomMessageEntity());
@@ -205,6 +207,55 @@ public class AiAgentSemanticSchemaService {
                         field("end_time", "合同结束时间", "ct.end_time").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
                         field("create_time", "创建时间", "ct.create_time", "新增时间").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
                         field("update_time", "更新时间", "ct.update_time").sortable(true).valueKind(ValueKind.EPOCH_MILLIS)
+                ));
+    }
+
+    private EntitySpec salesOrderEntity() {
+        return entity("sales_order", "CRM订单", "sales_order", DataSourceKind.CRM, PermissionKind.ORDER,
+                """
+                        sales_order so
+                        LEFT JOIN customer c ON CONVERT(so.customer_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+                            CONVERT(c.id USING utf8mb4) COLLATE utf8mb4_general_ci
+                        LEFT JOIN contract ct ON CONVERT(so.contract_id USING utf8mb4) COLLATE utf8mb4_general_ci =
+                            CONVERT(ct.id USING utf8mb4) COLLATE utf8mb4_general_ci
+                        LEFT JOIN sys_user owner_user ON (
+                            CONVERT(so.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                                CONVERT(owner_user.id USING utf8mb4) COLLATE utf8mb4_general_ci
+                            OR CONVERT(so.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+                                CONVERT(owner_user.name USING utf8mb4) COLLATE utf8mb4_general_ci
+                        )
+                        """,
+                List.of("order_no", "customer_name", "contract_name", "owner_name", "status", "material_name", "composition", "order_time", "amount"),
+                List.of(
+                        field("id", "订单ID", "so.id").sortable(true),
+                        field("order_no", "订单号", "so.order_no", "MLS编号", "编号").sortable(true),
+                        field("customer_id", "客户ID", "so.customer_id"),
+                        field("customer_name", "客户名称", "c.name", "客户").aggregatable(true),
+                        field("contract_id", "合同ID", "so.contract_id"),
+                        field("contract_name", "合同名称", "ct.name", "合同").aggregatable(true),
+                        field("contract_number", "合同编号", "ct.number", "合同订单号"),
+                        field("owner", "联系专员ID/名称", "so.owner", "负责人ID", "销售ID"),
+                        field("owner_name", "联系专员", "COALESCE(owner_user.name, so.owner)", "负责人", "销售", "负责专员")
+                                .sortable(true).aggregatable(true),
+                        field("process_order_no", "加工单号", "so.process_order_no", "生产单号").sortable(true),
+                        field("processor", "加工商", "so.processor").aggregatable(true),
+                        field("merchandiser", "跟单员", "so.merchandiser").aggregatable(true),
+                        field("status", "订单状态", "so.status", "状态", "order_info状态").aggregatable(true),
+                        field("color", "颜色", "so.color").aggregatable(true),
+                        field("color_code", "色号", "so.color_code", "颜色编号").aggregatable(true),
+                        field("composition", "成分", "so.composition", "订单成分"),
+                        field("material_name", "原料名称", "so.material_name", "原料", "纱线名称"),
+                        field("material_type", "原料类型", "so.material_type", "纱线类型").aggregatable(true),
+                        field("process_technology", "加工工艺", "so.process_technology", "工艺").aggregatable(true),
+                        field("order_time", "下单时间", "so.order_time", "订单时间").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
+                        field("quantity", "数量", "so.quantity").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("unit", "单位", "so.unit").aggregatable(true),
+                        field("unit_price", "单价", "so.unit_price").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("amount", "金额", "so.amount", "订单金额").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("currency", "币种", "so.currency").aggregatable(true),
+                        field("organization_id", "组织ID", "so.organization_id"),
+                        field("create_time", "创建时间", "so.create_time", "新增时间").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
+                        field("update_time", "更新时间", "so.update_time").sortable(true).valueKind(ValueKind.EPOCH_MILLIS)
                 ));
     }
 
