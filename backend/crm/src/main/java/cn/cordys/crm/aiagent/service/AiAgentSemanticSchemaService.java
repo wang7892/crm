@@ -225,12 +225,13 @@ public class AiAgentSemanticSchemaService {
                                 CONVERT(owner_user.name USING utf8mb4) COLLATE utf8mb4_general_ci
                         )
                         """,
-                List.of("order_no", "customer_name", "contract_name", "owner_name", "status", "material_name", "composition", "order_time", "amount"),
+                List.of("order_no", "customer_name", "customer_region", "contract_name", "owner_name", "status", "material_name", "composition", "order_time", "amount"),
                 List.of(
                         field("id", "订单ID", "so.id").sortable(true),
                         field("order_no", "订单号", "so.order_no", "MLS编号", "编号").sortable(true),
                         field("customer_id", "客户ID", "so.customer_id"),
                         field("customer_name", "客户名称", "c.name", "客户").aggregatable(true),
+                        field("customer_region", "客户地区", "c.region", "地区", "客户地区", "国家", "区域").sortable(true).aggregatable(true),
                         field("contract_id", "合同ID", "so.contract_id"),
                         field("contract_name", "合同名称", "ct.name", "合同").aggregatable(true),
                         field("contract_number", "合同编号", "ct.number", "合同订单号"),

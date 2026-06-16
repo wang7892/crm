@@ -17,6 +17,7 @@ public class AiAgentSqlProperties {
             "sys_organization_user",
             "customer_collaboration",
             "contract",
+            "sales_order",
             "follow_up_record",
             "wecom_ingestion_session_day",
             "wecom_ingestion_message",

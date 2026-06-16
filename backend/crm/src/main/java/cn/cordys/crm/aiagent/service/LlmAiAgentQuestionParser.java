@@ -173,6 +173,9 @@ public class LlmAiAgentQuestionParser {
                 - “客户来源是展会客户的客户有哪些？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=LIST，filter field=customer_source/operator=eq/value=展会客户。
                 - “名字中带有印尼的客户有哪些？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=LIST，filter field=name_keyword/operator=like/value=印尼。
                 - “客户名称包含 ABC 的客户有哪些？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=LIST，filter field=name_keyword/operator=like/value=ABC。
+                - “印度的客户订的订单原料都是什么？”、“印度地区的客户订的订单原料有哪些？”中，印度表示客户地区/国家，不是客户名称；使用 CRM_DATABASE_QUERY，entity=sales_order，queryType=LIST，filter field=customer_region/operator=like/value=印度，再加 filter field=material_name/operator=not_null，selectFields=customer_name,customer_region,owner_name,material_name,material_type,composition,status,order_no。
+                - “2026年没有签订过订单的客户有哪些？”是负向排除问题，不能返回 2026 年订单列表；如 queryPlan 无法表达 NOT EXISTS，可仍返回 CRM_DATABASE_QUERY/sales_order 并由后端专用兜底处理，不要编造答案。
+                - “哪些客户2025年签订的有合同，2026年没有签订合同？”需要按客户列表明细回答，后端会同时对比 CRM订单、CRM合同和外部合同/订单数据源。
                 - “赵芳有哪些客户她没有跟进？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=LIST，filter field=owner_name/operator=like/value=赵芳，再加 filter field=follow_time/operator=is_null。
                 - “某销售没有跟进的客户有哪些？”不要只返回该销售客户列表，必须把“没有跟进”作为数据库过滤条件。
                 - “每个销售名下客户数量是多少？”使用 CRM_DATABASE_QUERY，entity=customer，queryType=AGGREGATE，groupBy=owner_name，metric=count(id)。

@@ -167,7 +167,7 @@ public class ExternalOrderTools {
         }
 
         MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("limit", Math.max(1, Math.min(limit, 100)));
+        params.addValue("limit", Math.max(1, Math.min(limit, 1000)));
         StringBuilder sql = new StringBuilder("""
                 SELECT *
                 FROM contract_info

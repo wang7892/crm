@@ -21,6 +21,7 @@ import cn.cordys.crm.aiagent.dto.query.AiAgentQueryFilter;
 import cn.cordys.crm.aiagent.dto.query.AiAgentQueryMetric;
 import cn.cordys.crm.aiagent.dto.query.AiAgentQueryOrder;
 import cn.cordys.crm.aiagent.dto.query.AiAgentQueryPlan;
+import cn.cordys.crm.aiagent.dto.query.AiAgentQueryResult;
 import cn.cordys.crm.aiagent.dto.request.AiAgentChatRequest;
 import cn.cordys.crm.aiagent.dto.response.AiAgentChatResponse;
 import cn.cordys.crm.aiagent.dto.response.AiAgentCitationDTO;
@@ -42,9 +43,13 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -185,7 +190,10 @@ public class AiAgentChatService {
     }
 
     private boolean isUnansweredFallback(String question, AiAgentChatResponse response) {
-        return StringUtils.equals(response.getIntent(), "HELP") && !isHelpQuestion(question);
+        return (StringUtils.equals(response.getIntent(), "HELP")
+                || StringUtils.equals(response.getIntent(), "CRM_DATABASE_QUERY_REJECTED")
+                || StringUtils.equals(response.getIntent(), "QUESTION_CLARIFICATION_REQUIRED"))
+                && !isHelpQuestion(question);
     }
 
     private AiAgentChatResponse route(String rawQuestion, AiAgentContext context) {
@@ -332,6 +340,18 @@ public class AiAgentChatService {
     }
 
     private AiAgentChatResponse routeStableRuleQuestion(String question, AiAgentContext context) {
+        if (isCustomerOrderContractYearGapQuestion(question)) {
+            return customerOrderContractYearGap(question, context);
+        }
+        if (isCustomerWithoutOrderYearQuestion(question)) {
+            return customersWithoutOrderYear(question, context);
+        }
+        if (isCustomerWithoutMaterialOrderQuestion(question)) {
+            return customersWithoutMaterialOrder(question, context);
+        }
+        if (isOrderMaterialSummaryQuestion(question)) {
+            return salesOrderMaterialSummary(question, context);
+        }
         if (isCustomerSourceListQuestion(question)) {
             return customerSourceList(question, context);
         }
@@ -507,6 +527,344 @@ public class AiAgentChatService {
                 "负责的订单", "订单有哪些", "有哪些订单", "最近订单", "订单总数", "订单总金额");
     }
 
+    private boolean isCustomerOrderContractYearGapQuestion(String question) {
+        return containsAny(question, "客户")
+                && containsAny(question, "2025")
+                && containsAny(question, "2026")
+                && containsAny(question, "没有", "没签", "未签", "未订", "没有签订", "没有订")
+                && containsAny(question, "订单", "合同");
+    }
+
+    private AiAgentChatResponse customerOrderContractYearGap(String question, AiAgentContext context) {
+        List<Integer> years = extractYears(question);
+        int sourceYear = years.isEmpty() ? extractYearBefore(question, "有", "下过") : years.get(0);
+        int missingYear = years.size() >= 2 ? years.get(1) : extractYearBefore(question, "没有", "没签", "未签", "未订", "没订");
+        boolean asksOrder = containsAny(question, "订单", "下单", "订过", "没订", "未订");
+        boolean asksContract = containsAny(question, "合同");
+        boolean includeOrders = asksOrder || !asksContract;
+        boolean includeContracts = asksContract || !asksOrder;
+        if (sourceYear <= 0) {
+            sourceYear = 2025;
+        }
+        if (missingYear <= 0 || missingYear == sourceYear) {
+            missingYear = 2026;
+        }
+
+        AiAgentQueryResult sourceOrders = queryYearRecords("sales_order", sourceYear,
+                List.of("customer_name", "owner_name", "order_no", "order_time"), "order_time", context, includeOrders ? 1000 : 0);
+        AiAgentQueryResult sourceContracts = queryYearRecords("contract", sourceYear,
+                List.of("customer_name", "owner_name", "number", "start_time"), "start_time", context, includeContracts ? 1000 : 0);
+        AiAgentQueryResult missingOrders = queryYearRecords("sales_order", missingYear,
+                List.of("customer_name"), "order_time", context, includeOrders ? 1000 : 0);
+        AiAgentQueryResult missingContracts = queryYearRecords("contract", missingYear,
+                List.of("customer_name"), "start_time", context, includeContracts ? 1000 : 0);
+
+        ExternalOrderQueryResult externalSourceOrders = externalOrdersForVisibleCustomersInYear(context, sourceYear);
+        ExternalOrderQueryResult externalMissingOrders = externalOrdersForVisibleCustomersInYear(context, missingYear);
+
+        Map<String, YearCustomerActivity> sourceCustomers = new LinkedHashMap<>();
+        if (includeOrders) {
+            collectActivity(sourceCustomers, sourceOrders, "CRM订单", "customer_name", "owner_name", "order_no");
+        }
+        if (includeContracts) {
+            collectActivity(sourceCustomers, sourceContracts, "CRM合同", "customer_name", "owner_name", "number");
+        }
+        collectExternalActivity(sourceCustomers, externalSourceOrders, "外部合同/订单");
+
+        Set<String> missingYearCustomers = new HashSet<>();
+        if (includeOrders) {
+            collectCustomerNames(missingYearCustomers, missingOrders, "customer_name");
+        }
+        if (includeContracts) {
+            collectCustomerNames(missingYearCustomers, missingContracts, "customer_name");
+        }
+        collectExternalCustomerNames(missingYearCustomers, externalMissingOrders);
+
+        List<YearCustomerActivity> allMatched = sourceCustomers.values().stream()
+                .filter(activity -> !missingYearCustomers.contains(normalizeCustomerKey(activity.customerName)))
+                .toList();
+        List<YearCustomerActivity> matched = allMatched.stream().limit(20).toList();
+
+        AiAgentChatResponse response = base("CUSTOMER_ORDER_CONTRACT_YEAR_GAP");
+        response.getEvidence().add("sales_order");
+        response.getEvidence().add("contract");
+        response.getEvidence().add("mls_agent_data.contract_info");
+        String sourceLabel = orderContractScopeLabel(includeOrders, includeContracts);
+        response.getTools().add(tool("customer_order_contract_year_gap", "SUCCESS",
+                "对比 " + sourceYear + " 年和 " + missingYear + " 年 " + sourceLabel + "、外部合同/订单", 0L));
+        addQueryWarnings(response, sourceOrders, sourceContracts, missingOrders, missingContracts);
+        response.getWarnings().addAll(externalSourceOrders.getWarnings());
+        response.getWarnings().addAll(externalMissingOrders.getWarnings());
+
+        if (sourceCustomers.isEmpty()) {
+            response.setAnswer("当前权限范围内，未找到 " + sourceYear + " 年有" + sourceLabel + "的客户。");
+            return response;
+        }
+        if (allMatched.isEmpty()) {
+            response.setAnswer("当前权限范围内，未找到“" + sourceYear + " 年有" + sourceLabel + "、"
+                    + missingYear + " 年没有" + sourceLabel + "”的客户。");
+            response.getPoints().add(sourceYear + " 年有" + sourceLabel + "的客户数：" + sourceCustomers.size()
+                    + "；其中 " + missingYear + " 年也有" + sourceLabel + "记录的客户数：" + missingYearCustomers.size() + "。");
+            return response;
+        }
+
+        response.setAnswer("当前权限范围内，找到 " + allMatched.size() + " 个客户在 " + sourceYear
+                + " 年有" + sourceLabel + "，但在 " + missingYear + " 年未查到" + sourceLabel + "；以下展示前 "
+                + matched.size() + " 个。");
+        for (YearCustomerActivity activity : matched) {
+            response.getPoints().add("第 " + (response.getPoints().size() + 1) + " 条"
+                    + "\n客户名称：" + activity.customerName
+                    + "\n负责人：" + StringUtils.defaultIfBlank(activity.ownerName, "未填写")
+                    + "\n" + sourceYear + " 年命中：" + activity.totalCount() + " 条"
+                    + "\n数据来源：" + String.join("、", activity.sourceSummaries())
+                    + "\n" + missingYear + " 年" + sourceLabel + "：未查到");
+        }
+        response.getWarnings().add("判断口径：按客户名称归并，" + missingYear + " 年只要"
+                + sourceLabel + "或外部合同/订单任一数据源命中，就不计入结果。");
+        return response;
+    }
+
+    private String orderContractScopeLabel(boolean includeOrders, boolean includeContracts) {
+        if (includeOrders && includeContracts) {
+            return "订单和合同";
+        }
+        return includeOrders ? "订单" : "合同";
+    }
+
+    private boolean isCustomerWithoutOrderYearQuestion(String question) {
+        return containsAny(question, "客户")
+                && !containsAny(question, "原料")
+                && containsAny(question, "订单", "下单", "订过", "签订")
+                && containsAny(question, "没有", "没签", "未签", "没订", "未订", "没有签订", "没有订", "没有下")
+                && !containsAny(question, "合同")
+                && !extractYears(question).isEmpty();
+    }
+
+    private AiAgentChatResponse customersWithoutOrderYear(String question, AiAgentContext context) {
+        List<Integer> years = extractYears(question);
+        int year = years.isEmpty() ? Year.now(AGENT_ZONE).getValue() : years.get(0);
+        String customerKeyword = cleanupYearCustomerKeyword(extractCustomerQualifier(question));
+
+        List<AiAgentCustomerRow> allCustomers = customerTools.searchCustomers(context, customerKeyword, 1000);
+        AiAgentQueryResult orderResult = queryYearRecords("sales_order", year,
+                List.of("customer_name", "order_no", "order_time"), "order_time", context, 1000);
+
+        Set<String> orderedCustomerKeys = new HashSet<>();
+        collectCustomerNames(orderedCustomerKeys, orderResult, "customer_name");
+        List<AiAgentCustomerRow> matched = allCustomers.stream()
+                .filter(customer -> !orderedCustomerKeys.contains(normalizeCustomerKey(customer.getName())))
+                .limit(20)
+                .toList();
+
+        AiAgentChatResponse response = base("CUSTOMER_WITHOUT_ORDER_YEAR_LIST");
+        response.getEvidence().add("customer");
+        response.getEvidence().add("sales_order");
+        response.getTools().add(tool("customer_without_order_year_list",
+                orderResult.getWarnings().isEmpty() ? "SUCCESS" : "SKIPPED",
+                "按客户主表排除 " + year + " 年 CRM订单记录", orderResult.getDurationMs()));
+        response.getWarnings().addAll(orderResult.getWarnings());
+        if (!orderResult.getWarnings().isEmpty() && orderResult.getRows().isEmpty()) {
+            response.setAnswer("这个问题需要先查可见客户，再排除 " + year + " 年有订单的客户，但当前订单查询未能执行。");
+            return response;
+        }
+        if (allCustomers.isEmpty()) {
+            response.setAnswer(StringUtils.isBlank(customerKeyword)
+                    ? "当前权限范围内没有可见客户。"
+                    : "当前权限范围内未找到名称匹配“" + customerKeyword + "”的客户。");
+            return response;
+        }
+        if (matched.isEmpty()) {
+            response.setAnswer("当前权限范围内，未找到 " + year + " 年没有签订过订单的客户。");
+            response.getPoints().add(year + " 年有订单记录的客户数：" + orderedCustomerKeys.size()
+                    + "；当前筛选客户数：" + allCustomers.size() + "。");
+            return response;
+        }
+        response.setAnswer("当前权限范围内，找到 " + matched.size() + " 个客户在 " + year
+                + " 年未查到订单；以下展示前 " + matched.size() + " 个。");
+        for (AiAgentCustomerRow customer : matched) {
+            response.getPoints().add("第 " + (response.getPoints().size() + 1) + " 条"
+                    + "\n客户名称：" + StringUtils.defaultIfBlank(customer.getName(), "未填写")
+                    + "\n负责人：" + StringUtils.defaultIfBlank(customer.getOwnerName(), "未设置")
+                    + "\n地区：" + StringUtils.defaultIfBlank(customer.getRegion(), "未填写")
+                    + "\n" + year + " 年订单：未查到");
+        }
+        response.getWarnings().add("判断口径：先读取当前权限范围内可见客户，再按客户名称排除 sales_order.order_time 落在 "
+                + year + " 年的订单客户。");
+        return response;
+    }
+
+    private String cleanupYearCustomerKeyword(String value) {
+        String cleaned = StringUtils.defaultString(value).trim();
+        if (StringUtils.isBlank(cleaned) || containsAny(cleaned, "20", "签订", "订单", "合同", "没有", "未", "没")) {
+            return "";
+        }
+        return cleaned;
+    }
+
+    private boolean isOrderMaterialSummaryQuestion(String question) {
+        return containsAny(question, "原料")
+                && containsAny(question, "有哪些", "都有哪些", "是什么", "都是什么", "总结")
+                && containsAny(question, "订单", "订的", "订过", "客户");
+    }
+
+    private AiAgentChatResponse salesOrderMaterialSummary(String question, AiAgentContext context) {
+        MaterialCustomerQualifier qualifier = extractMaterialCustomerQualifier(question);
+        List<AiAgentQueryFilter> filters = new ArrayList<>();
+        if (StringUtils.isNotBlank(qualifier.keyword())) {
+            filters.add(filter(qualifier.region() ? "customer_region" : "customer_name", "like", qualifier.keyword()));
+        }
+        filters.add(filter("material_name", "not_null", null));
+
+        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
+        queryPlan.setIntent("CRM_DATABASE_QUERY");
+        queryPlan.setEntity("sales_order");
+        queryPlan.setQueryType("LIST");
+        queryPlan.setSelectFields(List.of("customer_name", "customer_region", "owner_name", "material_name", "material_type", "composition", "status", "order_no"));
+        queryPlan.setFilters(filters);
+        queryPlan.setLimit(100);
+        AiAgentQueryResult result = aiAgentDatabaseQueryService.query(queryPlan, context);
+
+        AiAgentChatResponse response = base("ORDER_MATERIAL_SUMMARY");
+        response.getEvidence().add("sales_order");
+        response.getTools().add(tool("order_material_summary", result.getWarnings().isEmpty() ? "SUCCESS" : "SKIPPED",
+                "汇总 CRM 订单原料名称、原料类型和成分", result.getDurationMs()));
+        response.getWarnings().addAll(result.getWarnings());
+        if (!result.getWarnings().isEmpty() && result.getRows().isEmpty()) {
+            response.setAnswer("这个问题需要查询 CRM 订单原料，但当前未能执行。");
+            return response;
+        }
+        if (result.getRows().isEmpty()) {
+            response.setAnswer(StringUtils.isBlank(qualifier.keyword())
+                    ? "当前权限范围内未找到包含原料信息的订单。"
+                    : "当前权限范围内未找到客户" + (qualifier.region() ? "地区" : "名称") + "匹配“"
+                    + qualifier.keyword() + "”且包含原料信息的订单。");
+            return response;
+        }
+
+        Map<String, MaterialSummary> summaries = new LinkedHashMap<>();
+        for (Map<String, Object> row : result.getRows()) {
+            String materialName = valueAsText(row.get("material_name"));
+            if (StringUtils.isBlank(materialName)) {
+                continue;
+            }
+            String key = materialName.toLowerCase(Locale.ROOT);
+            MaterialSummary summary = summaries.computeIfAbsent(key, ignored -> new MaterialSummary(materialName));
+            summary.orderCount++;
+            summary.materialTypes.add(valueAsText(row.get("material_type")));
+            summary.compositions.add(valueAsText(row.get("composition")));
+            summary.statuses.add(valueAsText(row.get("status")));
+            summary.customers.add(valueAsText(row.get("customer_name")));
+            summary.regions.add(valueAsText(row.get("customer_region")));
+        }
+
+        if (summaries.isEmpty()) {
+            response.setAnswer("当前权限范围内查到订单，但这些订单没有填写原料名称。");
+            return response;
+        }
+        response.setAnswer(materialSummaryScopeText(qualifier)
+                + "，共归纳出 " + summaries.size() + " 种原料，涉及 " + result.getRows().size() + " 条订单。");
+        summaries.values().stream().limit(12).forEach(summary -> response.getPoints().add(
+                summary.materialName + "：出现 " + summary.orderCount + " 条订单"
+                        + formatOptionalSet("，类型 ", summary.materialTypes)
+                        + formatOptionalSet("，成分 ", summary.compositions)
+                        + formatOptionalSet("，状态 ", summary.statuses)
+        ));
+        if (summaries.size() > 12) {
+            response.getWarnings().add("原料种类较多，当前只展示前 12 种摘要。");
+        }
+        return response;
+    }
+
+    private String materialSummaryScopeText(MaterialCustomerQualifier qualifier) {
+        if (StringUtils.isBlank(qualifier.keyword())) {
+            return "当前筛选条件下";
+        }
+        return "客户" + (qualifier.region() ? "地区" : "名称") + "匹配“" + qualifier.keyword() + "”的订单中";
+    }
+
+    private boolean isCustomerWithoutMaterialOrderQuestion(String question) {
+        return containsAny(question, "客户")
+                && containsAny(question, "没有订过", "没订过", "没有下过", "没下过", "没有订购", "未订过", "未下过",
+                "没有订", "没订", "未订", "没有下", "没下", "未下")
+                && containsAny(question, "原料");
+    }
+
+    private AiAgentChatResponse customersWithoutMaterialOrder(String question, AiAgentContext context) {
+        MaterialCustomerQualifier qualifier = extractMaterialCustomerQualifier(question);
+        String customerKeyword = qualifier.keyword();
+        String materialKeyword = extractMaterialKeyword(question);
+        if (StringUtils.isBlank(materialKeyword)) {
+            AiAgentChatResponse response = base("QUESTION_CLARIFICATION_REQUIRED");
+            response.setAnswer("请补充要排除的原料名称，例如“没有订过单面超柔染色的客户”。");
+            response.getTools().add(tool("material_keyword_clarification", "SUCCESS", "原料关键词为空", 0L));
+            return response;
+        }
+
+        List<AiAgentCustomerRow> customers = searchCustomersForMaterialExclusion(context, qualifier, 1000);
+        AiAgentQueryPlan orderedPlan = new AiAgentQueryPlan();
+        orderedPlan.setIntent("CRM_DATABASE_QUERY");
+        orderedPlan.setEntity("sales_order");
+        orderedPlan.setQueryType("LIST");
+        orderedPlan.setSelectFields(List.of("customer_name", "material_name", "composition", "order_no"));
+        orderedPlan.setFilters(List.of(filter("material_name", "like", materialKeyword)));
+        orderedPlan.setLimit(1000);
+        AiAgentQueryResult orderedResult = aiAgentDatabaseQueryService.query(orderedPlan, context);
+
+        Set<String> orderedCustomerKeys = new HashSet<>();
+        collectCustomerNames(orderedCustomerKeys, orderedResult, "customer_name");
+        List<AiAgentCustomerRow> allMatched = customers.stream()
+                .filter(customer -> !orderedCustomerKeys.contains(normalizeCustomerKey(customer.getName())))
+                .toList();
+        List<AiAgentCustomerRow> matched = allMatched.stream().limit(20).toList();
+
+        AiAgentChatResponse response = base("CUSTOMER_WITHOUT_MATERIAL_ORDER_LIST");
+        response.getEvidence().add("customer");
+        response.getEvidence().add("sales_order");
+        response.getTools().add(tool("customer_without_material_order_list", orderedResult.getWarnings().isEmpty() ? "SUCCESS" : "SKIPPED",
+                "按客户名称和 CRM 订单原料做排除查询", orderedResult.getDurationMs()));
+        response.getWarnings().addAll(orderedResult.getWarnings());
+        if (!orderedResult.getWarnings().isEmpty() && orderedResult.getRows().isEmpty()) {
+            response.setAnswer("这个问题需要查询 CRM 客户和订单原料，但当前订单查询未能执行。");
+            return response;
+        }
+        if (customers.isEmpty()) {
+            response.setAnswer(StringUtils.isBlank(customerKeyword)
+                    ? "当前权限范围内没有可见客户。"
+                    : "当前权限范围内未找到客户" + (qualifier.region() ? "地区" : "名称") + "匹配“" + customerKeyword + "”的客户。");
+            return response;
+        }
+        if (matched.isEmpty()) {
+            response.setAnswer("当前权限范围内，未找到客户" + (qualifier.region() ? "地区" : "名称") + "匹配“"
+                    + StringUtils.defaultIfBlank(customerKeyword, "全部可见客户")
+                    + "”且没有订过“" + materialKeyword + "”的客户。");
+            return response;
+        }
+        response.setAnswer("当前权限范围内，找到 " + allMatched.size() + " 个客户没有订过原料“"
+                + materialKeyword + "”；以下展示前 " + matched.size() + " 个。");
+        for (AiAgentCustomerRow customer : matched) {
+            response.getPoints().add("第 " + (response.getPoints().size() + 1) + " 条"
+                    + "\n客户名称：" + StringUtils.defaultIfBlank(customer.getName(), "未填写")
+                    + "\n负责人：" + StringUtils.defaultIfBlank(customer.getOwnerName(), "未设置")
+                    + "\n地区：" + StringUtils.defaultIfBlank(customer.getRegion(), "未填写")
+                    + "\n排除原料：" + materialKeyword);
+        }
+        response.getWarnings().add("判断口径：先筛选可见客户"
+                + (qualifier.region() ? "地区" : "名称")
+                + "，再排除 CRM 订单中原料名称包含“" + materialKeyword + "”的客户。");
+        return response;
+    }
+
+    private List<AiAgentCustomerRow> searchCustomersForMaterialExclusion(AiAgentContext context,
+                                                                         MaterialCustomerQualifier qualifier,
+                                                                         int limit) {
+        if (!qualifier.region() || StringUtils.isBlank(qualifier.keyword())) {
+            return customerTools.searchCustomers(context, qualifier.keyword(), limit);
+        }
+        return customerTools.searchCustomers(context, "", limit).stream()
+                .filter(customer -> StringUtils.contains(customer.getRegion(), qualifier.keyword()))
+                .toList();
+    }
+
     private AiAgentChatResponse salesOrderDatabaseQuery(String question, AiAgentContext context) {
         AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
         queryPlan.setIntent("CRM_DATABASE_QUERY");
@@ -591,6 +949,260 @@ public class AiAgentChatService {
         filter.setOperator(operator);
         filter.setValue(value);
         return filter;
+    }
+
+    private AiAgentQueryResult queryYearRecords(String entity, int year, List<String> selectFields,
+                                                String timeField, AiAgentContext context, int limit) {
+        if (limit <= 0) {
+            return new AiAgentQueryResult();
+        }
+        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
+        queryPlan.setIntent("CRM_DATABASE_QUERY");
+        queryPlan.setEntity(entity);
+        queryPlan.setQueryType("LIST");
+        queryPlan.setSelectFields(selectFields);
+        queryPlan.setFilters(List.of(filter(timeField, "between", List.of(year + "-01-01", year + "-12-31"))));
+        queryPlan.setLimit(limit);
+        return aiAgentDatabaseQueryService.query(queryPlan, context);
+    }
+
+    private ExternalOrderQueryResult externalOrdersForVisibleCustomersInYear(AiAgentContext context, int year) {
+        AiAgentTimeWindow originalWindow = context.getTimeWindow();
+        context.setTimeWindow(yearTimeWindow(year));
+        try {
+            return externalOrderTools.findRecentOrdersForVisibleCustomers(context, 1000);
+        } finally {
+            context.setTimeWindow(originalWindow);
+        }
+    }
+
+    private AiAgentTimeWindow yearTimeWindow(int year) {
+        LocalDate startDate = LocalDate.of(year, 1, 1);
+        LocalDate endDate = LocalDate.of(year + 1, 1, 1);
+        return new AiAgentTimeWindow(
+                startDate.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
+                endDate.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
+                year + "年"
+        );
+    }
+
+    private void collectActivity(Map<String, YearCustomerActivity> target, AiAgentQueryResult result,
+                                 String source, String customerField, String ownerField, String recordField) {
+        if (result == null || result.getRows() == null) {
+            return;
+        }
+        for (Map<String, Object> row : result.getRows()) {
+            String customerName = valueAsText(row.get(customerField));
+            if (StringUtils.isBlank(customerName)) {
+                continue;
+            }
+            YearCustomerActivity activity = target.computeIfAbsent(normalizeCustomerKey(customerName),
+                    ignored -> new YearCustomerActivity(customerName));
+            if (StringUtils.isBlank(activity.ownerName)) {
+                activity.ownerName = valueAsText(row.get(ownerField));
+            }
+            activity.increment(source);
+            String recordNo = valueAsText(row.get(recordField));
+            if (StringUtils.isNotBlank(recordNo) && activity.sampleRecords.size() < 3) {
+                activity.sampleRecords.add(recordNo);
+            }
+        }
+    }
+
+    private void collectExternalActivity(Map<String, YearCustomerActivity> target, ExternalOrderQueryResult result,
+                                         String source) {
+        if (result == null || result.getRows() == null) {
+            return;
+        }
+        for (ExternalOrderRow row : result.getRows()) {
+            String customerName = StringUtils.defaultIfBlank(row.getCustomer(), row.getFields().get("customer"));
+            if (StringUtils.isBlank(customerName)) {
+                continue;
+            }
+            YearCustomerActivity activity = target.computeIfAbsent(normalizeCustomerKey(customerName),
+                    ignored -> new YearCustomerActivity(customerName));
+            if (StringUtils.isBlank(activity.ownerName)) {
+                activity.ownerName = row.getManager();
+            }
+            activity.increment(source);
+            if (StringUtils.isNotBlank(row.getOrderNo()) && activity.sampleRecords.size() < 3) {
+                activity.sampleRecords.add(row.getOrderNo());
+            }
+        }
+    }
+
+    private void collectCustomerNames(Set<String> target, AiAgentQueryResult result, String customerField) {
+        if (result == null || result.getRows() == null) {
+            return;
+        }
+        for (Map<String, Object> row : result.getRows()) {
+            String customerName = valueAsText(row.get(customerField));
+            if (StringUtils.isNotBlank(customerName)) {
+                target.add(normalizeCustomerKey(customerName));
+            }
+        }
+    }
+
+    private void collectExternalCustomerNames(Set<String> target, ExternalOrderQueryResult result) {
+        if (result == null || result.getRows() == null) {
+            return;
+        }
+        for (ExternalOrderRow row : result.getRows()) {
+            String customerName = StringUtils.defaultIfBlank(row.getCustomer(), row.getFields().get("customer"));
+            if (StringUtils.isNotBlank(customerName)) {
+                target.add(normalizeCustomerKey(customerName));
+            }
+        }
+    }
+
+    private void addQueryWarnings(AiAgentChatResponse response, AiAgentQueryResult... results) {
+        for (AiAgentQueryResult result : results) {
+            if (result != null) {
+                response.getWarnings().addAll(result.getWarnings());
+            }
+        }
+    }
+
+    private String normalizeCustomerKey(String customerName) {
+        return StringUtils.defaultString(customerName)
+                .replaceAll("\\s+", "")
+                .toLowerCase(Locale.ROOT);
+    }
+
+    private int extractYearBefore(String question, String... markers) {
+        Matcher matcher = Pattern.compile("(20\\d{2})\\s*年?[^，。；;,.]*?(?:" + String.join("|", markers) + ")").matcher(question);
+        int year = 0;
+        while (matcher.find()) {
+            year = Integer.parseInt(matcher.group(1));
+        }
+        return year;
+    }
+
+    private List<Integer> extractYears(String question) {
+        List<Integer> years = new ArrayList<>();
+        Matcher matcher = Pattern.compile("20\\d{2}").matcher(question);
+        while (matcher.find()) {
+            int year = Integer.parseInt(matcher.group());
+            if (!years.contains(year)) {
+                years.add(year);
+            }
+        }
+        return years;
+    }
+
+    private String extractMaterialQuestionCustomerKeyword(String question) {
+        String value = extractCustomerQualifier(question);
+        if (StringUtils.isNotBlank(value)) {
+            return value;
+        }
+        String customerName = extractOrderCustomerName(question);
+        return StringUtils.defaultIfBlank(customerName, "");
+    }
+
+    private MaterialCustomerQualifier extractMaterialCustomerQualifier(String question) {
+        String keyword = StringUtils.defaultIfBlank(extractCustomerQualifier(question), extractRegionCustomerQualifier(question));
+        if (StringUtils.isBlank(keyword)) {
+            keyword = extractOrderCustomerName(question);
+        }
+        keyword = cleanupRegionCustomerKeyword(keyword);
+        boolean region = StringUtils.isNotBlank(keyword)
+                && (containsAny(question, "地区", "区域", "国家")
+                || question.contains(keyword + "的客户")
+                || question.contains(keyword + "哪些客户"));
+        return new MaterialCustomerQualifier(keyword, region);
+    }
+
+    private String extractRegionCustomerQualifier(String question) {
+        String text = cleanupLeadingWords(question);
+        for (String marker : List.of("哪些客户", "的客户")) {
+            int index = text.indexOf(marker);
+            if (index > 0) {
+                String value = cleanupName(text.substring(0, index));
+                if (StringUtils.isNotBlank(value) && !containsAny(value, "客户", "订单", "原料", "没有", "未", "没")) {
+                    return value;
+                }
+            }
+        }
+        return "";
+    }
+
+    private String cleanupRegionCustomerKeyword(String text) {
+        String value = cleanupQuestionToken(text)
+                .replace("客户地区", "")
+                .replace("地区客户", "")
+                .replace("地区", "")
+                .replace("区域", "")
+                .replace("国家", "")
+                .replace("的", "")
+                .trim();
+        return StringUtils.abbreviate(value, 64);
+    }
+
+    private String extractCustomerQualifier(String question) {
+        String text = cleanupLeadingWords(question);
+        for (String marker : List.of("客户订", "客户下", "客户没有", "客户没", "客户未", "客户的订单", "客户订单", "客户有哪些")) {
+            int index = text.indexOf(marker);
+            if (index > 0) {
+                String value = cleanupName(text.substring(0, index));
+                value = StringUtils.removeEnd(value, "及");
+                return cleanupQuestionToken(value);
+            }
+        }
+        return "";
+    }
+
+    private String extractMaterialKeyword(String question) {
+        String text = cleanupLeadingWords(question);
+        for (String marker : List.of("没有订过", "没订过", "没有下过", "没下过", "没有订购", "未订过", "未下过",
+                "没有订", "没订", "未订", "没有下", "没下", "未下")) {
+            int index = text.indexOf(marker);
+            if (index >= 0) {
+                return cleanupMaterialKeyword(text.substring(index + marker.length()));
+            }
+        }
+        return "";
+    }
+
+    private String cleanupMaterialKeyword(String text) {
+        String value = cleanupName(text)
+                .replace("这种原料", "")
+                .replace("这类原料", "")
+                .replace("这个原料", "")
+                .replace("原料", "")
+                .replace("的客户", "")
+                .replace("客户", "")
+                .replace("有哪些", "")
+                .replace("哪些", "")
+                .trim();
+        return StringUtils.abbreviate(value, 64);
+    }
+
+    private String cleanupQuestionToken(String text) {
+        String value = cleanupName(text)
+                .replace("有哪些", "")
+                .replace("哪些", "")
+                .replace("没有", "")
+                .replace("没", "")
+                .replace("未", "")
+                .replace("订过", "")
+                .replace("下过", "")
+                .replace("订单", "")
+                .replace("原料", "")
+                .trim();
+        return StringUtils.abbreviate(value, 64);
+    }
+
+    private String valueAsText(Object value) {
+        return value == null ? "" : StringUtils.defaultString(String.valueOf(value)).trim();
+    }
+
+    private String formatOptionalSet(String prefix, Set<String> values) {
+        List<String> cleaned = values.stream()
+                .filter(StringUtils::isNotBlank)
+                .filter(value -> !"未填写".equals(value))
+                .limit(3)
+                .toList();
+        return cleaned.isEmpty() ? "" : prefix + String.join("、", cleaned);
     }
 
     private String extractOrderOwnerName(String question) {
@@ -731,6 +1343,27 @@ public class AiAgentChatService {
         }
         applyDeterministicParameterHints(parsedQuestion);
         rewriteCrmOrderQueryToSalesOrder(parsedQuestion);
+        String rawQuestion = StringUtils.defaultString(parsedQuestion.getRawQuestion());
+        if (isCustomerOrderContractYearGapQuestion(rawQuestion)) {
+            AiAgentChatResponse response = customerOrderContractYearGap(rawQuestion, context);
+            addLlmReasoningTrace(response, parsedQuestion);
+            return response;
+        }
+        if (isCustomerWithoutOrderYearQuestion(rawQuestion)) {
+            AiAgentChatResponse response = customersWithoutOrderYear(rawQuestion, context);
+            addLlmReasoningTrace(response, parsedQuestion);
+            return response;
+        }
+        if (isCustomerWithoutMaterialOrderQuestion(rawQuestion)) {
+            AiAgentChatResponse response = customersWithoutMaterialOrder(rawQuestion, context);
+            addLlmReasoningTrace(response, parsedQuestion);
+            return response;
+        }
+        if (isOrderMaterialSummaryQuestion(rawQuestion)) {
+            AiAgentChatResponse response = salesOrderMaterialSummary(rawQuestion, context);
+            addLlmReasoningTrace(response, parsedQuestion);
+            return response;
+        }
         if (parsedQuestion.isNeedClarification()) {
             AiAgentChatResponse response = clarification(parsedQuestion);
             addLlmReasoningTrace(response, parsedQuestion);
@@ -2276,5 +2909,53 @@ public class AiAgentChatService {
         private long communicationCount() {
             return wecomMessageCount + emailCount + followRecordCount;
         }
+    }
+
+    private static class YearCustomerActivity {
+        private final String customerName;
+        private String ownerName;
+        private final Map<String, Integer> countsBySource = new LinkedHashMap<>();
+        private final List<String> sampleRecords = new ArrayList<>();
+
+        private YearCustomerActivity(String customerName) {
+            this.customerName = customerName;
+        }
+
+        private void increment(String source) {
+            countsBySource.merge(source, 1, Integer::sum);
+        }
+
+        private int totalCount() {
+            return countsBySource.values().stream().mapToInt(Integer::intValue).sum();
+        }
+
+        private List<String> sourceSummaries() {
+            List<String> summaries = countsBySource.entrySet().stream()
+                    .map(entry -> entry.getKey() + " " + entry.getValue() + " 条")
+                    .toList();
+            if (sampleRecords.isEmpty()) {
+                return summaries;
+            }
+            List<String> result = new ArrayList<>(summaries);
+            result.add("示例编号 " + String.join("、", sampleRecords));
+            return result;
+        }
+    }
+
+    private static class MaterialSummary {
+        private final String materialName;
+        private int orderCount;
+        private final Set<String> materialTypes = new LinkedHashSet<>();
+        private final Set<String> compositions = new LinkedHashSet<>();
+        private final Set<String> statuses = new LinkedHashSet<>();
+        private final Set<String> customers = new LinkedHashSet<>();
+        private final Set<String> regions = new LinkedHashSet<>();
+
+        private MaterialSummary(String materialName) {
+            this.materialName = materialName;
+        }
+    }
+
+    private record MaterialCustomerQualifier(String keyword, boolean region) {
     }
 }

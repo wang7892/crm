@@ -34,10 +34,7 @@ public class AiAgentDatabaseQueryService {
             return clarification(queryPlan);
         }
         try {
-            AiAgentQueryPlanner.PlannedQuery plannedQuery = queryPlanner.plan(queryPlan);
-            AiAgentSqlBuilder.BuiltQuery builtQuery = sqlBuilder.build(plannedQuery, context);
-            AiAgentQueryResult result = queryExecutor.execute(builtQuery);
-            return answerRenderer.render(result);
+            return answerRenderer.render(query(queryPlan, context));
         } catch (IllegalArgumentException e) {
             AiAgentChatResponse response = new AiAgentChatResponse();
             response.setIntent("CRM_DATABASE_QUERY_REJECTED");
@@ -46,6 +43,12 @@ public class AiAgentDatabaseQueryService {
             response.getTools().add(tool("crm_database_query_planner", "REJECTED", e.getMessage()));
             return response;
         }
+    }
+
+    public AiAgentQueryResult query(AiAgentQueryPlan queryPlan, AiAgentContext context) {
+        AiAgentQueryPlanner.PlannedQuery plannedQuery = queryPlanner.plan(queryPlan);
+        AiAgentSqlBuilder.BuiltQuery builtQuery = sqlBuilder.build(plannedQuery, context);
+        return queryExecutor.execute(builtQuery);
     }
 
     private AiAgentChatResponse clarification(AiAgentQueryPlan queryPlan) {

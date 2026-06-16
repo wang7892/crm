@@ -15,7 +15,7 @@ import java.util.Locale;
 public class AiAgentQueryPlanner {
 
     private static final int DEFAULT_LIMIT = 20;
-    private static final int MAX_LIMIT = 100;
+    private static final int MAX_LIMIT = 1000;
 
     private final AiAgentSemanticSchemaService schemaService;
 
