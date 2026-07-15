@@ -52,6 +52,8 @@ const opportunityApi = useOpportunityApi(CDR);
 const contractApi = useContractApi(CDR);
 const orderApi = useOrderApi(CDR);
 
+export const { getAiAgentAudioTranscription, transcribeAiAgentAudio } = aiAgentApi;
+
 export const {
   getOrderFormConfig,
   getOrderFormSnapshotConfig,
@@ -61,6 +63,7 @@ export const {
   updateOrder,
   deleteOrder,
   getOrderList,
+  getOrderSummaryList,
   getOrderInContractList,
   getOrderTab,
   addOrderView,
@@ -715,6 +718,18 @@ export const { getLicense, addLicense } = licenseApi;
 
 export const { chatAiAgent, deleteAiAgentSession, feedbackAiAgent, getAiAgentSessions, getAiAgentMessages } =
   aiAgentApi;
+
+export const {
+  getAiKnowledgeDocumentPage,
+  uploadAiKnowledgeDocument,
+  getAiKnowledgeChunkPage,
+  reparseAiKnowledgeDocument,
+  enableAiKnowledgeDocument,
+  disableAiKnowledgeDocument,
+  deleteAiKnowledgeDocument,
+  getAiKnowledgeDocumentDownloadUrl,
+  testAiKnowledgeSearch,
+} = aiAgentApi;
 
 export const {
   dashboardAdd,

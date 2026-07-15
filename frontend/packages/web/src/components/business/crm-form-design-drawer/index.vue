@@ -97,6 +97,7 @@
     optBtnPos: 'flex-row',
   });
   const unsaved = ref(false);
+  let formConfigRequestId = 0;
 
   watch(
     () => [fieldList.value, formConfig.value],
@@ -116,6 +117,7 @@
       positiveText: t('common.confirm'),
       negativeText: t('common.cancel'),
       onPositiveClick: async () => {
+        unsaved.value = false;
         visible.value = false;
       },
     });
@@ -225,6 +227,9 @@
   }
 
   async function initFormConfig() {
+    const requestId = ++formConfigRequestId;
+    unsaved.value = false;
+    fieldList.value = [];
     try {
       loading.value = true;
       let key = props.formKey;
@@ -235,6 +240,9 @@
         key = 'plan' as FormDesignKeyEnum;
       }
       const res = await getFormDesignConfig(key);
+      if (requestId !== formConfigRequestId || !visible.value) {
+        return;
+      }
       fieldList.value = res.fields.map((item) => {
         const newSubFields = item.subFields?.map((e) => ({
           ...e,
@@ -246,6 +254,14 @@
           id: item.resourceFieldId ? `${getGenerateId()}_ref_${item.id}` : item.id, // 处理数据源显示字段 id
           internalKey: item.internalKey,
           type: item.type,
+          dateType:
+            item.type === FieldTypeEnum.DATE_TIME && !['month', 'date', 'datetime'].includes(item.dateType ?? '')
+              ? 'datetime'
+              : item.dateType,
+          dateDefaultType:
+            item.type === FieldTypeEnum.DATE_TIME && !['custom', 'current'].includes(item.dateDefaultType ?? '')
+              ? 'custom'
+              : item.dateDefaultType,
           name: t(item.name),
           placeholder: t(item.placeholder || ''),
           fieldWidth: safeFractionConvert(item.fieldWidth),
@@ -266,14 +282,13 @@
         };
       });
       formConfig.value = res.formProp;
-      nextTick(() => {
-        unsaved.value = false;
-      });
     } catch (error) {
       // eslint-disable-next-line no-console
       console.log(error);
     } finally {
-      loading.value = false;
+      if (requestId === formConfigRequestId) {
+        loading.value = false;
+      }
     }
   }
 
@@ -282,6 +297,9 @@
     (val) => {
       if (val) {
         initFormConfig();
+      } else {
+        formConfigRequestId += 1;
+        unsaved.value = false;
       }
     },
     {

@@ -2,6 +2,7 @@ import { ModuleConfigEnum } from '@lib/shared/enums/moduleEnum';
 
 import {
   AgentRouteEnum,
+  AiKnowledgeRouteEnum,
   ClueRouteEnum,
   ContractRouteEnum,
   CustomerRouteEnum,
@@ -48,6 +49,7 @@ export const featureRouteMap: Record<string, any> = {
   [ProductRouteEnum.PRODUCT]: ModuleConfigEnum.PRODUCT_MANAGEMENT,
   [ClueRouteEnum.CLUE_MANAGEMENT]: ModuleConfigEnum.CLUE_MANAGEMENT,
   [DashboardRouteEnum.DASHBOARD]: ModuleConfigEnum.DASHBOARD,
+  [AiKnowledgeRouteEnum.AI_KNOWLEDGE]: ModuleConfigEnum.AI_KNOWLEDGE,
   [AgentRouteEnum.AGENT]: ModuleConfigEnum.AGENT,
   [TenderRouteEnum.TENDER]: ModuleConfigEnum.TENDER,
 };

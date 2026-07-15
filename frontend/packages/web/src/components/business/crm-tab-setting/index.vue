@@ -70,16 +70,53 @@
 
   const popoverVisible = ref(false);
 
+  const enableTabs = computed<TabContentItem[]>(() => cachedData.value.filter((e) => e.enable));
+  const newTabList = computed<TabContentItem[]>(() =>
+    props.tabList.filter((e) => hasAllPermission(e?.permission || []))
+  );
+
+  const forceDefaultOrderSettingKeys = ['customer-settingKey'];
+
+  function getTabNames(list: TabContentItem[]) {
+    return list.map((tab) => `${tab.name ?? ''}`).filter(Boolean);
+  }
+
+  function isSameTabNameOrder(list: TabContentItem[], targetList: TabContentItem[]) {
+    const names = getTabNames(list);
+    const targetNames = getTabNames(targetList);
+    return (
+      names.length > 0 &&
+      names.length === targetNames.length &&
+      names.every((name, index) => name === targetNames[index])
+    );
+  }
+
+  function mergeTabsByDefaultOrder(localTabs: TabContentItem[]) {
+    const localTabMap = new Map(localTabs.map((tab) => [tab.name, tab]));
+    return newTabList.value.map((tab) => ({
+      ...tab,
+      enable: localTabMap.get(tab.name)?.enable ?? tab.enable,
+    }));
+  }
+
+  function shouldUseDefaultOrder(tabsMap: ContentTabsMap) {
+    return (
+      forceDefaultOrderSettingKeys.includes(props.settingKey) && !isSameTabNameOrder(tabsMap.tabList, newTabList.value)
+    );
+  }
+
   async function saveTabsToLocal(list: TabContentItem[]) {
     const { getItem, setItem } = useLocalForage();
     try {
       const tabsMap = await getItem<ContentTabsMap>(props.settingKey, true);
+      const backupTabList = newTabList.value;
       const newTabsMap = {
         tabList: list,
-        backupTabList: list,
+        backupTabList,
       };
       if (tabsMap) {
-        const isEqual = isArraysEqualWithOrder(tabsMap.backupTabList, list);
+        const isEqual =
+          isArraysEqualWithOrder(tabsMap.tabList, list) && isArraysEqualWithOrder(tabsMap.backupTabList, backupTabList);
         if (!isEqual) {
           await setItem(props.settingKey, newTabsMap, true);
         }
@@ -95,25 +132,28 @@
   async function getTabsFromLocal() {
     const { getItem } = useLocalForage();
     try {
-      const tabsMap = await getItem<ContentTabsMap>(props.settingKey, true);
-      return tabsMap ? tabsMap.tabList : [];
+      return await getItem<ContentTabsMap>(props.settingKey, true);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error(e);
-      return [];
+      return null;
     }
   }
 
-  const enableTabs = computed<TabContentItem[]>(() => cachedData.value.filter((e) => e.enable));
-  const newTabList = computed<TabContentItem[]>(() =>
-    props.tabList.filter((e) => hasAllPermission(e?.permission || []))
-  );
   async function loadTab() {
     try {
-      const localTabs = await getTabsFromLocal();
+      const tabsMap = await getTabsFromLocal();
+      const localTabs = tabsMap?.tabList || [];
       const currentTabMap = new Map(newTabList.value.map((tab) => [tab.name, tab]));
 
       if (localTabs.length > 0) {
+        if (tabsMap && shouldUseDefaultOrder(tabsMap)) {
+          const finalTabs = mergeTabsByDefaultOrder(localTabs);
+          cachedData.value = finalTabs;
+          await saveTabsToLocal(finalTabs);
+          return;
+        }
+
         // 使用本地存储的顺序，但只包含当前仍然存在的标签页
         const mergedTabs = localTabs
           .filter((tab) => currentTabMap.has(tab.name)) // 过滤掉已删除的标签页

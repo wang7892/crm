@@ -44,6 +44,7 @@ export enum ContractRouteEnum {
 export enum OrderRouteEnum {
   ORDER = 'order',
   ORDER_INDEX = 'orderIndex',
+  ORDER_SUMMARY = 'orderSummary',
 }
 
 export enum ProductRouteEnum {
@@ -67,6 +68,11 @@ export enum WorkbenchRouteEnum {
 export enum AgentRouteEnum {
   AGENT = 'agent',
   AGENT_INDEX = 'agentIndex',
+}
+
+export enum AiKnowledgeRouteEnum {
+  AI_KNOWLEDGE = 'aiKnowledge',
+  AI_KNOWLEDGE_INDEX = 'aiKnowledgeIndex',
 }
 
 export enum DashboardRouteEnum {
@@ -98,6 +104,7 @@ export const AppRouteEnum = {
   ...WorkbenchRouteEnum,
   ...DashboardRouteEnum,
   ...AgentRouteEnum,
+  ...AiKnowledgeRouteEnum,
   ...ContractRouteEnum,
   ...OrderRouteEnum,
   ...TenderRouteEnum,

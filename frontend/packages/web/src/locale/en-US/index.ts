@@ -34,6 +34,7 @@ export default {
     'menu.contact': 'Contact',
     'menu.customerWecom': 'WeCom Monitor',
     'menu.dashboard': 'Dashboard',
+    'menu.aiKnowledge': 'Company Knowledge',
     'menu.agent': 'Agent',
     'menu.tender': 'Tender',
     'menu.settings.businessSetting': 'Enterprise',

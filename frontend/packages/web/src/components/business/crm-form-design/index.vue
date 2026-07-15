@@ -70,6 +70,15 @@
     { immediate: true }
   );
 
+  watch(
+    () => list.value,
+    (fields) => {
+      if (field.value && !fields.some((item) => item.id === field.value?.id)) {
+        field.value = undefined;
+      }
+    }
+  );
+
   function setActiveField(item: FormCreateField) {
     field.value = item;
   }

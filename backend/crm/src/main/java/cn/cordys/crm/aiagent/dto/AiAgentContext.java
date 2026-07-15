@@ -1,6 +1,7 @@
 package cn.cordys.crm.aiagent.dto;
 
 import cn.cordys.common.dto.DeptDataPermissionDTO;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
 import lombok.Data;
 
 @Data
@@ -16,4 +17,5 @@ public class AiAgentContext {
     private AiAgentTimeWindow timeWindow;
     private boolean llmParseAttempted;
     private ParsedAiAgentQuestion llmParsedQuestion;
+    private AiKnowledgeSearchTestResponse knowledgeSearch;
 }

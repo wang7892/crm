@@ -44,16 +44,6 @@ export const pathMap: PathMapItem[] = [
     ],
   },
   {
-    key: 'DASHBOARD',
-    locale: 'menu.dashboard',
-    route: AppRouteEnum.DASHBOARD_INDEX,
-  },
-  {
-    key: 'AGENT',
-    locale: 'menu.agent',
-    route: AppRouteEnum.AGENT_INDEX,
-  },
-  {
     key: 'CUSTOMER',
     route: AppRouteEnum.CUSTOMER,
     locale: 'module.customerManagement',
@@ -113,6 +103,21 @@ export const pathMap: PathMapItem[] = [
         locale: 'module.order',
       },
     ],
+  },
+  {
+    key: 'DASHBOARD',
+    locale: 'menu.dashboard',
+    route: AppRouteEnum.DASHBOARD_INDEX,
+  },
+  {
+    key: 'AI_KNOWLEDGE',
+    locale: 'menu.aiKnowledge',
+    route: AppRouteEnum.AI_KNOWLEDGE_INDEX,
+  },
+  {
+    key: 'AGENT',
+    locale: 'menu.agent',
+    route: AppRouteEnum.AGENT_INDEX,
   },
   {
     key: 'CLUE_MANAGEMENT',

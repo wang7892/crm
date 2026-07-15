@@ -17,7 +17,28 @@ import useDiscreteApi from './hooks/useDiscreteApi';
 import router from './router';
 import store from './store';
 
+async function cleanupStaleDevServiceWorkers() {
+  if (!import.meta.env.DEV || !('serviceWorker' in navigator)) {
+    return;
+  }
+
+  try {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((registration) => registration.unregister()));
+
+    if ('caches' in window) {
+      const cacheNames = await window.caches.keys();
+      await Promise.all(cacheNames.map((cacheName) => window.caches.delete(cacheName)));
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('[Cordys CRM] Failed to clean stale dev service workers.', error);
+  }
+}
+
 async function setupApp() {
+  await cleanupStaleDevServiceWorkers();
+
   const app = createApp(App);
   const { message } = useDiscreteApi();
 

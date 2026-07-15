@@ -90,6 +90,7 @@
             so.order_no like concat('%', #{request.keyword},'%')
             or c.name like concat('%', #{request.keyword},'%')
             or cc.name like concat('%', #{request.keyword},'%')
+            or <include refid="ownerDisplayName"/> like concat('%', #{request.keyword},'%')
             )
         </if>
         <if test="source and request.keyword != null and request.keyword != ''">
@@ -106,6 +107,82 @@
             <property name="combineSearch" value="request.viewCombineSearch"/>
         </include>
         <include refid="sort">
+            <property name="sort" value="request.sort"/>
+        </include>
+    </select>
+
+    <select id="summaryList" resultType="cn.cordys.crm.order.dto.response.OrderSummaryResponse">
+        SELECT
+        so.order_no,
+        MIN(so.processor) AS processor,
+        MIN(so.`owner`) AS owner,
+        MIN(so.merchandiser) AS merchandiser,
+        MIN(so.order_time) AS order_time,
+        SUM(COALESCE(so.quantity, 0)) AS quantity,
+        MIN(so.unit) AS unit,
+        SUM(COALESCE(so.amount, 0)) AS amount,
+        MIN(so.currency) AS currency
+        FROM sales_order so
+        LEFT JOIN contract c ON so.contract_id = c.id
+        LEFT JOIN customer cc ON so.customer_id = cc.id
+        <include refid="fieldConditionJoin">
+            <property name="conditions" value="request.filters"/>
+            <property name="tablePrefix" value="filter"/>
+        </include>
+        <include refid="fieldConditionJoin">
+            <property name="conditions" value="request.combineSearch.conditions"/>
+            <property name="tablePrefix" value="combine"/>
+        </include>
+        <include refid="fieldConditionJoin">
+            <property name="conditions" value="request.viewCombineSearch.conditions"/>
+            <property name="tablePrefix" value="viewCombine"/>
+        </include>
+        <if test="dataPermission != null and dataPermission.deptIds.size() > 0">
+            join sys_user owner_user on (so.owner = owner_user.id or so.owner = owner_user.name)
+            join sys_organization_user on so.organization_id = sys_organization_user.organization_id
+            and sys_organization_user.user_id = owner_user.id
+            and (
+            sys_organization_user.department_id in
+            <foreach collection="dataPermission.deptIds" item="deptId" open="(" close=")" separator=",">
+                #{deptId}
+            </foreach>
+            <if test="dataPermission.viewId == 'ALL'">
+                or sys_organization_user.user_id = #{userId}
+            </if>
+            )
+        </if>
+        where so.organization_id = #{orgId}
+        and so.order_no is not null
+        and so.order_no != ''
+
+        <if test="dataPermission != null and dataPermission.self">
+            and (
+                so.owner = #{userId}
+                or so.owner = (select name from sys_user where id = #{userId})
+            )
+        </if>
+
+        <if test="request.keyword != null and request.keyword != ''">
+            and (
+            so.order_no like concat('%', #{request.keyword},'%')
+            or so.processor like concat('%', #{request.keyword},'%')
+            or so.merchandiser like concat('%', #{request.keyword},'%')
+            or <include refid="ownerDisplayName"/> like concat('%', #{request.keyword},'%')
+            )
+        </if>
+
+        <include refid="filters">
+            <property name="filters" value="request.filters"/>
+        </include>
+        <include refid="combine">
+            <property name="combineSearch" value="request.combineSearch"/>
+        </include>
+        <include refid="viewCombine">
+            <property name="combineSearch" value="request.viewCombineSearch"/>
+        </include>
+
+        GROUP BY so.order_no
+        <include refid="summarySort">
             <property name="sort" value="request.sort"/>
         </include>
     </select>
@@ -169,6 +246,103 @@
     </select>
 
     <!-- common sql start -->
+    <sql id="ownerUserId">
+        COALESCE(
+            (
+                SELECT owner_id_org_user.user_id
+                FROM sys_organization_user owner_id_org_user
+                WHERE owner_id_org_user.user_id = so.owner
+                  AND owner_id_org_user.organization_id = #{orgId}
+                LIMIT 1
+            ),
+            (
+                SELECT owner_name_org_user.user_id
+                FROM sys_user owner_name_user
+                JOIN sys_organization_user owner_name_org_user
+                  ON owner_name_org_user.user_id = owner_name_user.id
+                 AND owner_name_org_user.organization_id = #{orgId}
+                WHERE owner_name_user.name = so.owner
+                ORDER BY owner_name_org_user.enable DESC, owner_name_user.id ASC
+                LIMIT 1
+            ),
+            so.owner
+        )
+    </sql>
+
+    <sql id="ownerDisplayName">
+        COALESCE(
+            (
+                SELECT owner_display_user.name
+                FROM sys_user owner_display_user
+                JOIN sys_organization_user owner_display_org_user
+                  ON owner_display_org_user.user_id = owner_display_user.id
+                 AND owner_display_org_user.organization_id = #{orgId}
+                WHERE owner_display_user.id = so.owner
+                ORDER BY owner_display_org_user.enable DESC, owner_display_user.id ASC
+                LIMIT 1
+            ),
+            so.owner
+        )
+    </sql>
+
+    <sql id="ownerCondition">
+        <trim prefix="(" suffix=")">
+            <choose>
+                <when test="condition.operator == 'IN'">
+                    so.owner in
+                    <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                        #{v}
+                    </foreach>
+                    or <include refid="ownerUserId"/> in
+                    <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                        #{v}
+                    </foreach>
+                    or <include refid="ownerDisplayName"/> in
+                    <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                        #{v}
+                    </foreach>
+                </when>
+                <when test="condition.operator == 'NOT_IN'">
+                    so.owner is null
+                    or so.owner = ''
+                    or (
+                        so.owner not in
+                        <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                            #{v}
+                        </foreach>
+                        and <include refid="ownerUserId"/> not in
+                        <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                            #{v}
+                        </foreach>
+                        and <include refid="ownerDisplayName"/> not in
+                        <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                            #{v}
+                        </foreach>
+                    )
+                </when>
+                <when test="condition.operator == 'EMPTY'">
+                    so.owner is null or so.owner = ''
+                </when>
+                <when test="condition.operator == 'NOT_EMPTY'">
+                    so.owner is not null and so.owner != ''
+                </when>
+                <when test="condition.operator == 'EQUALS'">
+                    so.owner = #{condition.value}
+                    or <include refid="ownerUserId"/> = #{condition.value}
+                    or <include refid="ownerDisplayName"/> = #{condition.value}
+                </when>
+                <when test="condition.operator == 'NOT_EQUALS'">
+                    so.owner is null
+                    or (
+                        so.owner != #{condition.value}
+                        and <include refid="ownerUserId"/> != #{condition.value}
+                        and <include refid="ownerDisplayName"/> != #{condition.value}
+                    )
+                </when>
+            </choose>
+        </trim>
+    </sql>
+
     <sql id="fieldConditionJoin">
         <if test="${conditions} != null and ${conditions}.size() > 0">
             <foreach collection="${conditions}" item="condition" index="i">
@@ -262,9 +436,8 @@
                 </choose>
             </when>
             <when test="condition.name == 'owner'">
-                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                <include refid="ownerCondition">
                     <property name="condition" value="condition"/>
-                    <property name="column" value="so.owner"/>
                 </include>
             </when>
             <when test="condition.name == 'stage'">
@@ -559,6 +732,50 @@
         </choose>
     </sql>
 
+    <sql id="summarySort">
+        <choose>
+            <when test="${sort} != null and ${sort}.valid()">
+                <bind name="sortType" value="${sort}.type"/>
+                order by
+                <choose>
+                    <when test="${sort}.name == 'orderNo'">
+                        so.order_no ${sortType}
+                    </when>
+                    <when test="${sort}.name == 'processor'">
+                        MIN(so.processor) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'owner'">
+                        MIN(so.owner) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'merchandiser'">
+                        MIN(so.merchandiser) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'orderTime'">
+                        MIN(so.order_time) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'quantity'">
+                        SUM(COALESCE(so.quantity, 0)) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'unit'">
+                        MIN(so.unit) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'amount'">
+                        SUM(COALESCE(so.amount, 0)) ${sortType}, so.order_no ASC
+                    </when>
+                    <when test="${sort}.name == 'currency'">
+                        MIN(so.currency) ${sortType}, so.order_no ASC
+                    </when>
+                    <otherwise>
+                        so.order_no ASC
+                    </otherwise>
+                </choose>
+            </when>
+            <otherwise>
+                order by MIN(so.create_time) desc, so.order_no asc
+            </otherwise>
+        </choose>
+    </sql>
+
     <select id="getDetail" resultType="cn.cordys.crm.order.dto.response.OrderGetResponse">
         SELECT  so.id,
                 so.order_no AS name,
@@ -605,6 +822,7 @@
         FROM
         sales_order so
         LEFT JOIN contract c ON so.contract_id = c.id
+        LEFT JOIN customer cc ON so.customer_id = cc.id
         <include refid="fieldConditionJoin">
             <property name="conditions" value="request.filters"/>
             <property name="tablePrefix" value="filter"/>
@@ -644,6 +862,9 @@
         <if test="request.keyword != null and request.keyword != ''">
             and (
             so.order_no like concat('%', #{request.keyword},'%')
+            or c.name like concat('%', #{request.keyword},'%')
+            or cc.name like concat('%', #{request.keyword},'%')
+            or <include refid="ownerDisplayName"/> like concat('%', #{request.keyword},'%')
             )
         </if>
 

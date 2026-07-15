@@ -394,7 +394,10 @@ public class AiAgentSemanticSchemaService {
                 List.of(
                         field("id", "ID", "ci.id").sortable(true),
                         field("order_no", "订单号", "ci.order_no", "MLS编号", "编号").sortable(true),
-                        field("product_name", "产品名称", "ci.product_name", "品名"),
+                        field("product_name", "产品名称", "ci.product_name", "品名").aggregatable(true),
+                        field("total_quantity", "总数量", "ci.total_quantity", "数量", "采购数量")
+                                .sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("unit", "单位", "ci.unit").aggregatable(true),
                         field("manager", "负责人", "ci.manager", "销售").aggregatable(true),
                         field("customer", "客户名称", "ci.customer", "客户").aggregatable(true),
                         field("order_status", "订单状态", "ci.order_status", "状态").aggregatable(true),

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.cordys.crm.aiagent.mapper.AiAgentKnowledgeMapper">
+
+    <select id="listDocuments" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocument">
+        SELECT *
+        FROM ai_knowledge_document
+        WHERE organization_id = #{orgId}
+        <if test="request.keyword != null and request.keyword != ''">
+            AND (
+                name LIKE CONCAT('%', #{request.keyword}, '%')
+                OR original_name LIKE CONCAT('%', #{request.keyword}, '%')
+                OR remark LIKE CONCAT('%', #{request.keyword}, '%')
+            )
+        </if>
+        <if test="request.fileType != null and request.fileType != ''">
+            AND file_type = #{request.fileType}
+        </if>
+        <if test="request.category != null and request.category != ''">
+            AND category = #{request.category}
+        </if>
+        <if test="request.parseStatus != null and request.parseStatus != ''">
+            AND parse_status = #{request.parseStatus}
+        </if>
+        <if test="request.enabled != null">
+            AND enabled = #{request.enabled}
+        </if>
+        ORDER BY update_time DESC
+    </select>
+
+    <select id="listChunks" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT *
+        FROM ai_knowledge_chunk
+        WHERE organization_id = #{orgId}
+          AND document_id = #{documentId}
+        ORDER BY chunk_index ASC
+    </select>
+
+    <select id="searchChunks" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND c.enabled = 1
+          AND d.enabled = 1
+          AND d.parse_status = 'PARSED'
+          AND (
+              c.content LIKE CONCAT('%', #{question}, '%')
+              <foreach collection="keywords" item="keyword">
+                  OR c.content LIKE CONCAT('%', #{keyword}, '%')
+                  OR c.title LIKE CONCAT('%', #{keyword}, '%')
+                  OR d.name LIKE CONCAT('%', #{keyword}, '%')
+              </foreach>
+          )
+        ORDER BY c.update_time DESC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="deleteChunksByDocumentId">
+        DELETE FROM ai_knowledge_chunk
+        WHERE organization_id = #{orgId}
+          AND document_id = #{documentId}
+    </delete>
+</mapper>

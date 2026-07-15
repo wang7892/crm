@@ -216,7 +216,7 @@ export default {
   'crmFormDesign.PLAN_TO_RECORD': 'Plan to Record',
   'crmFormDesign.CONTRACT_TO_INVOICE': 'Add Invoice',
   'crmFormDesign.CLUE_TO_CONTACT': 'Lead to Contact',
-  'crmFormDesign.CONTRACT_TO_ORDER': 'Create Order',
+  'crmFormDesign.CONTRACT_TO_ORDER': 'Create Processing Order',
   'crmFormDesign.tip.CLUE_TO_CUSTOMER':
     'When converting a lead to an account, fill the lead form field content into the account form field',
   'crmFormDesign.tip.CLUE_TO_OPPORTUNITY':
@@ -236,7 +236,7 @@ export default {
   'crmFormDesign.tip.CLUE_TO_CONTACT':
     'When converting a lead to a contact, fill the lead form field content into the contact form fields. Note: The customer name field in the contact form is filled by system logic, please do not configure it!',
   'crmFormDesign.tip.CONTRACT_TO_ORDER':
-    'When creating an order in the contract details, fill the contract form fields into the order form fields',
+    'When creating a processing order in the contract details, fill the contract form fields into the processing order form fields',
   'crmFormDesign.productTable': 'Product Table',
   'crmFormDesign.quotationTable': 'Quotation Table',
   'crmFormDesign.sum': 'Sum',

@@ -6,6 +6,7 @@ import { isArraysEqualWithOrder } from '@lib/shared/method/equal';
 
 import type { CrmDataTableColumn, TableStorageConfigItem } from '@/components/pure/crm-table/type';
 
+import { sortCustomerTableBodyColumns } from '@/config/customerTable';
 import useAppStore from '@/store/modules/app';
 
 import useLocalForage from './useLocalForage';
@@ -84,7 +85,11 @@ export default function useTableStore() {
     return result;
   }
 
-  function sortByOldOrder(oldArr: CrmDataTableColumn[], newArr: CrmDataTableColumn[]): CrmDataTableColumn[] {
+  function sortByOldOrder(
+    oldArr: CrmDataTableColumn[],
+    newArr: CrmDataTableColumn[],
+    tableKey?: TableKeyEnum
+  ): CrmDataTableColumn[] {
     const mapNew = new Map(newArr.map((item) => [item.key, item]));
 
     const isBodyColumnKey = (key: string | number | undefined, col: CrmDataTableColumn | undefined) =>
@@ -103,14 +108,29 @@ export default function useTableStore() {
 
     const codeBodyCols = newArr.filter((item) => isBodyColumnKey(item.key, item));
 
-    const mergedBodyKeys = insertNewKeysByCodeOrder(oldBodyKeys, codeBodyCols);
-    const sorted = mergedBodyKeys.map((key) => mapNew.get(key)).filter(Boolean) as CrmDataTableColumn[];
+    const sorted =
+      tableKey === TableKeyEnum.CUSTOMER
+        ? sortCustomerTableBodyColumns(codeBodyCols)
+        : (insertNewKeysByCodeOrder(oldBodyKeys, codeBodyCols)
+            .map((key) => mapNew.get(key))
+            .filter(Boolean) as CrmDataTableColumn[]);
 
-    const operationColumn = oldArr.find((item) => item.key === SpecialColumnEnum.OPERATION);
+    const operationColumn = newArr.find((item) => item.key === SpecialColumnEnum.OPERATION);
     const selectionColumn = newArr.find((item) => item.type === SpecialColumnEnum.SELECTION);
     const orderColumn = newArr.find((item) => item.key === SpecialColumnEnum.ORDER);
     const dragColumn = newArr.find((item) => item.key === SpecialColumnEnum.DRAG);
-    const selectorDisabledColumns = newArr.filter((item) => item.columnSelectorDisabled === true);
+    const selectorDisabledColumns = newArr.filter(
+      (item) =>
+        item.columnSelectorDisabled === true &&
+        item.key !== SpecialColumnEnum.ORDER &&
+        item.key !== SpecialColumnEnum.DRAG &&
+        item.type !== SpecialColumnEnum.SELECTION
+    );
+    if (tableKey === TableKeyEnum.CUSTOMER) {
+      return [dragColumn, selectionColumn, orderColumn, ...selectorDisabledColumns, ...sorted, operationColumn].filter(
+        Boolean
+      ) as CrmDataTableColumn[];
+    }
     // 将 columnSelectorDisabled 的列放在最前面
     if (selectorDisabledColumns.length) {
       sorted.splice(0, 0, ...selectorDisabledColumns);
@@ -127,9 +147,10 @@ export default function useTableStore() {
 
   function buildMergedColumns(
     storedColumn: CrmDataTableColumn[],
-    codeColumn: CrmDataTableColumn[]
+    codeColumn: CrmDataTableColumn[],
+    tableKey?: TableKeyEnum
   ): CrmDataTableColumn[] {
-    return sortByOldOrder(storedColumn, codeColumn).map((e) => {
+    return sortByOldOrder(storedColumn, codeColumn, tableKey).map((e) => {
       const sameItem = storedColumn.find((item) => item.key === e.key);
       if (sameItem) {
         let { width } = sameItem;
@@ -169,7 +190,7 @@ export default function useTableStore() {
         const isEqual = isArraysEqualWithOrder(oldColumn, column);
         if (!isEqual) {
           // 如果不相等，说明有变动将新的column存入indexDB
-          const newColumns = buildMergedColumns(tableColumnsMap.column, column);
+          const newColumns = buildMergedColumns(tableColumnsMap.column, column, tableKey);
           await setTableColumnsMap(tableKey, {
             ...tableColumnsMap,
             column: newColumns,
@@ -189,7 +210,7 @@ export default function useTableStore() {
               !savedKeys.has(c.key)
           );
           if (missingCodeColumn) {
-            const newColumns = buildMergedColumns(latestMap.column, column);
+            const newColumns = buildMergedColumns(latestMap.column, column, tableKey);
             await setTableColumnsMap(tableKey, {
               ...latestMap,
               column: newColumns,
@@ -199,7 +220,7 @@ export default function useTableStore() {
           // 合并规则升级后（如新增列按代码顺序插入而非追加到末尾），纠正本地已缓存的错误列顺序
           const syncedMap = await getTableColumnsMap(tableKey);
           if (syncedMap) {
-            const reordered = buildMergedColumns(syncedMap.column, column);
+            const reordered = buildMergedColumns(syncedMap.column, column, tableKey);
             const oldOrder = syncedMap.column.map((c) => String(c.key)).join(',');
             const newOrder = reordered.map((c) => String(c.key)).join(',');
             if (oldOrder !== newOrder) {

@@ -63,14 +63,6 @@ const defaultPlatformResource = {
 
 const defaultModuleConfig = [
   {
-    moduleKey: ModuleConfigEnum.DASHBOARD,
-    enable: true,
-  },
-  {
-    moduleKey: ModuleConfigEnum.AGENT,
-    enable: true,
-  },
-  {
     moduleKey: ModuleConfigEnum.HOME,
     enable: true,
   },
@@ -84,6 +76,18 @@ const defaultModuleConfig = [
   },
   {
     moduleKey: ModuleConfigEnum.ORDER,
+    enable: true,
+  },
+  {
+    moduleKey: ModuleConfigEnum.DASHBOARD,
+    enable: true,
+  },
+  {
+    moduleKey: ModuleConfigEnum.AI_KNOWLEDGE,
+    enable: true,
+  },
+  {
+    moduleKey: ModuleConfigEnum.AGENT,
     enable: true,
   },
   {
@@ -103,6 +107,14 @@ const defaultModuleConfig = [
     enable: true,
   },
 ];
+
+function withDefaultEnabledModules(modules: { moduleKey: string; enable: boolean }[]) {
+  const moduleMap = new Map(modules.map((item) => [item.moduleKey, item]));
+  const defaultModuleKeys = new Set(defaultModuleConfig.map((item) => item.moduleKey));
+  const orderedDefaultModules = defaultModuleConfig.map((item) => ({ ...item, ...moduleMap.get(item.moduleKey) }));
+  const extraModules = modules.filter((item) => !defaultModuleKeys.has(item.moduleKey as ModuleConfigEnum));
+  return [...orderedDefaultModules, ...extraModules];
+}
 
 const useAppStore = defineStore('app', {
   state: (): AppState => ({
@@ -228,9 +240,11 @@ const useAppStore = defineStore('app', {
      */
     async initModuleConfig() {
       try {
-        this.moduleConfigList = await getModuleNavConfigList({
-          organizationId: this.orgId,
-        });
+        this.moduleConfigList = withDefaultEnabledModules(
+          await getModuleNavConfigList({
+            organizationId: this.orgId,
+          })
+        );
         // TODO license 先放开
         // if (!useLicenseStore().hasLicense()) {
         //   this.moduleConfigList = this.moduleConfigList.filter((e) => e.moduleKey !== ModuleConfigEnum.DASHBOARD);

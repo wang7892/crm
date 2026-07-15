@@ -22,7 +22,7 @@
     <n-divider v-if="props.isSubTableField && !props.isSubTableRender" class="!my-0" />
     <n-date-picker
       v-model:value="value"
-      :type="props.fieldConfig.dateType"
+      :type="datePickerType"
       :format="dateFormat"
       :placeholder="props.fieldConfig.placeholder"
       :disabled="props.fieldConfig.editable === false || props.disabled || !!props.fieldConfig.resourceFieldId"
@@ -63,11 +63,16 @@
     default: null,
   });
 
+  const datePickerType = computed(() => {
+    const { dateType } = props.fieldConfig;
+    return dateType === 'month' || dateType === 'date' || dateType === 'datetime' ? dateType : 'datetime';
+  });
+
   const dateFormat = computed(() => {
-    if (props.fieldConfig.dateType === 'month') {
+    if (datePickerType.value === 'month') {
       return 'yyyy-MM';
     }
-    if (props.fieldConfig.dateType === 'date') {
+    if (datePickerType.value === 'date') {
       return 'yyyy-MM-dd';
     }
     return 'yyyy-MM-dd HH:mm:ss';
@@ -121,7 +126,7 @@
       );
     }
 
-    if (props.fieldConfig.dateType === 'month') {
+    if (datePickerType.value === 'month') {
       const monthMatch = normalized.match(/^(\d{4})-(\d{1,2})$/);
       if (!monthMatch) {
         return undefined;
@@ -139,9 +144,9 @@
       Number(year),
       Number(month),
       Number(day),
-      props.fieldConfig.dateType === 'datetime' ? Number(hour) : 0,
-      props.fieldConfig.dateType === 'datetime' ? Number(minute) : 0,
-      props.fieldConfig.dateType === 'datetime' ? Number(second) : 0
+      datePickerType.value === 'datetime' ? Number(hour) : 0,
+      datePickerType.value === 'datetime' ? Number(minute) : 0,
+      datePickerType.value === 'datetime' ? Number(second) : 0
     );
   }
 

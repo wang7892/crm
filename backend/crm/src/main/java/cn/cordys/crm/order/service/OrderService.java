@@ -37,6 +37,7 @@ import cn.cordys.crm.order.dto.response.OrderGetResponse;
 import cn.cordys.crm.order.dto.response.OrderListResponse;
 import cn.cordys.crm.order.dto.response.OrderStageConfigResponse;
 import cn.cordys.crm.order.dto.response.OrderStatisticResponse;
+import cn.cordys.crm.order.dto.response.OrderSummaryResponse;
 import cn.cordys.crm.order.mapper.ExtOrderMapper;
 import cn.cordys.crm.order.mapper.ExtOrderStageConfigMapper;
 import cn.cordys.crm.system.dto.field.SerialNumberField;
@@ -575,6 +576,32 @@ public class OrderService {
         Map<String, List<OptionDTO>> optionMap = buildOptionMap(list, results, customerFormConfig);
 
         return PageUtils.setPageInfoWithOption(page, results, optionMap);
+    }
+
+    public PagerWithOption<List<OrderSummaryResponse>> summaryList(OrderPageRequest request, String userId, String orgId, DeptDataPermissionDTO deptDataPermission) {
+        Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
+        List<OrderSummaryResponse> list = extOrderMapper.summaryList(request, orgId, userId, deptDataPermission);
+        List<OrderSummaryResponse> results = buildSummaryList(list, orgId);
+        return PageUtils.setPageInfoWithOption(page, results, Collections.emptyMap());
+    }
+
+    private List<OrderSummaryResponse> buildSummaryList(List<OrderSummaryResponse> list, String orgId) {
+        if (CollectionUtils.isEmpty(list)) {
+            return list;
+        }
+        List<String> ownerValues = list.stream()
+                .map(OrderSummaryResponse::getOwner)
+                .filter(StringUtils::isNotBlank)
+                .distinct()
+                .toList();
+        Map<String, String> ownerIdMap = baseService.resolveUserIdsByIdsOrNames(ownerValues, orgId);
+        List<String> ownerIds = ownerIdMap.values().stream().distinct().toList();
+        Map<String, String> userNameMap = baseService.getUserNameMap(ownerIds);
+        list.forEach(item -> {
+            String ownerId = ownerIdMap.get(item.getOwner());
+            item.setOwnerName(StringUtils.defaultIfBlank(userNameMap.get(ownerId), item.getOwner()));
+        });
+        return list;
     }
 
     private Map<String, List<OptionDTO>> buildOptionMap(List<OrderListResponse> list, List<OrderListResponse> buildList,

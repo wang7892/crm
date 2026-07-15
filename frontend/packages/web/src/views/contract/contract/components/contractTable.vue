@@ -144,7 +144,7 @@
   import useModal from '@/hooks/useModal';
   // import useViewChartParams, { STORAGE_VIEW_CHART_KEY, ViewChartResult } from '@/hooks/useViewChartParams';
   import { getExportColumns } from '@/utils/export';
-  import { hasAnyPermission } from '@/utils/permission';
+  import { hasAllPermission, hasAnyPermission } from '@/utils/permission';
 
   import { ContractRouteEnum } from '@/enums/routeEnum';
 
@@ -219,7 +219,7 @@
         key: 'delete',
         permission: ['CONTRACT:DELETE'],
       },
-    ];
+    ].filter((item) => hasAllPermission(item.permission));
   }
 
   const showDetailDrawer = ref(false);
@@ -251,7 +251,6 @@
     });
   }
 
-  // 回款
   async function handleActionSelect(row: ContractItem, actionKey: string) {
     switch (actionKey) {
       case 'edit':
@@ -277,20 +276,22 @@
     );
   }
 
+  const operationGroupList = getOperationGroupList();
+
   const { useTableRes, customFieldsFilterConfig, fieldList } = await useFormCreateTable({
     formKey: FormDesignKeyEnum.CONTRACT,
-    operationColumn: {
-      key: 'operation',
-      width: currentLocale.value === 'en-US' ? 180 : 150,
-      fixed: 'right',
-      render: (row: ContractItem) =>
-        getOperationGroupList().length
-          ? h(CrmOperationButton, {
-              groupList: getOperationGroupList(),
+    operationColumn: operationGroupList.length
+      ? {
+          key: 'operation',
+          width: currentLocale.value === 'en-US' ? 180 : 150,
+          fixed: 'right',
+          render: (row: ContractItem) =>
+            h(CrmOperationButton, {
+              groupList: operationGroupList,
               onSelect: (key: string) => handleActionSelect(row, key),
-            })
-          : '-',
-    },
+            }),
+        }
+      : undefined,
     specialRender: {
       name: (row: ContractItem) => {
         return h(

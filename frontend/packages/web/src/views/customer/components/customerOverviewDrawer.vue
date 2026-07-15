@@ -236,6 +236,18 @@
         enable: true,
       },
       {
+        name: 'order',
+        tab: t('module.order'),
+        enable: true,
+        permission: ['ORDER:READ'],
+      },
+      {
+        name: 'contract',
+        tab: t('module.contract'),
+        enable: true,
+        permission: ['CONTRACT:READ'],
+      },
+      {
         name: 'followPlan',
         tab: t('common.plan'),
         enable: true,
@@ -262,12 +274,6 @@
         enable: true,
       },
       {
-        name: 'contract',
-        tab: t('module.contract'),
-        enable: true,
-        permission: ['CONTRACT:READ'],
-      },
-      {
         name: 'contractPayment',
         tab: t('module.paymentPlan'),
         enable: true,
@@ -284,12 +290,6 @@
         tab: t('module.invoice'),
         enable: true,
         permission: ['CONTRACT_INVOICE:READ'],
-      },
-      {
-        name: 'order',
-        tab: t('module.order'),
-        enable: true,
-        permission: ['ORDER:READ'],
       },
     ];
     if (collaborationType.value) {

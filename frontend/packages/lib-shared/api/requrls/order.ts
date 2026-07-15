@@ -4,6 +4,7 @@ export const UpdateOrderStageUrl = '/order/update/stage';
 export const DeleteOrderUrl = '/order/delete';
 export const GetOrderDetailUrl = '/order/get';
 export const OrderPageUrl = '/order/page';
+export const OrderSummaryPageUrl = '/order/summary/page';
 export const OrderDetailSnapshotUrl = '/order/get/snapshot';
 export const OrderFormConfigUrl = '/order/module/form';
 export const OrderFormConfigSnapshotUrl = '/order/module/form/snapshot';

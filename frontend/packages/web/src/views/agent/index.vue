@@ -59,10 +59,10 @@
       </section>
 
       <div class="sidebar-user">
-        <div class="user-avatar">汪</div>
+        <div class="user-avatar">{{ currentUserInitial }}</div>
         <div>
-          <div class="user-name">user</div>
-          <div class="user-plan">CRM Pro</div>
+          <div class="user-name">{{ currentUserName }}</div>
+          <div class="user-plan">{{ currentUserRoleName }}</div>
         </div>
       </div>
     </aside>
@@ -218,11 +218,13 @@
   import CrmIcon from '@/components/pure/crm-icon-font/index.vue';
 
   import { chatAiAgent, deleteAiAgentSession, getAiAgentMessages, getAiAgentSessions } from '@/api/modules';
+  import useUserStore from '@/store/modules/user';
 
   import { ContractRouteEnum, CustomerRouteEnum } from '@/enums/routeEnum';
 
   type MessageRole = 'assistant' | 'user';
   type FeatureKey = 'chat' | 'value' | 'risk' | 'signal' | 'config';
+  type CurrentUserRole = string | { name?: string };
 
   interface EvidenceItem {
     key: string;
@@ -263,6 +265,7 @@
   }
 
   const router = useRouter();
+  const userStore = useUserStore();
   const activeFeature = ref<FeatureKey>('chat');
   const activeSessionId = ref('default');
   const questionInput = ref('');
@@ -270,6 +273,16 @@
   const dataScope = ref('company');
   const loading = ref(false);
   const selectedLlmProvider = ref('primary');
+
+  const currentUserName = computed(() => userStore.userInfo.name || '当前用户');
+  const currentUserInitial = computed(() => currentUserName.value.trim().charAt(0) || '用');
+  const currentUserRoleName = computed(() => {
+    if (userStore.isAdmin) {
+      return '管理员';
+    }
+    const currentRole = userStore.userInfo.roles[0] as CurrentUserRole | undefined;
+    return typeof currentRole === 'string' ? currentRole : currentRole?.name || '联系专员';
+  });
 
   const llmProviderOptions = [
     { label: 'GPT-5.5', key: 'primary' },

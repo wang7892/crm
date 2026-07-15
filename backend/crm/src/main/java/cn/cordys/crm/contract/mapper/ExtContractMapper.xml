@@ -66,6 +66,7 @@
             and (
             ct.name like concat('%', #{request.keyword},'%')
             or c.name like concat('%', #{request.keyword},'%')
+            or <include refid="ownerDisplayName"/> like concat('%', #{request.keyword},'%')
             )
         </if>
         <if test="source and request.keyword != null and request.keyword != ''">
@@ -154,6 +155,103 @@
         )
     </sql>
 
+    <sql id="ownerUserId">
+        COALESCE(
+            (
+                SELECT owner_org_user.user_id
+                FROM sys_organization_user owner_org_user
+                WHERE owner_org_user.user_id = ct.owner
+                  AND owner_org_user.organization_id = #{orgId}
+                LIMIT 1
+            ),
+            (
+                SELECT owner_name_org_user.user_id
+                FROM sys_user owner_name_user
+                JOIN sys_organization_user owner_name_org_user
+                  ON owner_name_org_user.user_id = owner_name_user.id
+                 AND owner_name_org_user.organization_id = #{orgId}
+                WHERE owner_name_user.name = ct.owner
+                ORDER BY owner_name_org_user.enable DESC, owner_name_user.id ASC
+                LIMIT 1
+            ),
+            ct.owner
+        )
+    </sql>
+
+    <sql id="ownerDisplayName">
+        COALESCE(
+            (
+                SELECT owner_display_user.name
+                FROM sys_user owner_display_user
+                JOIN sys_organization_user owner_display_org_user
+                  ON owner_display_org_user.user_id = owner_display_user.id
+                 AND owner_display_org_user.organization_id = #{orgId}
+                WHERE owner_display_user.id = ct.owner
+                ORDER BY owner_display_org_user.enable DESC, owner_display_user.id ASC
+                LIMIT 1
+            ),
+            ct.owner
+        )
+    </sql>
+
+    <sql id="ownerCondition">
+        <trim prefix="(" suffix=")">
+            <choose>
+                <when test="condition.operator == 'IN'">
+                    ct.owner in
+                    <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                        #{v}
+                    </foreach>
+                    or <include refid="ownerUserId"/> in
+                    <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                        #{v}
+                    </foreach>
+                    or <include refid="ownerDisplayName"/> in
+                    <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                        #{v}
+                    </foreach>
+                </when>
+                <when test="condition.operator == 'NOT_IN'">
+                    ct.owner is null
+                    or ct.owner = ''
+                    or (
+                        ct.owner not in
+                        <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                            #{v}
+                        </foreach>
+                        and <include refid="ownerUserId"/> not in
+                        <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                            #{v}
+                        </foreach>
+                        and <include refid="ownerDisplayName"/> not in
+                        <foreach collection="condition.value" item="v" separator="," open="(" close=")">
+                            #{v}
+                        </foreach>
+                    )
+                </when>
+                <when test="condition.operator == 'EMPTY'">
+                    ct.owner is null or ct.owner = ''
+                </when>
+                <when test="condition.operator == 'NOT_EMPTY'">
+                    ct.owner is not null and ct.owner != ''
+                </when>
+                <when test="condition.operator == 'EQUALS'">
+                    ct.owner = #{condition.value}
+                    or <include refid="ownerUserId"/> = #{condition.value}
+                    or <include refid="ownerDisplayName"/> = #{condition.value}
+                </when>
+                <when test="condition.operator == 'NOT_EQUALS'">
+                    ct.owner is null
+                    or (
+                        ct.owner != #{condition.value}
+                        and <include refid="ownerUserId"/> != #{condition.value}
+                        and <include refid="ownerDisplayName"/> != #{condition.value}
+                    )
+                </when>
+            </choose>
+        </trim>
+    </sql>
+
     <sql id="fieldConditionJoin">
         <if test="${conditions} != null and ${conditions}.size() > 0">
             <foreach collection="${conditions}" item="condition" index="i">
@@ -227,9 +325,8 @@
                 </include>
             </when>
             <when test="condition.name == 'owner'">
-                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                <include refid="ownerCondition">
                     <property name="condition" value="condition"/>
-                    <property name="column" value="ct.owner"/>
                 </include>
             </when>
             <when test="condition.name == 'number'">
@@ -502,7 +599,8 @@
         <if test="request.keyword != null and request.keyword != ''">
             and (
             ct.name like concat('%', #{request.keyword},'%')
-            or ct.name like concat('%', #{request.keyword},'%')
+            or c.name like concat('%', #{request.keyword},'%')
+            or <include refid="ownerDisplayName"/> like concat('%', #{request.keyword},'%')
             )
         </if>
 

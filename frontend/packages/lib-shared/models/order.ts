@@ -77,6 +77,19 @@ export interface OrderItem {
   attachmentMap?: Record<string, any>;
 }
 
+export interface OrderSummaryItem {
+  orderNo: string;
+  processor?: string;
+  owner?: string;
+  ownerName?: string;
+  merchandiser?: string;
+  orderTime?: number;
+  quantity?: number | string;
+  unit?: string;
+  amount?: number | string;
+  currency?: string;
+}
+
 export interface ExternalOrderSyncResult {
   total: number;
   created: number;

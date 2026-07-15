@@ -26,6 +26,9 @@ export enum ModuleConfigEnum {
   /** 智能体 */
   AGENT = 'agent',
 
+  /** AI 公司知识库 */
+  AI_KNOWLEDGE = 'aiKnowledge',
+
   /** 合同 */
   CONTRACT = 'contract',
 

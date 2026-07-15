@@ -1,9 +1,7 @@
 package cn.cordys.crm.aiagent.service;
 
 import cn.cordys.common.constants.InternalUserView;
-import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.dto.DeptDataPermissionDTO;
-import cn.cordys.common.service.DataScopeService;
 import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.aiagent.config.AiAgentLlmProperties;
 import cn.cordys.crm.aiagent.domain.AiAgentMessage;
@@ -25,6 +23,7 @@ import cn.cordys.crm.aiagent.dto.query.AiAgentQueryResult;
 import cn.cordys.crm.aiagent.dto.request.AiAgentChatRequest;
 import cn.cordys.crm.aiagent.dto.response.AiAgentChatResponse;
 import cn.cordys.crm.aiagent.dto.response.AiAgentCitationDTO;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
 import cn.cordys.crm.aiagent.dto.response.AiAgentToolCallDTO;
 import cn.cordys.crm.aiagent.mapper.AiAgentInternalMapper;
 import cn.cordys.crm.aiagent.tool.CommunicationTools;
@@ -104,8 +103,6 @@ public class AiAgentChatService {
     @Resource
     private AiAgentAuditService aiAgentAuditService;
     @Resource
-    private DataScopeService dataScopeService;
-    @Resource
     private AiAgentInternalMapper aiAgentInternalMapper;
     @Resource
     private CustomerTools customerTools;
@@ -123,16 +120,13 @@ public class AiAgentChatService {
     private AiAgentMessageBodyAccessService aiAgentMessageBodyAccessService;
     @Resource
     private AiAgentDatabaseQueryService aiAgentDatabaseQueryService;
+    @Resource
+    private AiAgentKnowledgeService aiAgentKnowledgeService;
 
     public AiAgentChatResponse chat(AiAgentChatRequest request) {
         String userId = SessionUtils.getUserId();
         String orgId = OrganizationContext.getOrganizationId();
-        String viewId = resolveViewId(request.getDataScope());
-        DeptDataPermissionDTO customerDataPermission = dataScopeService.getDeptDataPermission(
-                userId, orgId, viewId, PermissionConstants.CUSTOMER_MANAGEMENT_READ);
-        DeptDataPermissionDTO contractDataPermission = dataScopeService.getDeptDataPermission(
-                userId, orgId, viewId, PermissionConstants.CONTRACT_READ);
-        DeptDataPermissionDTO orderDataPermission = getOrderDataPermission(userId, orgId, viewId);
+        DeptDataPermissionDTO unrestrictedDataPermission = unrestrictedDataPermission();
 
         AiAgentSession session = aiAgentAuditService.ensureSession(request.getSessionId(), request.getQuestion(), userId, orgId);
         AiAgentMessage userMessage = aiAgentAuditService.saveMessage(
@@ -142,15 +136,16 @@ public class AiAgentChatService {
         context.setUserId(userId);
         context.setOrganizationId(orgId);
         context.setDataScope(request.getDataScope());
-        context.setDataPermission(customerDataPermission);
-        context.setCustomerDataPermission(customerDataPermission);
-        context.setContractDataPermission(contractDataPermission);
-        context.setOrderDataPermission(orderDataPermission);
+        context.setDataPermission(unrestrictedDataPermission);
+        context.setCustomerDataPermission(unrestrictedDataPermission);
+        context.setContractDataPermission(unrestrictedDataPermission);
+        context.setOrderDataPermission(unrestrictedDataPermission);
         context.setLlmProvider(request.getLlmProvider());
         context.setTimeWindow(resolveTimeWindow(request.getQuestion(), request.getTimeRange()));
 
         AiAgentChatResponse response = route(request.getQuestion(), context);
         recordQuestionBankUsage(request.getQuestion(), response, context, session, userMessage);
+        addKnowledgeSearchTrace(response, context.getKnowledgeSearch());
         addLlmAttemptTrace(response, context);
         AiAgentMessage assistantMessage = aiAgentAuditService.saveMessage(
                 session.getId(),
@@ -219,6 +214,11 @@ public class AiAgentChatService {
         }
         if (containsAny(question, "数据范围", "全公司、我的团队、仅本人", "全公司 我的团队 仅本人")) {
             return dataScopeGuide();
+        }
+        context.setKnowledgeSearch(aiAgentKnowledgeService.searchTest(question, 5, context.getOrganizationId()));
+        AiAgentChatResponse knowledgeGuidedResponse = routeKnowledgeGuidedQuestion(question, context);
+        if (knowledgeGuidedResponse != null) {
+            return knowledgeGuidedResponse;
         }
         ParsedAiAgentQuestion parsedQuestion = llmAiAgentQuestionParser.parse(question, context.getLlmProvider());
         context.setLlmParseAttempted(true);
@@ -514,6 +514,14 @@ public class AiAgentChatService {
                 && !containsAny(question, "某客户", "客户最近沟通"));
     }
 
+    private AiAgentChatResponse routeKnowledgeGuidedQuestion(String question, AiAgentContext context) {
+        if (isCustomerOrderContractYearGapQuestion(question)
+                || knowledgeSuggestsCustomerOrderContractYearGap(question, context)) {
+            return customerOrderContractYearGap(question, context);
+        }
+        return null;
+    }
+
     private boolean isCrmOrderQuestion(String question) {
         if (StringUtils.isBlank(question) || !containsAny(question, "订单", "订单号", "加工单号", "生产单号")) {
             return false;
@@ -528,26 +536,51 @@ public class AiAgentChatService {
     }
 
     private boolean isCustomerOrderContractYearGapQuestion(String question) {
+        return isCustomerDimensionGapLikeQuestion(question)
+                && (extractYears(question).size() >= 2
+                || containsAny(question, "去年", "上年", "上一年", "今年", "本年", "当前年"));
+    }
+
+    private boolean knowledgeSuggestsCustomerOrderContractYearGap(String question, AiAgentContext context) {
+        AiKnowledgeSearchTestResponse knowledgeSearch = context.getKnowledgeSearch();
+        if (!isCustomerDimensionGapLikeQuestion(question)
+                || knowledgeSearch == null
+                || knowledgeSearch.getMatches() == null
+                || knowledgeSearch.getMatches().isEmpty()) {
+            return false;
+        }
+        return knowledgeSearch.getMatches().stream()
+                .map(match -> StringUtils.defaultString(match.getContent()))
+                .anyMatch(content -> containsAny(content, "客户维度查询", "不是订单明细查询", "回答相应的客户", "回答主体必须是客户"));
+    }
+
+    private boolean isCustomerDimensionGapLikeQuestion(String question) {
         return containsAny(question, "客户")
-                && containsAny(question, "2025")
-                && containsAny(question, "2026")
-                && containsAny(question, "没有", "没签", "未签", "未订", "没有签订", "没有订")
-                && containsAny(question, "订单", "合同");
+                && containsAny(question, "有", "下过", "成交", "签订", "订单", "合同")
+                && containsAny(question, "没有", "没签", "未签", "未订", "没订", "没有签订", "没有订", "没有下", "没有成交")
+                && containsAny(question, "订单", "合同", "成交", "下单");
     }
 
     private AiAgentChatResponse customerOrderContractYearGap(String question, AiAgentContext context) {
         List<Integer> years = extractYears(question);
         int sourceYear = years.isEmpty() ? extractYearBefore(question, "有", "下过") : years.get(0);
         int missingYear = years.size() >= 2 ? years.get(1) : extractYearBefore(question, "没有", "没签", "未签", "未订", "没订");
+        int currentYear = Year.now(AGENT_ZONE).getValue();
         boolean asksOrder = containsAny(question, "订单", "下单", "订过", "没订", "未订");
         boolean asksContract = containsAny(question, "合同");
         boolean includeOrders = asksOrder || !asksContract;
         boolean includeContracts = asksContract || !asksOrder;
+        if (sourceYear <= 0 && containsAny(question, "去年", "上年", "上一年")) {
+            sourceYear = currentYear - 1;
+        }
+        if (missingYear <= 0 && containsAny(question, "今年", "本年", "当前年")) {
+            missingYear = currentYear;
+        }
         if (sourceYear <= 0) {
-            sourceYear = 2025;
+            sourceYear = currentYear - 1;
         }
         if (missingYear <= 0 || missingYear == sourceYear) {
-            missingYear = 2026;
+            missingYear = currentYear;
         }
 
         AiAgentQueryResult sourceOrders = queryYearRecords("sales_order", sourceYear,
@@ -1546,12 +1579,46 @@ public class AiAgentChatService {
         addLlmReasoningTrace(response, parsedQuestion);
     }
 
+    private void addKnowledgeSearchTrace(AiAgentChatResponse response, AiKnowledgeSearchTestResponse knowledgeSearch) {
+        if (response == null || knowledgeSearch == null || knowledgeSearch.getMatches() == null || knowledgeSearch.getMatches().isEmpty()) {
+            return;
+        }
+        String summary = "公司知识库命中 " + knowledgeSearch.getMatches().size() + " 个文档片段";
+        String documentName = knowledgeSearch.getMatches().get(0).getDocumentName();
+        if (StringUtils.isNotBlank(documentName)) {
+            summary += "，最高相关来源=" + StringUtils.abbreviate(documentName, 80);
+        }
+        addToolFirst(response, tool("company_knowledge_retrieval", "SUCCESS", summary, 0L));
+    }
+
     private void addLlmReasoningTrace(AiAgentChatResponse response, ParsedAiAgentQuestion parsedQuestion) {
         if (response == null || parsedQuestion == null) {
             return;
         }
+        if (StringUtils.startsWith(parsedQuestion.getSource(), "SKILL:")) {
+            addToolFirst(response, tool("ai_agent_skill_match", "SUCCESS", skillTraceSummary(parsedQuestion), 0L));
+            addWarningOnce(response, "已命中已审核 Skill，再由后端按白名单生成受控查询。");
+            return;
+        }
         addToolFirst(response, tool("llm_question_parser", "SUCCESS", llmTraceSummary(parsedQuestion), 0L));
         addWarningOnce(response, "已先经过大模型解析，再由后端按白名单生成受控查询或调用受控工具。");
+    }
+
+    private String skillTraceSummary(ParsedAiAgentQuestion parsedQuestion) {
+        StringBuilder summary = new StringBuilder("Skill 已纠正问题理解");
+        summary.append("，source=").append(StringUtils.defaultIfBlank(parsedQuestion.getSource(), "SKILL"));
+        summary.append("，confidence=").append(parsedQuestion.getConfidence());
+        if (parsedQuestion.getQueryPlan() != null) {
+            AiAgentQueryPlan plan = parsedQuestion.getQueryPlan();
+            summary.append("，queryPlan=")
+                    .append(StringUtils.defaultIfBlank(plan.getEntity(), "未指定实体"))
+                    .append("/")
+                    .append(StringUtils.defaultIfBlank(plan.getQueryType(), "未指定类型"));
+            if (plan.getFilters() != null && !plan.getFilters().isEmpty()) {
+                summary.append("，filters=").append(plan.getFilters().size());
+            }
+        }
+        return summary.toString();
     }
 
     private void markDeterministicFallback(AiAgentChatResponse response, ParsedAiAgentQuestion parsedQuestion) {
@@ -2760,23 +2827,13 @@ public class AiAgentChatService {
         return new AiAgentTimeWindow(start, end, label);
     }
 
-    private String resolveViewId(String dataScope) {
-        if (StringUtils.equals(dataScope, "mine")) {
-            return InternalUserView.SELF.name();
-        }
-        if (StringUtils.equals(dataScope, "team")) {
-            return InternalUserView.DEPARTMENT.name();
-        }
-        return InternalUserView.ALL.name();
-    }
-
-    private DeptDataPermissionDTO getOrderDataPermission(String userId, String orgId, String viewId) {
-        DeptDataPermissionDTO basePermission = dataScopeService.getDeptDataPermission(userId, orgId, PermissionConstants.ORDER_READ);
-        if (basePermission != null && Boolean.TRUE.equals(basePermission.getAll()) && InternalUserView.isSelf(viewId)) {
-            basePermission.setViewId(viewId);
-            return basePermission;
-        }
-        return dataScopeService.getDeptDataPermission(userId, orgId, viewId, PermissionConstants.ORDER_READ);
+    private DeptDataPermissionDTO unrestrictedDataPermission() {
+        DeptDataPermissionDTO permission = new DeptDataPermissionDTO();
+        permission.setViewId(InternalUserView.ALL.name());
+        permission.setAll(true);
+        permission.setSelf(false);
+        permission.setVisible(false);
+        return permission;
     }
 
     private boolean isSensitiveOrUnauthorizedProbe(String question) {

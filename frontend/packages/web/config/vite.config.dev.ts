@@ -10,7 +10,15 @@ export default mergeConfig(
   {
     mode: 'development',
     server: {
-      open: true,
+      host: '127.0.0.1',
+      port: 5173,
+      strictPort: true,
+      open: 'http://127.0.0.1:5173/',
+      headers: {
+        'Cache-Control': 'no-store, max-age=0',
+        Expires: '0',
+        Pragma: 'no-cache',
+      },
       fs: {
         strict: true,
       },

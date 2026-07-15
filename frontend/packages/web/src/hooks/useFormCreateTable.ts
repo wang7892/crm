@@ -18,6 +18,7 @@ import {
 import type { FormCreateField } from '@/components/business/crm-form-create/types';
 
 import { contractInvoiceStatusOptions, contractPaymentPlanStatusOptions } from '@/config/contract';
+import { getCustomerFieldOrderKey, sortCustomerTableColumns } from '@/config/customerTable';
 import { quotationStatusOptions } from '@/config/opportunity';
 import useApprovalConfig from '@/hooks/useApprovalConfig';
 import useFormCreateAdvanceFilter from '@/hooks/useFormCreateAdvanceFilter';
@@ -116,6 +117,11 @@ export default async function useFormCreateTable(props: FormCreateTableProps) {
     [FormDesignKeyEnum.CUSTOMER_ORDER]: TableKeyEnum.ORDER,
   };
   const noPaginationKey = [FormDesignKeyEnum.CUSTOMER_CONTACT];
+  const orderFormKeys: FormKey[] = [
+    FormDesignKeyEnum.ORDER,
+    FormDesignKeyEnum.CONTRACT_ORDER,
+    FormDesignKeyEnum.CUSTOMER_ORDER,
+  ];
   // 存储地址类型字段集合
   const addressFieldIds = ref<string[]>([]);
   // 存储行业类型字段集合
@@ -916,6 +922,64 @@ export default async function useFormCreateTable(props: FormCreateTableProps) {
     return [];
   }
 
+  function moveColumnAfter(cols: CrmDataTableColumn[], columnKey: string, anchorKey: string): CrmDataTableColumn[] {
+    const columnIndex = cols.findIndex((item) => item.key === columnKey);
+    const anchorIndex = cols.findIndex((item) => item.key === anchorKey);
+    if (columnIndex < 0 || anchorIndex < 0 || columnIndex === anchorIndex + 1) {
+      return cols;
+    }
+    const nextColumns = [...cols];
+    const [column] = nextColumns.splice(columnIndex, 1);
+    const nextAnchorIndex = nextColumns.findIndex((item) => item.key === anchorKey);
+    nextColumns.splice(nextAnchorIndex + 1, 0, column);
+    return nextColumns;
+  }
+
+  function ensureOrderMerchandiserColumn(
+    cols: CrmDataTableColumn[],
+    sorter: boolean | 'default'
+  ): CrmDataTableColumn[] {
+    if (!orderFormKeys.includes(props.formKey)) {
+      return cols;
+    }
+
+    const merchandiserColumn: CrmDataTableColumn = {
+      title: t('order.merchandiser'),
+      width: 150,
+      key: 'merchandiser',
+      ellipsis: {
+        tooltip: true,
+      },
+      sortOrder: false,
+      sorter,
+      render: (row: any) => row.merchandiser || '-',
+    };
+
+    let nextColumns = [...cols];
+    const existingIndex = nextColumns.findIndex((item) => item.key === 'merchandiser');
+    if (existingIndex >= 0) {
+      nextColumns[existingIndex] = {
+        ...nextColumns[existingIndex],
+        title: t('order.merchandiser'),
+        render: nextColumns[existingIndex].render || merchandiserColumn.render,
+      };
+    } else {
+      const ownerIndex = nextColumns.findIndex((item) => item.key === 'owner');
+      const processorIndex = nextColumns.findIndex((item) => item.key === 'processor');
+      let insertIndex = nextColumns.length;
+      if (ownerIndex >= 0) {
+        insertIndex = ownerIndex + 1;
+      } else if (processorIndex >= 0) {
+        insertIndex = processorIndex + 1;
+      }
+      nextColumns.splice(insertIndex, 0, merchandiserColumn);
+    }
+
+    nextColumns = moveColumnAfter(nextColumns, 'merchandiser', 'owner');
+    nextColumns = moveColumnAfter(nextColumns, 'stage', 'merchandiser');
+    return nextColumns;
+  }
+
   async function initFormConfig() {
     try {
       const sorter = noPaginationKey.includes(props.formKey) ? 'default' : true;
@@ -928,7 +992,8 @@ export default async function useFormCreateTable(props: FormCreateTableProps) {
         .filter(
           (e) =>
             e.type !== FieldTypeEnum.DIVIDER &&
-            e.type !== FieldTypeEnum.TEXTAREA &&
+            (e.type !== FieldTypeEnum.TEXTAREA ||
+              (props.formKey === FormDesignKeyEnum.CUSTOMER && getCustomerFieldOrderKey(e) === 'remark')) &&
             e.type !== FieldTypeEnum.ATTACHMENT &&
             e.type !== FieldTypeEnum.SUB_PRICE &&
             e.type !== FieldTypeEnum.SUB_PRODUCT &&
@@ -1264,6 +1329,18 @@ export default async function useFormCreateTable(props: FormCreateTableProps) {
         ...(internalColumnMap[props.formKey] || []),
         ...staticColumns,
       ];
+      columns = ensureOrderMerchandiserColumn(columns, sorter);
+      if (props.formKey === FormDesignKeyEnum.CUSTOMER) {
+        const customerFieldOrderKeyMap = new Map(
+          res.fields.map((field) => [field.id, getCustomerFieldOrderKey(field)])
+        );
+        columns = sortCustomerTableColumns(
+          columns.map((column) => ({
+            ...column,
+            orderKey: typeof column.fieldId === 'string' ? customerFieldOrderKeyMap.get(column.fieldId) : undefined,
+          }))
+        );
+      }
       if (isFollowModule) {
         columns = disableFilterAndSorter(columns);
       }

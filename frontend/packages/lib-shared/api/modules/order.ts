@@ -10,6 +10,7 @@ import {
   FixedOrderViewUrl,
   GetOrderDetailUrl,
   OrderPageUrl,
+  OrderSummaryPageUrl,
   OrderDetailSnapshotUrl,
   OrderFormConfigUrl,
   OrderFormConfigSnapshotUrl,
@@ -32,7 +33,7 @@ import {
 import type { FormDesignConfigDetailParams } from '@lib/shared/models/system/module';
 import type { CommonList, TableDraggedParams } from '@lib/shared/models/common';
 import type { CustomerTabHidden } from '@lib/shared/models/customer';
-import type { ExternalOrderSyncResult, OrderItem, UpdateOrderParams } from '@lib/shared/models/order';
+import type { ExternalOrderSyncResult, OrderItem, OrderSummaryItem, UpdateOrderParams } from '@lib/shared/models/order';
 import type { TableQueryParams } from '@lib/shared/models/common';
 
 import type { ViewItem, ViewParams } from '@lib/shared/models/view';
@@ -47,6 +48,10 @@ export default function useOrderApi(CDR: CordysAxios) {
   // 列表
   function getOrderList(data: TableQueryParams) {
     return CDR.post<CommonList<OrderItem>>({ url: OrderPageUrl, data });
+  }
+
+  function getOrderSummaryList(data: TableQueryParams) {
+    return CDR.post<CommonList<OrderSummaryItem>>({ url: OrderSummaryPageUrl, data });
   }
 
   // 合同下的列表
@@ -188,6 +193,7 @@ export default function useOrderApi(CDR: CordysAxios) {
     updateOrder,
     deleteOrder,
     getOrderList,
+    getOrderSummaryList,
     getOrderInContractList,
     getOrderTab,
     addOrderView,

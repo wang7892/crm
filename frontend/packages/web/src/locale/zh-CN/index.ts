@@ -33,6 +33,7 @@ export default {
     'menu.contact': '联系人',
     'menu.customerWecom': '企微监测',
     'menu.dashboard': '仪表板',
+    'menu.aiKnowledge': '公司知识库',
     'menu.agent': '智能体',
     'menu.tender': '标讯',
     'menu.settings.businessSetting': '企业设置',

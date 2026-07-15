@@ -1,5 +1,17 @@
 export const AiAgentChatUrl = '/ai-agent/chat';
+export const AiAgentAudioTranscriptionsUrl = '/ai-agent/audio/transcriptions';
+export const AiAgentAudioTranscriptionQueryUrl = '/ai-agent/audio/transcriptions';
 export const AiAgentFeedbackUrl = '/ai-agent/feedback';
 export const AiAgentSessionsUrl = '/ai-agent/sessions';
 export const AiAgentMessagesUrl = '/ai-agent/sessions';
 export const AiAgentDeleteSessionUrl = '/ai-agent/sessions';
+export const AiKnowledgeDocumentPageUrl = '/ai-agent/knowledge/document/page';
+export const AiKnowledgeDocumentUploadUrl = '/ai-agent/knowledge/document/upload';
+export const AiKnowledgeDocumentDetailUrl = '/ai-agent/knowledge/document/detail';
+export const AiKnowledgeDocumentChunkPageUrl = '/ai-agent/knowledge/document/chunk/page';
+export const AiKnowledgeDocumentReparseUrl = '/ai-agent/knowledge/document/reparse';
+export const AiKnowledgeDocumentEnableUrl = '/ai-agent/knowledge/document/enable';
+export const AiKnowledgeDocumentDisableUrl = '/ai-agent/knowledge/document/disable';
+export const AiKnowledgeDocumentDeleteUrl = '/ai-agent/knowledge/document/delete';
+export const AiKnowledgeDocumentDownloadUrl = '/ai-agent/knowledge/document/download';
+export const AiKnowledgeSearchTestUrl = '/ai-agent/knowledge/document/search-test';

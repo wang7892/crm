@@ -2,8 +2,8 @@ package cn.cordys.crm.aiagent.service;
 
 import cn.cordys.common.util.JSON;
 import cn.cordys.crm.aiagent.config.AiAgentLlmProperties;
+import cn.cordys.crm.aiagent.dto.AiAgentContext;
 import cn.cordys.crm.aiagent.dto.ParsedAiAgentQuestion;
-import cn.cordys.crm.aiagent.dto.query.AiAgentQueryPlan;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,15 +20,18 @@ public class LlmAiAgentQuestionParser {
     private final AiAgentLlmClient aiAgentLlmClient;
     private final AiAgentIntentValidator intentValidator;
     private final AiAgentSemanticSchemaService schemaService;
+    private final AiAgentParsedQuestionNormalizer parsedQuestionNormalizer;
 
     public LlmAiAgentQuestionParser(AiAgentLlmProperties properties,
                                     AiAgentLlmClient aiAgentLlmClient,
                                     AiAgentIntentValidator intentValidator,
-                                    AiAgentSemanticSchemaService schemaService) {
+                                    AiAgentSemanticSchemaService schemaService,
+                                    AiAgentParsedQuestionNormalizer parsedQuestionNormalizer) {
         this.properties = properties;
         this.aiAgentLlmClient = aiAgentLlmClient;
         this.intentValidator = intentValidator;
         this.schemaService = schemaService;
+        this.parsedQuestionNormalizer = parsedQuestionNormalizer;
     }
 
     public ParsedAiAgentQuestion parse(String rawQuestion) {
@@ -36,6 +39,10 @@ public class LlmAiAgentQuestionParser {
     }
 
     public ParsedAiAgentQuestion parse(String rawQuestion, String preferredProvider) {
+        return parse(rawQuestion, preferredProvider, null);
+    }
+
+    public ParsedAiAgentQuestion parse(String rawQuestion, String preferredProvider, AiAgentContext context) {
         if (!properties.isEnabled()) {
             return null;
         }
@@ -60,14 +67,7 @@ public class LlmAiAgentQuestionParser {
         if (parsed == null) {
             return null;
         }
-        parsed.setRawQuestion(rawQuestion);
-        parsed.setSource("LLM");
-        normalizeParsedQuestion(parsed);
-        if (StringUtils.isNotBlank(parsed.getIntent()) && !intentValidator.isAllowed(parsed.getIntent())) {
-            parsed.setIntent(null);
-            parsed.setConfidence(0);
-        }
-        return parsed;
+        return parsedQuestionNormalizer.normalize(parsed, rawQuestion, "LLM");
     }
 
     private ParsedAiAgentQuestion parseJsonObject(String content) {
@@ -86,39 +86,6 @@ public class LlmAiAgentQuestionParser {
             return text.substring(start, end + 1);
         }
         return text;
-    }
-
-    private void normalizeParsedQuestion(ParsedAiAgentQuestion parsed) {
-        parsed.setIntent(StringUtils.trimToNull(parsed.getIntent()));
-        parsed.setCustomerName(cleanText(parsed.getCustomerName()));
-        parsed.setSpecialistName(cleanText(parsed.getSpecialistName()));
-        parsed.setKeyword(cleanText(parsed.getKeyword()));
-        parsed.setProductName(cleanText(parsed.getProductName()));
-        parsed.setOrderNo(cleanText(parsed.getOrderNo()));
-        parsed.setTimeRange(cleanText(parsed.getTimeRange()));
-        parsed.setCandidateSql(StringUtils.trimToNull(parsed.getCandidateSql()));
-        parsed.setClarificationQuestion(StringUtils.trimToNull(parsed.getClarificationQuestion()));
-        normalizeQueryPlan(parsed);
-        if (parsed.getConfidence() < 0 || parsed.getConfidence() > 1) {
-            parsed.setConfidence(0);
-        }
-    }
-
-    private void normalizeQueryPlan(ParsedAiAgentQuestion parsed) {
-        AiAgentQueryPlan queryPlan = parsed.getQueryPlan();
-        if (queryPlan == null) {
-            return;
-        }
-        queryPlan.setIntent(StringUtils.defaultIfBlank(StringUtils.trimToNull(queryPlan.getIntent()), "CRM_DATABASE_QUERY"));
-        queryPlan.setQueryType(StringUtils.trimToNull(queryPlan.getQueryType()));
-        queryPlan.setEntity(cleanText(queryPlan.getEntity()));
-        queryPlan.setClarificationQuestion(StringUtils.trimToNull(queryPlan.getClarificationQuestion()));
-        if (StringUtils.isBlank(parsed.getIntent())) {
-            parsed.setIntent(queryPlan.getIntent());
-        }
-        if (Boolean.TRUE.equals(queryPlan.getNeedClarification())) {
-            parsed.setNeedClarification(false);
-        }
     }
 
     private String cleanText(String value) {
@@ -145,6 +112,8 @@ public class LlmAiAgentQuestionParser {
                 如果不能确定 intent 或 queryPlan，返回 intent=null。
                 如果缺少关键参数，设置 needClarification=true。
                 只输出 JSON，不输出 Markdown，不输出解释。
+                品种是外部合同表的一个字段，不要理解为订单中的字段
+                客户来源分为公司客户和展会客户，不要把公司客户和展会客户混淆，问的是展会客户就返回展会客户，问的是公司客户就返回公司客户
                 
                 允许的 intent:
                 - %s

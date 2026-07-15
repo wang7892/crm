@@ -21,7 +21,17 @@ const contract: AppRouteRecordRaw = {
       name: OrderRouteEnum.ORDER_INDEX,
       component: () => import('@/views/order/order/index.vue'),
       meta: {
-        locale: 'module.order',
+        locale: 'order.processingOrder',
+        isTopMenu: true,
+        permissions: ['ORDER:READ'],
+      },
+    },
+    {
+      path: 'summary',
+      name: OrderRouteEnum.ORDER_SUMMARY,
+      component: () => import('@/views/order/summary/index.vue'),
+      meta: {
+        locale: 'order.summary',
         isTopMenu: true,
         permissions: ['ORDER:READ'],
       },

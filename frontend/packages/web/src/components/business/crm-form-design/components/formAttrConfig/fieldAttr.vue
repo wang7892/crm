@@ -922,7 +922,7 @@
           <n-date-picker
             v-if="fieldConfig.dateDefaultType === 'custom'"
             v-model:value="fieldConfig.defaultValue"
-            :type="fieldConfig.dateType"
+            :type="fieldConfig.dateType || 'datetime'"
             :disabled="fieldConfig.disabledProps?.includes('defaultValue') || !!fieldConfig.resourceFieldId"
             class="w-full"
           ></n-date-picker>

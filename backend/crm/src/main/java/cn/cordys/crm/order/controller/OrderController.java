@@ -20,6 +20,7 @@ import cn.cordys.crm.order.dto.response.ExternalOrderSyncResult;
 import cn.cordys.crm.order.dto.response.OrderGetResponse;
 import cn.cordys.crm.order.dto.response.OrderListResponse;
 import cn.cordys.crm.order.dto.response.OrderStatisticResponse;
+import cn.cordys.crm.order.dto.response.OrderSummaryResponse;
 import cn.cordys.crm.order.service.ExternalOrderInfoSyncService;
 import cn.cordys.crm.order.service.OrderService;
 import cn.cordys.crm.system.dto.response.ModuleFormConfigDTO;
@@ -114,6 +115,17 @@ public class OrderController {
         String orgId = OrganizationContext.getOrganizationId();
         DeptDataPermissionDTO deptDataPermission = getOrderDataPermission(userId, orgId, request.getViewId());
         return orderService.list(request, userId, orgId, deptDataPermission, false);
+    }
+
+    @PostMapping("/summary/page")
+    @RequiresPermissions(PermissionConstants.ORDER_READ)
+    @Operation(summary = "订单汇总列表")
+    public PagerWithOption<List<OrderSummaryResponse>> summaryList(@Validated @RequestBody OrderPageRequest request) {
+        ConditionFilterUtils.parseCondition(request);
+        String userId = SessionUtils.getUserId();
+        String orgId = OrganizationContext.getOrganizationId();
+        DeptDataPermissionDTO deptDataPermission = getOrderDataPermission(userId, orgId, request.getViewId());
+        return orderService.summaryList(request, userId, orgId, deptDataPermission);
     }
 
     @GetMapping("/tab")
