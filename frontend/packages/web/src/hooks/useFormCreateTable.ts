@@ -1,4 +1,5 @@
 import { NImage, NImageGroup } from 'naive-ui';
+import axios from 'axios';
 import dayjs from 'dayjs';
 
 import { PreviewPictureUrl } from '@lib/shared/api/requrls/system/module';
@@ -1382,8 +1383,10 @@ export default async function useFormCreateTable(props: FormCreateTableProps) {
       }
       customFieldsFilterConfig.value = getFilterListConfig(res);
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.log(error);
+      if (!axios.isCancel(error)) {
+        // eslint-disable-next-line no-console
+        console.log(error);
+      }
     } finally {
       loading.value = false;
     }

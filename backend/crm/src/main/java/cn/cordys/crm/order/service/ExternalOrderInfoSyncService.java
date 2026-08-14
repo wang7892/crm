@@ -1,6 +1,7 @@
 package cn.cordys.crm.order.service;
 
 import cn.cordys.crm.contract.domain.Contract;
+import cn.cordys.crm.aiagent.config.AiAgentExternalOrderProperties;
 import cn.cordys.crm.order.domain.Order;
 import cn.cordys.crm.order.dto.request.ExternalOrderSyncRequest;
 import cn.cordys.crm.order.dto.response.ExternalOrderSyncResult;
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,13 +50,26 @@ public class ExternalOrderInfoSyncService {
     private ExtOrderMapper extOrderMapper;
     @Resource
     private BaseMapper<Contract> contractMapper;
+    @Resource
+    private AiAgentExternalOrderProperties externalOrderProperties;
+    @Value("${crm.mls-sync.enabled:false}")
+    private boolean mlsMirrorSyncEnabled;
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public ExternalOrderSyncResult sync(ExternalOrderSyncRequest request, String operatorId, String orgId) {
         ExternalOrderSyncResult result = new ExternalOrderSyncResult();
         result.setConfigured(externalOrderJdbcTemplate != null);
+        if (mlsMirrorSyncEnabled) {
+            result.getWarnings().add("Legacy external order import is disabled while crm.mls-sync.enabled=true; "
+                    + "use the MLS mirror synchronization endpoint instead.");
+            return result;
+        }
         if (externalOrderJdbcTemplate == null) {
             result.getWarnings().add("External order data source is not configured: crm.ai-agent.external-order.*");
+            return result;
+        }
+        if (!externalOrderProperties.allowsOrganization(orgId)) {
+            result.getWarnings().add("Current organization is not bound to the external order data source.");
             return result;
         }
 

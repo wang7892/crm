@@ -23,6 +23,12 @@ public class Contract extends BaseModel {
     @Schema(description = "金额")
     private BigDecimal amount;
 
+    @Schema(description = "订单状态")
+    private String orderStatus;
+
+    @Schema(description = "币种")
+    private String currency;
+
     @Schema(description = "编号")
     private String number;
 

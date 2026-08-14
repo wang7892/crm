@@ -155,6 +155,10 @@ public class ExternalOrderTools {
             result.getWarnings().add("请配置 crm.ai-agent.external-order.* 后再查询外部订单表。");
             return result;
         }
+        if (context == null) {
+            result.getWarnings().add("缺少智能体查询上下文，不能查询外部订单数据源。");
+            return result;
+        }
         if ((customerNames == null || customerNames.isEmpty()) && StringUtils.isBlank(managerName)
                 && StringUtils.isBlank(orderNoKeyword) && StringUtils.isBlank(productKeyword)) {
             return result;
@@ -205,16 +209,14 @@ public class ExternalOrderTools {
 
     private boolean shouldRestrictByContractPermission(AiAgentContext context) {
         DeptDataPermissionDTO dataPermission = context == null ? null : context.getContractDataPermission();
-        if (dataPermission == null) {
-            dataPermission = context == null ? null : context.getDataPermission();
-        }
-        return dataPermission != null && !Boolean.TRUE.equals(dataPermission.getAll());
+        return dataPermission == null || !Boolean.TRUE.equals(dataPermission.getAll());
     }
 
     private List<String> resolveAllowedManagerNames(AiAgentContext context) {
-        DeptDataPermissionDTO dataPermission = context.getContractDataPermission() == null
-                ? context.getDataPermission()
-                : context.getContractDataPermission();
+        DeptDataPermissionDTO dataPermission = context == null ? null : context.getContractDataPermission();
+        if (dataPermission == null) {
+            return List.of();
+        }
         return aiAgentInternalMapper.findUserNamesByDataPermission(
                         context.getOrganizationId(), context.getUserId(), dataPermission)
                 .stream()
@@ -234,8 +236,8 @@ public class ExternalOrderTools {
                 continue;
             }
             String paramName = "allowedManagerName" + index++;
-            clauses.add("manager LIKE :" + paramName);
-            params.addValue(paramName, "%" + managerName.trim() + "%");
+            clauses.add("TRIM(manager) = :" + paramName);
+            params.addValue(paramName, managerName.trim());
         }
         if (!clauses.isEmpty()) {
             sql.append(" AND (").append(String.join(" OR ", clauses)).append(")");

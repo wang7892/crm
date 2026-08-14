@@ -11,7 +11,7 @@ const aiKnowledge: AppRouteRecordRaw = {
   meta: {
     locale: 'menu.aiKnowledge',
     permissions: ['AGENT:UPDATE'],
-    icon: 'iconicon_book',
+    icon: 'iconicon_book_open',
     hideChildrenInMenu: true,
     collapsedLocale: 'menu.aiKnowledge',
   },

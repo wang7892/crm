@@ -1,5 +1,6 @@
 import { UnwrapRef } from 'vue';
 import { cloneDeep } from 'lodash-es';
+import axios from 'axios';
 import dayjs from 'dayjs';
 
 import type { CommonList, FilterConditionItem, SortParams, TableQueryParams } from '@lib/shared/models/common';
@@ -222,6 +223,9 @@ export default function useTable<T>(
         }
       });
     } catch (error: any) {
+      if (axios.isCancel(error)) {
+        return;
+      }
       propsRes.value.data = [];
       // eslint-disable-next-line no-console
       console.error(error);

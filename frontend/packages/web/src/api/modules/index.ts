@@ -18,6 +18,7 @@ import useMessageApi from '@lib/shared/api/modules/system/message';
 import useModuleApi from '@lib/shared/api/modules/system/module';
 import useOrgApi from '@lib/shared/api/modules/system/org';
 import useRoleApi from '@lib/shared/api/modules/system/role';
+import useTaskApi from '@lib/shared/api/modules/task';
 import useWecomIngestionApi from '@lib/shared/api/modules/wecomIngestion';
 
 import useDiscreteApi from '@/hooks/useDiscreteApi';
@@ -51,6 +52,26 @@ const dashboardApi = useDashboard(CDR);
 const opportunityApi = useOpportunityApi(CDR);
 const contractApi = useContractApi(CDR);
 const orderApi = useOrderApi(CDR);
+const taskApi = useTaskApi(CDR);
+
+export const {
+  getTaskPage,
+  getTask,
+  addTask,
+  updateTask,
+  reassignTask,
+  deleteTask,
+  startTask,
+  saveTaskReport,
+  submitTaskReport,
+  regenerateTaskAiReply,
+  getTaskAssigneeOptions,
+  getTaskCustomerOptions,
+  uploadTaskAttachments,
+  deleteTaskAttachment,
+  downloadTaskAttachment,
+  previewTaskAttachment,
+} = taskApi;
 
 export const { getAiAgentAudioTranscription, transcribeAiAgentAudio } = aiAgentApi;
 
@@ -716,11 +737,19 @@ export const { getSystemVersion, changeLocaleBackEnd } = sysApi;
 
 export const { getLicense, addLicense } = licenseApi;
 
-export const { chatAiAgent, deleteAiAgentSession, feedbackAiAgent, getAiAgentSessions, getAiAgentMessages } =
-  aiAgentApi;
+export const {
+  chatAiAgent,
+  chatAiAgentWithAttachments,
+  cancelAiAgentChat,
+  deleteAiAgentSession,
+  feedbackAiAgent,
+  getAiAgentSessions,
+  getAiAgentMessages,
+} = aiAgentApi;
 
 export const {
   getAiKnowledgeDocumentPage,
+  getAiKnowledgeDocumentDetail,
   uploadAiKnowledgeDocument,
   getAiKnowledgeChunkPage,
   reparseAiKnowledgeDocument,
@@ -728,6 +757,11 @@ export const {
   disableAiKnowledgeDocument,
   deleteAiKnowledgeDocument,
   getAiKnowledgeDocumentDownloadUrl,
+  getAiSemanticRulePage,
+  saveAiSemanticRule,
+  reviewAiSemanticRule,
+  batchReviewAiSemanticRules,
+  getAiSemanticRuleSchemaOptions,
   testAiKnowledgeSearch,
 } = aiAgentApi;
 

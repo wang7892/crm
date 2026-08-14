@@ -15,4 +15,6 @@ public class AiKnowledgeSearchTestRequest {
     @Min(1)
     @Max(20)
     private int topK = 8;
+    @Schema(description = "检索模式：AUTO/SEMANTIC_RULE/DOCUMENT")
+    private String mode = "AUTO";
 }

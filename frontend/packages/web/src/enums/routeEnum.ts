@@ -65,6 +65,11 @@ export enum WorkbenchRouteEnum {
   WORKBENCH_INDEX = 'workbenchIndex',
 }
 
+export enum TaskRouteEnum {
+  TASK = 'task',
+  TASK_INDEX = 'taskIndex',
+}
+
 export enum AgentRouteEnum {
   AGENT = 'agent',
   AGENT_INDEX = 'agentIndex',
@@ -102,6 +107,7 @@ export const AppRouteEnum = {
   ...ProductRouteEnum,
   ...PersonalRouteEnum,
   ...WorkbenchRouteEnum,
+  ...TaskRouteEnum,
   ...DashboardRouteEnum,
   ...AgentRouteEnum,
   ...AiKnowledgeRouteEnum,

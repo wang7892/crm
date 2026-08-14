@@ -25,9 +25,20 @@
     </sql>
 
     <sql id="customerPermissionWhere">
-        <if test="dataPermission != null and dataPermission.self">
-            AND c.owner = #{userId}
-        </if>
+        <choose>
+            <when test="dataPermission != null and dataPermission.all">
+            </when>
+            <when test="dataPermission != null and dataPermission.self">
+                AND c.owner = #{userId}
+            </when>
+            <when test="dataPermission != null and dataPermission.visible">
+            </when>
+            <when test="dataPermission != null and dataPermission.deptIds != null and dataPermission.deptIds.size() > 0">
+            </when>
+            <otherwise>
+                AND 1 = 0
+            </otherwise>
+        </choose>
     </sql>
 
     <sql id="customerBaseWhere">

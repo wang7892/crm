@@ -137,7 +137,7 @@ export class CordysAxios {
           resolve(res as unknown as Promise<T>);
         })
         .catch((e: Error | AxiosError) => {
-          if (axios.isAxiosError(e)) {
+          if (!axios.isCancel(e) && axios.isAxiosError(e)) {
             // 在这可重写axios错误消息
             // eslint-disable-next-line no-console
             console.log(e);
@@ -195,7 +195,7 @@ export class CordysAxios {
           resolve(res as unknown as Promise<T>);
         })
         .catch((e: Error | AxiosError) => {
-          if (axios.isAxiosError(e)) {
+          if (!axios.isCancel(e) && axios.isAxiosError(e)) {
             // 在这可重写axios错误消息
             // eslint-disable-next-line no-console
             console.log(e);

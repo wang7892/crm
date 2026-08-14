@@ -30,6 +30,8 @@ public class AiAgentExternalOrderDataSourceConfig {
         dataSource.setMaximumPoolSize(properties.getMaximumPoolSize());
         dataSource.setMinimumIdle(0);
         dataSource.setConnectionTimeout(properties.getConnectionTimeout());
+        dataSource.addDataSourceProperty("connectTimeout", properties.getConnectionTimeout());
+        dataSource.addDataSourceProperty("socketTimeout", properties.getSocketTimeout());
         dataSource.setPoolName("AiAgentExternalOrderHikariCP");
         return dataSource;
     }
@@ -37,7 +39,10 @@ public class AiAgentExternalOrderDataSourceConfig {
     @Bean(name = "aiAgentExternalOrderJdbcTemplate")
     @ConditionalOnBean(name = "aiAgentExternalOrderDataSource")
     public NamedParameterJdbcTemplate aiAgentExternalOrderJdbcTemplate(
-            @Qualifier("aiAgentExternalOrderDataSource") DataSource dataSource) {
-        return new NamedParameterJdbcTemplate(dataSource);
+            @Qualifier("aiAgentExternalOrderDataSource") DataSource dataSource,
+            AiAgentExternalOrderProperties properties) {
+        NamedParameterJdbcTemplate jdbcTemplate = new NamedParameterJdbcTemplate(dataSource);
+        jdbcTemplate.getJdbcTemplate().setQueryTimeout(Math.max(1, properties.getQueryTimeoutSeconds()));
+        return jdbcTemplate;
     }
 }

@@ -7,7 +7,28 @@
             <CrmIcon type="iconicon_edit" :size="17" />
             <span>新聊天</span>
           </button>
-          <button type="button" class="sidebar-action">
+          <div v-if="chatSearchOpen" class="sidebar-search">
+            <n-icon :size="18" class="sidebar-search__icon"><Search /></n-icon>
+            <input
+              ref="chatSearchInputRef"
+              v-model="chatSearchQuery"
+              class="sidebar-search__input"
+              type="search"
+              placeholder="搜索聊天标题或问题"
+              aria-label="搜索聊天标题或问题"
+              @keydown.esc="closeChatSearch"
+            />
+            <button
+              type="button"
+              class="sidebar-search__close"
+              title="关闭搜索"
+              aria-label="关闭搜索"
+              @click="closeChatSearch"
+            >
+              <n-icon :size="17"><CloseOutline /></n-icon>
+            </button>
+          </div>
+          <button v-else type="button" class="sidebar-action" @click="openChatSearch">
             <n-icon :size="18"><Search /></n-icon>
             <span>搜索聊天</span>
           </button>
@@ -32,7 +53,7 @@
         <div class="history-title">聊天记录</div>
         <n-scrollbar class="history-scroll">
           <div
-            v-for="session in sessions"
+            v-for="session in filteredSessions"
             :key="session.id"
             class="history-row"
             :class="{ 'history-row--active': activeSessionId === session.id }"
@@ -53,6 +74,9 @@
                 <n-icon :size="15"><TrashOutline /></n-icon>
               </template>
             </n-button>
+          </div>
+          <div v-if="chatSearchQuery.trim() && filteredSessions.length === 0" class="history-empty">
+            {{ chatSearchLoading ? '正在搜索...' : '未找到相关聊天' }}
           </div>
         </n-scrollbar>
         <button class="history-more" type="button">展开显示</button>
@@ -77,7 +101,6 @@
         </n-dropdown>
         <div class="chat-header__tools">
           <n-select v-model:value="timeRange" class="header-select" size="small" :options="timeRangeOptions" />
-          <n-select v-model:value="dataScope" class="header-select" size="small" :options="dataScopeOptions" />
           <n-button size="small" quaternary circle>
             <template #icon>
               <CrmIcon type="iconicon_refresh" :size="16" />
@@ -117,6 +140,23 @@
               <div class="message-content">
                 <div v-if="message.role === 'assistant'" class="message-name">
                   {{ message.llmProviderLabel || selectedLlmProviderLabel }}
+                </div>
+                <div v-if="message.attachments?.length" class="message-attachments">
+                  <div
+                    v-for="attachment in message.attachments"
+                    :key="`${message.id}-${attachment.name}`"
+                    class="message-attachment"
+                    :title="attachment.name"
+                  >
+                    <n-icon :size="16">
+                      <ImageOutline v-if="isImageAttachment(attachment.type)" />
+                      <DocumentOutline v-else />
+                    </n-icon>
+                    <span>{{ attachment.name }}</span>
+                  </div>
+                  <span v-if="message.attachmentMode" class="message-attachment-mode">
+                    {{ attachmentModeText(message.attachmentMode) }}
+                  </span>
                 </div>
                 <div class="message-text">{{ message.content }}</div>
                 <div v-if="message.points?.length" class="message-points">
@@ -170,11 +210,54 @@
       <footer class="composer-wrap">
         <div class="context-line">
           <span>时间范围：{{ timeRangeLabel }}</span>
-          <span>数据范围：{{ dataScopeLabel }}</span>
+          <span>数据范围：当前组织全部数据</span>
           <span>证据：客户 / 邮件 / 企微 / 跟进 / 外部订单</span>
         </div>
+        <div v-if="selectedAttachmentFiles.length" class="attachment-tray">
+          <div class="attachment-tray__summary">
+            <span>{{ selectedAttachmentModeText }}</span>
+            <span>{{ selectedAttachmentFiles.length }}/5</span>
+          </div>
+          <div class="attachment-tray__list">
+            <div
+              v-for="(file, index) in selectedAttachmentFiles"
+              :key="`${file.name}-${file.size}-${file.lastModified}`"
+              class="attachment-chip"
+            >
+              <n-icon :size="16">
+                <ImageOutline v-if="isImageAttachment(fileExtension(file.name))" />
+                <DocumentOutline v-else />
+              </n-icon>
+              <span class="attachment-chip__name" :title="file.name">{{ file.name }}</span>
+              <span class="attachment-chip__size">{{ formatFileSize(file.size) }}</span>
+              <button
+                type="button"
+                class="attachment-chip__remove"
+                :aria-label="`移除 ${file.name}`"
+                :title="`移除 ${file.name}`"
+                @click="removeAttachment(index)"
+              >
+                <n-icon :size="15"><CloseOutline /></n-icon>
+              </button>
+            </div>
+          </div>
+        </div>
         <div class="composer">
-          <n-button circle quaternary>
+          <input
+            ref="attachmentInputRef"
+            class="attachment-input"
+            type="file"
+            multiple
+            accept=".jpg,.jpeg,.png,.webp,.pdf,.docx,.xls,.xlsx,.txt"
+            @change="handleAttachmentSelection"
+          />
+          <n-button
+            circle
+            quaternary
+            title="添加附件"
+            :disabled="loading || selectedAttachmentFiles.length >= 5"
+            @click="openAttachmentPicker"
+          >
             <template #icon>
               <CrmIcon type="iconicon_add" :size="18" />
             </template>
@@ -185,6 +268,7 @@
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 4 }"
             placeholder="有问题，尽管问"
+            @paste="handleComposerPaste"
             @keydown.enter.exact.prevent="askQuestion(questionInput)"
           />
           <n-button circle quaternary>
@@ -192,7 +276,20 @@
               <CrmIcon type="iconicon_phone" :size="18" />
             </template>
           </n-button>
-          <n-button circle type="primary" class="send-button" :loading="loading" @click="askQuestion(questionInput)">
+          <n-button
+            v-if="loading"
+            circle
+            type="primary"
+            class="send-button"
+            title="停止回答"
+            aria-label="停止回答"
+            @click="stopCurrentRequest"
+          >
+            <template #icon>
+              <n-icon :size="17"><Stop /></n-icon>
+            </template>
+          </n-button>
+          <n-button v-else circle type="primary" class="send-button" @click="askQuestion(questionInput)">
             <template #icon>
               <CrmIcon type="iconicon_chevron_right" :size="18" />
             </template>
@@ -205,8 +302,8 @@
 
 <script setup lang="ts">
   import { useRouter } from 'vue-router';
-  import { NButton, NDropdown, NIcon, NInput, NScrollbar, NSelect } from 'naive-ui';
-  import { Search, TrashOutline } from '@vicons/ionicons5';
+  import { NButton, NDropdown, NIcon, NInput, NScrollbar, NSelect, useMessage } from 'naive-ui';
+  import { CloseOutline, DocumentOutline, ImageOutline, Search, Stop, TrashOutline } from '@vicons/ionicons5';
 
   import type {
     AiAgentChatResult,
@@ -217,13 +314,20 @@
 
   import CrmIcon from '@/components/pure/crm-icon-font/index.vue';
 
-  import { chatAiAgent, deleteAiAgentSession, getAiAgentMessages, getAiAgentSessions } from '@/api/modules';
+  import {
+    cancelAiAgentChat,
+    chatAiAgent,
+    chatAiAgentWithAttachments,
+    deleteAiAgentSession,
+    getAiAgentMessages,
+    getAiAgentSessions,
+  } from '@/api/modules';
   import useUserStore from '@/store/modules/user';
 
   import { ContractRouteEnum, CustomerRouteEnum } from '@/enums/routeEnum';
 
   type MessageRole = 'assistant' | 'user';
-  type FeatureKey = 'chat' | 'value' | 'risk' | 'signal' | 'config';
+  type FeatureKey = 'config';
   type CurrentUserRole = string | { name?: string };
 
   interface EvidenceItem {
@@ -240,7 +344,17 @@
     points?: string[];
     evidence?: EvidenceItem[];
     llmProviderLabel?: string;
+    attachments?: AttachmentItem[];
+    attachmentMode?: AttachmentMode;
   }
+
+  interface AttachmentItem {
+    name: string;
+    size: number;
+    type: string;
+  }
+
+  type AttachmentMode = 'CHAT' | 'KNOWLEDGE';
 
   interface DetailTableRow {
     title: string;
@@ -255,6 +369,7 @@
     time: string;
     agentName: string;
     messages: MessageItem[];
+    messagesLoaded: boolean;
   }
 
   interface FeatureItem {
@@ -265,14 +380,55 @@
   }
 
   const router = useRouter();
+  const messageApi = useMessage();
   const userStore = useUserStore();
-  const activeFeature = ref<FeatureKey>('chat');
+  const activeFeature = ref<FeatureKey | null>(null);
   const activeSessionId = ref('default');
+  const chatSearchOpen = ref(false);
+  const chatSearchQuery = ref('');
+  const chatSearchLoading = ref(false);
+  const chatSearchInputRef = ref<HTMLInputElement | null>(null);
+  const attachmentInputRef = ref<HTMLInputElement | null>(null);
+  const selectedAttachmentFiles = ref<File[]>([]);
   const questionInput = ref('');
   const timeRange = ref('30d');
-  const dataScope = ref('company');
   const loading = ref(false);
   const selectedLlmProvider = ref('primary');
+  let activeRequestController: AbortController | null = null;
+  let activeRequestId: string | null = null;
+
+  const allowedAttachmentTypes = new Set(['jpg', 'jpeg', 'png', 'webp', 'pdf', 'docx', 'xls', 'xlsx', 'txt']);
+  const knowledgeIntentPhrases = [
+    '加入知识库',
+    '添加到知识库',
+    '保存到知识库',
+    '存入知识库',
+    '放进知识库',
+    '上传到知识库',
+    '加入公司知识库',
+    '保存为公司知识',
+    '沉淀为知识',
+    '沉淀到知识库',
+  ];
+  const knowledgeQuestionPhrases = [
+    '是否加入知识库',
+    '适合加入知识库',
+    '能否加入知识库',
+    '能不能加入知识库',
+    '可以加入知识库吗',
+  ];
+  const knowledgeNegativePhrases = [
+    '不要加入知识库',
+    '不用加入知识库',
+    '别加入知识库',
+    '不要保存到知识库',
+    '仅当前聊天',
+    '只在当前聊天',
+  ];
+  const knowledgeNegativePattern = /(?:不|别|勿|无需|无须|暂不|禁止).{0,8}(?:知识库|公司知识)/;
+  const knowledgeQuestionPattern =
+    /(?:(?:是否|能否|可否|要不要|需不需要|该不该|能不能|可以不可以).{0,10}(?:知识库|公司知识)|(?:知识库|公司知识).{0,6}(?:吗|么|呢)[？?]?)/;
+  const knowledgeIntentPattern = /(?:加入|添加|保存|存入|存到|放进|放入|上传|沉淀).{0,16}(?:公司)?知识库(?:中|里|内)?/;
 
   const currentUserName = computed(() => userStore.userInfo.name || '当前用户');
   const currentUserInitial = computed(() => currentUserName.value.trim().charAt(0) || '用');
@@ -285,7 +441,7 @@
   });
 
   const llmProviderOptions = [
-    { label: 'GPT-5.5', key: 'primary' },
+    { label: 'GPT-5.6 Sol', key: 'primary' },
     { label: 'qwen', key: 'qwen' },
     { label: 'deepseek', key: 'deepseek' },
   ];
@@ -367,37 +523,7 @@
     { label: '本年度', value: 'year' },
   ];
 
-  const dataScopeOptions = [
-    { label: '全公司', value: 'company' },
-    { label: '我的团队', value: 'team' },
-    { label: '仅本人客户', value: 'mine' },
-  ];
-
   const features: FeatureItem[] = [
-    {
-      key: 'chat',
-      label: '智能问答',
-      icon: 'iconicon_bot',
-      question: '张三这个月和客户沟通的情况怎么样？',
-    },
-    {
-      key: 'value',
-      label: '新订单',
-      icon: 'iconicon_data',
-      question: '张三负责的客户这个月有没有新的订单？',
-    },
-    {
-      key: 'risk',
-      label: '进行中订单',
-      icon: 'iconicon_info_circle_filled',
-      question: '张三负责的客户最近有哪些订单正在操作，也就是还没有结束的订单？',
-    },
-    {
-      key: 'signal',
-      label: '客户订单',
-      icon: 'iconicon_timeline',
-      question: '某客户最近有没有新订单？',
-    },
     {
       key: 'config',
       label: '配置',
@@ -421,6 +547,7 @@
       owner: '老板视角',
       time: '2天',
       agentName: '客户经营智能体',
+      messagesLoaded: true,
       messages: [
         {
           id: 1,
@@ -453,6 +580,7 @@
       owner: '销售总监',
       time: '3天',
       agentName: '客户经营智能体',
+      messagesLoaded: true,
       messages: [],
     },
     {
@@ -462,6 +590,7 @@
       owner: '运营负责人',
       time: '3天',
       agentName: '客户经营智能体',
+      messagesLoaded: true,
       messages: [],
     },
     {
@@ -471,6 +600,7 @@
       owner: '老板视角',
       time: '3天',
       agentName: '客户经营智能体',
+      messagesLoaded: true,
       messages: [],
     },
     {
@@ -480,6 +610,7 @@
       owner: '产品设计',
       time: '3天',
       agentName: '客户经营智能体',
+      messagesLoaded: true,
       messages: [],
     },
   ]);
@@ -487,20 +618,33 @@
   const timeRangeLabel = computed(
     () => timeRangeOptions.find((item) => item.value === timeRange.value)?.label || '近 30 天'
   );
-  const dataScopeLabel = computed(
-    () => dataScopeOptions.find((item) => item.value === dataScope.value)?.label || '全公司'
-  );
-
   const currentSession = computed(
     () => sessions.value.find((item) => item.id === activeSessionId.value) || sessions.value[0]
   );
+  const filteredSessions = computed(() => {
+    const keyword = chatSearchQuery.value.trim().toLocaleLowerCase();
+    if (!keyword) {
+      return sessions.value;
+    }
+    return sessions.value.filter((session) => {
+      if (session.title.toLocaleLowerCase().includes(keyword)) {
+        return true;
+      }
+      if (session.question.toLocaleLowerCase().includes(keyword)) {
+        return true;
+      }
+      return session.messages.some(
+        (message) => message.role === 'user' && message.content.toLocaleLowerCase().includes(keyword)
+      );
+    });
+  });
 
   function buildFallbackAnswer(): MessageItem {
     return {
       id: Date.now() + 1,
       role: 'assistant',
       content: '后端智能体接口暂时不可用，请确认 CRM 后端已启动并已应用 ai_agent 相关表结构。',
-      points: ['接口：POST /ai-agent/chat。', '需要当前账号具备客户读取权限。', '外部订单查询需要配置只读数据源。'],
+      points: ['接口：POST /ai-agent/chat。', '需要当前账号已开通智能体功能。', '外部订单查询需要配置只读数据源。'],
       evidence: buildEvidenceItems(['ai_agent_session', 'ai_agent_message']),
     };
   }
@@ -573,6 +717,36 @@
     }
   }
 
+  function parseStoredAttachmentSnapshot(evidenceJson?: string) {
+    if (!evidenceJson) {
+      return undefined;
+    }
+    try {
+      const snapshot = JSON.parse(evidenceJson) as {
+        attachmentMode?: AttachmentMode;
+        attachments?: Array<Partial<AttachmentItem>>;
+      };
+      const attachments = Array.isArray(snapshot.attachments)
+        ? snapshot.attachments
+            .filter((item): item is AttachmentItem =>
+              Boolean(
+                item && typeof item.name === 'string' && typeof item.size === 'number' && typeof item.type === 'string'
+              )
+            )
+            .map((item) => ({ name: item.name, size: item.size, type: item.type }))
+        : [];
+      if (!attachments.length) {
+        return undefined;
+      }
+      return {
+        attachments,
+        attachmentMode: snapshot.attachmentMode === 'KNOWLEDGE' ? 'KNOWLEDGE' : 'CHAT',
+      } as const;
+    } catch {
+      return undefined;
+    }
+  }
+
   function formatTime(value?: number) {
     if (!value) {
       return '刚刚';
@@ -599,18 +773,129 @@
       time: formatTime(item.updateTime),
       agentName: item.agentName || '客户经营智能体',
       messages: [],
+      messagesLoaded: false,
     };
   }
 
   function toMessage(item: AiAgentMessageItem): MessageItem {
     const storedResponse = item.role === 'assistant' ? parseStoredAssistantResponse(item.evidenceJson) : undefined;
+    const attachmentSnapshot = item.role === 'user' ? parseStoredAttachmentSnapshot(item.evidenceJson) : undefined;
     return {
       id: item.id,
       role: item.role,
       content: item.content || storedResponse?.answer || '',
       points: buildAssistantPoints(storedResponse),
       evidence: buildAssistantEvidence(storedResponse),
+      attachments: attachmentSnapshot?.attachments,
+      attachmentMode: attachmentSnapshot?.attachmentMode,
     };
+  }
+
+  function fileExtension(fileName: string) {
+    return fileName.split('.').pop()?.toLocaleLowerCase() || '';
+  }
+
+  function isImageAttachment(fileType: string) {
+    return ['jpg', 'jpeg', 'png', 'webp'].includes(fileType.toLocaleLowerCase());
+  }
+
+  function formatFileSize(size: number) {
+    if (size < 1024 * 1024) {
+      return `${Math.max(1, Math.round(size / 1024))} KB`;
+    }
+    return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function isKnowledgeIntent(question: string) {
+    const text = question.replace(/\s+/g, '');
+    if (knowledgeNegativePhrases.some((phrase) => text.includes(phrase)) || knowledgeNegativePattern.test(text)) {
+      return false;
+    }
+    if (
+      knowledgeQuestionPhrases.some((phrase) => text.includes(phrase)) ||
+      knowledgeQuestionPattern.test(text) ||
+      /[?？]/.test(text)
+    ) {
+      return false;
+    }
+    return knowledgeIntentPhrases.some((phrase) => text.includes(phrase)) || knowledgeIntentPattern.test(text);
+  }
+
+  function attachmentModeText(mode: AttachmentMode) {
+    return mode === 'KNOWLEDGE' ? '发送后加入公司知识库' : '用于当前聊天';
+  }
+
+  const selectedAttachmentMode = computed<AttachmentMode>(() =>
+    isKnowledgeIntent(questionInput.value) ? 'KNOWLEDGE' : 'CHAT'
+  );
+  const selectedAttachmentModeText = computed(() => attachmentModeText(selectedAttachmentMode.value));
+
+  function openAttachmentPicker() {
+    attachmentInputRef.value?.click();
+  }
+
+  function addAttachmentFiles(incomingFiles: File[]) {
+    const nextFiles = [...selectedAttachmentFiles.value];
+    let maxCountWarned = false;
+    incomingFiles.forEach((file) => {
+      if (nextFiles.length >= 5) {
+        if (!maxCountWarned) {
+          messageApi.warning('一次最多添加 5 个附件');
+          maxCountWarned = true;
+        }
+        return;
+      }
+      const type = fileExtension(file.name);
+      if (!allowedAttachmentTypes.has(type)) {
+        messageApi.warning(`${file.name} 的格式不受支持`);
+        return;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        messageApi.warning(`${file.name} 超过 20MB`);
+        return;
+      }
+      const duplicated = nextFiles.some(
+        (item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified
+      );
+      if (!duplicated) {
+        nextFiles.push(file);
+      }
+    });
+    selectedAttachmentFiles.value = nextFiles;
+  }
+
+  function handleAttachmentSelection(event: Event) {
+    const input = event.target as HTMLInputElement;
+    addAttachmentFiles(Array.from(input.files || []));
+    input.value = '';
+  }
+
+  function handleComposerPaste(event: ClipboardEvent) {
+    const clipboardFiles = Array.from(event.clipboardData?.files || []);
+    if (!clipboardFiles.length) {
+      return;
+    }
+    event.preventDefault();
+    addAttachmentFiles(clipboardFiles);
+  }
+
+  function removeAttachment(index: number) {
+    selectedAttachmentFiles.value.splice(index, 1);
+  }
+
+  function clearSelectedAttachments() {
+    selectedAttachmentFiles.value = [];
+    if (attachmentInputRef.value) {
+      attachmentInputRef.value.value = '';
+    }
+  }
+
+  function attachmentRequestError(error: unknown) {
+    const requestError = error as {
+      message?: string;
+      response?: { data?: { message?: string } };
+    };
+    return requestError.response?.data?.message || requestError.message || '附件处理失败，请稍后重试';
   }
 
   function isDetailPoint(point: string) {
@@ -675,14 +960,43 @@
   async function loadMessages(sessionId: string) {
     try {
       const session = sessions.value.find((item) => item.id === sessionId);
-      if (!session) {
+      if (!session || session.messagesLoaded) {
         return;
       }
       const remoteMessages = await getAiAgentMessages(sessionId);
       session.messages = (remoteMessages || []).map(toMessage);
+      session.question = session.messages.find((message) => message.role === 'user')?.content || session.question;
+      session.messagesLoaded = true;
     } catch {
       // History loading is best-effort; asking new questions still works if chat API is available.
     }
+  }
+
+  async function loadSearchableMessages() {
+    if (chatSearchLoading.value) {
+      return;
+    }
+    const unloadedSessions = sessions.value.filter((session) => !session.messagesLoaded);
+    if (!unloadedSessions.length) {
+      return;
+    }
+    chatSearchLoading.value = true;
+    try {
+      await Promise.all(unloadedSessions.map((session) => loadMessages(session.id)));
+    } finally {
+      chatSearchLoading.value = false;
+    }
+  }
+
+  function openChatSearch() {
+    chatSearchOpen.value = true;
+    nextTick(() => chatSearchInputRef.value?.focus());
+    loadSearchableMessages();
+  }
+
+  function closeChatSearch() {
+    chatSearchOpen.value = false;
+    chatSearchQuery.value = '';
   }
 
   async function loadSessions() {
@@ -694,15 +1008,19 @@
       sessions.value = remoteSessions.map(toSession);
       activeSessionId.value = sessions.value[0].id;
       await loadMessages(activeSessionId.value);
+      if (chatSearchOpen.value) {
+        await loadSearchableMessages();
+      }
     } catch {
       // Keep local starter content when the backend is not ready yet.
     }
   }
 
   async function selectSession(sessionId: string) {
+    clearSelectedAttachments();
     activeSessionId.value = sessionId;
     const session = currentSession.value;
-    if (session.messages.length === 0) {
+    if (!session.messagesLoaded) {
       await loadMessages(sessionId);
     }
   }
@@ -721,6 +1039,40 @@
     return sessionId.startsWith('chat-') || sessionId === 'default';
   }
 
+  function createChatRequestId() {
+    if (typeof window.crypto?.randomUUID === 'function') {
+      return window.crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function isCanceledRequest(error: unknown, controller: AbortController) {
+    const requestError = error as { code?: string; name?: string };
+    return (
+      controller.signal.aborted ||
+      requestError.code === 'ERR_CANCELED' ||
+      requestError.name === 'CanceledError' ||
+      requestError.name === 'AbortError'
+    );
+  }
+
+  async function stopCurrentRequest() {
+    const controller = activeRequestController;
+    const requestId = activeRequestId;
+    if (!controller || controller.signal.aborted) {
+      return;
+    }
+    const cancellationRequest = requestId ? cancelAiAgentChat(requestId) : null;
+    controller.abort();
+    if (cancellationRequest) {
+      try {
+        await cancellationRequest;
+      } catch {
+        // The local request is already stopped even if the server has gone away.
+      }
+    }
+  }
+
   async function askQuestion(question: string) {
     const text = question.trim();
     if (!text) {
@@ -730,6 +1082,8 @@
       return;
     }
     const session = currentSession.value;
+    const attachmentFiles = [...selectedAttachmentFiles.value];
+    const attachmentMode = selectedAttachmentMode.value;
     if (session.messages.length === 0) {
       session.title = text.length > 14 ? `${text.slice(0, 14)}...` : text;
       session.question = text;
@@ -739,34 +1093,72 @@
       id: Date.now(),
       role: 'user',
       content: text,
+      attachments: attachmentFiles.map((file) => ({
+        name: file.name,
+        size: file.size,
+        type: fileExtension(file.name),
+      })),
+      attachmentMode: attachmentFiles.length ? attachmentMode : undefined,
     });
     questionInput.value = '';
     loading.value = true;
+    const requestController = new AbortController();
+    const requestId = createChatRequestId();
+    activeRequestController = requestController;
+    activeRequestId = requestId;
     const llmProvider = selectedLlmProvider.value;
     const llmProviderLabel = selectedLlmProviderLabel.value;
     try {
-      const response = await chatAiAgent({
+      const request = {
+        requestId,
         sessionId: isLocalSession(session.id) ? undefined : session.id,
         question: text,
         stream: false,
         timeRange: timeRange.value,
-        dataScope: dataScope.value,
+        dataScope: 'all',
         llmProvider,
         context: {
           pageModule: 'agent',
         },
-      });
+      };
+      const response = attachmentFiles.length
+        ? await chatAiAgentWithAttachments(request, attachmentFiles, requestController.signal)
+        : await chatAiAgent(request, requestController.signal);
+      if (!response?.answer?.trim()) {
+        throw new Error('智能体未返回可显示内容');
+      }
       session.id = response.sessionId || session.id;
       activeSessionId.value = session.id;
       session.messages.push(toAssistantMessage(response, llmProviderLabel));
-    } catch {
-      session.messages.push(buildFallbackAnswer());
+      clearSelectedAttachments();
+    } catch (error) {
+      if (isCanceledRequest(error, requestController)) {
+        messageApi.info('已停止回答');
+        return;
+      }
+      if (attachmentFiles.length) {
+        const errorText = attachmentRequestError(error);
+        messageApi.error(errorText);
+        session.messages.push({
+          id: `${Date.now()}-attachment-error`,
+          role: 'assistant',
+          content: `附件处理失败：${errorText}`,
+          points: ['已选附件仍保留在输入区，可以调整问题后重新发送。'],
+        });
+      } else {
+        session.messages.push(buildFallbackAnswer());
+      }
     } finally {
-      loading.value = false;
+      if (activeRequestController === requestController) {
+        activeRequestController = null;
+        activeRequestId = null;
+        loading.value = false;
+      }
     }
   }
 
   function createNewChat() {
+    clearSelectedAttachments();
     const id = `chat-${Date.now()}`;
     sessions.value.unshift({
       id,
@@ -775,6 +1167,7 @@
       owner: '当前用户',
       time: '刚刚',
       agentName: '客户经营智能体',
+      messagesLoaded: true,
       messages: [],
     });
     activeSessionId.value = id;
@@ -803,9 +1196,10 @@
       return;
     }
     if (wasActive) {
+      clearSelectedAttachments();
       const nextSession = sessions.value[Math.min(index, sessions.value.length - 1)];
       activeSessionId.value = nextSession.id;
-      if (nextSession.messages.length === 0 && !isLocalSession(nextSession.id)) {
+      if (!nextSession.messagesLoaded && !isLocalSession(nextSession.id)) {
         await loadMessages(nextSession.id);
       }
     }
@@ -871,6 +1265,54 @@
     border-radius: 8px;
     color: var(--text-n1);
     gap: 10px;
+  }
+  .sidebar-search {
+    display: grid;
+    align-items: center;
+    padding: 0 8px 0 10px;
+    height: 36px;
+    border: 1px solid var(--primary-5);
+    border-radius: 8px;
+    background: var(--text-n10);
+    grid-template-columns: 18px minmax(0, 1fr) 28px;
+    gap: 8px;
+  }
+  .sidebar-search__icon {
+    color: var(--text-n3);
+  }
+  .sidebar-search__input {
+    padding: 0;
+    width: 100%;
+    min-width: 0;
+    height: 34px;
+    font-size: 14px;
+    border: 0;
+    color: var(--text-n1);
+    background: transparent;
+    outline: 0;
+  }
+  .sidebar-search__input::placeholder {
+    color: var(--text-n4);
+  }
+  .sidebar-search__input::-webkit-search-cancel-button {
+    display: none;
+  }
+  .sidebar-search__close {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text-n3);
+    background: transparent;
+    cursor: pointer;
+  }
+  .sidebar-search__close:hover {
+    color: var(--text-n1);
+    background: var(--text-n9);
   }
   .sidebar-action:hover,
   .feature-item:hover,
@@ -953,6 +1395,13 @@
   }
   .history-more:hover {
     color: var(--primary-8);
+  }
+  .history-empty {
+    padding: 28px 10px;
+    font-size: 13px;
+    text-align: center;
+    color: var(--text-n3);
+    line-height: 20px;
   }
   .sidebar-user {
     display: flex;
@@ -1128,6 +1577,34 @@
     font-size: 15px;
     line-height: 26px;
   }
+  .message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .message-attachment {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    max-width: 260px;
+    border: 1px solid var(--text-n7);
+    border-radius: 6px;
+    color: var(--text-n2);
+    background: var(--text-n10);
+    gap: 6px;
+  }
+  .message-attachment span {
+    overflow: hidden;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .message-attachment-mode {
+    align-self: center;
+    font-size: 12px;
+    color: var(--text-n3);
+  }
   .message-points {
     display: flex;
     margin: 8px 0 0;
@@ -1231,6 +1708,76 @@
     color: var(--text-n3);
     flex-wrap: wrap;
     gap: 10px;
+  }
+  .attachment-tray {
+    margin: 0 auto 8px;
+    width: min(960px, 100%);
+  }
+  .attachment-tray__summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-n3);
+    line-height: 18px;
+  }
+  .attachment-tray__list {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    gap: 6px;
+  }
+  .attachment-chip {
+    display: grid;
+    align-items: center;
+    padding: 5px 5px 5px 8px;
+    min-width: 0;
+    max-width: 310px;
+    height: 36px;
+    border: 1px solid var(--text-n8);
+    border-radius: 7px;
+    color: var(--text-n2);
+    background: var(--text-n10);
+    grid-template-columns: 16px minmax(72px, 1fr) auto 26px;
+    gap: 6px;
+  }
+  .attachment-chip__name {
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .attachment-chip__size {
+    font-size: 11px;
+    white-space: nowrap;
+    color: var(--text-n4);
+  }
+  .attachment-chip__remove {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 5px;
+    color: var(--text-n3);
+    background: transparent;
+    cursor: pointer;
+  }
+  .attachment-chip__remove:hover {
+    color: var(--text-n1);
+    background: var(--text-n9);
+  }
+  .attachment-input {
+    position: absolute;
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .composer {
     display: flex;

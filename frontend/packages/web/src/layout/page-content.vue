@@ -23,10 +23,17 @@
                 {{ t((item as BreadcrumbItem).locale) }}
               </n-breadcrumb-item>
             </n-breadcrumb>
-            <Suspense>
-              <keep-alive :include="[]">
-                <component :is="Component" :key="route.name" />
-              </keep-alive>
+            <Suspense :key="route.name">
+              <template #default>
+                <keep-alive :include="[]">
+                  <component :is="Component" :key="route.name" />
+                </keep-alive>
+              </template>
+              <template #fallback>
+                <div class="flex h-full w-full items-center justify-center">
+                  <n-spin size="large" />
+                </div>
+              </template>
             </Suspense>
           </div>
         </n-scrollbar>
@@ -37,7 +44,7 @@
 
 <script lang="ts" setup>
   import { RouteRecordNameGeneric } from 'vue-router';
-  import { NBreadcrumb, NBreadcrumbItem, NScrollbar } from 'naive-ui';
+  import { NBreadcrumb, NBreadcrumbItem, NScrollbar, NSpin } from 'naive-ui';
 
   import { useI18n } from '@lib/shared/hooks/useI18n';
 

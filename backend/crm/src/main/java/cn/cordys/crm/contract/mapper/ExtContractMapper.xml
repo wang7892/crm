@@ -12,6 +12,8 @@
         c.in_shared_pool AS inCustomerPool,
         c.pool_id,
         ct.amount,
+        ct.order_status,
+        ct.currency,
         ct.approval_status,
         ct.`owner`,
         ct.start_time,
@@ -97,6 +99,8 @@
         c.pool_id,
         ct.amount,
         ct.number,
+        ct.order_status,
+        ct.currency,
         ct.approval_status,
         ct.`owner`,
         ct.create_user,
@@ -129,6 +133,19 @@
         <if test="dataPermission != null and dataPermission.self">
             and <include refid="permissionOwnerUserId"/> = #{userId}
         </if>
+    </select>
+
+    <select id="selectMlsSyncedContractIds" resultType="java.lang.String">
+        SELECT DISTINCT target_id
+        FROM mls_sync_mapping
+        WHERE organization_id = #{orgId}
+          AND source_table = 'contract_info'
+          AND target_table = 'contract'
+          AND target_id IS NOT NULL
+          AND target_id IN
+        <foreach collection="ids" item="id" open="(" close=")" separator=",">
+            #{id}
+        </foreach>
     </select>
 
     <!-- common sql start -->
@@ -257,7 +274,8 @@
             <foreach collection="${conditions}" item="condition" index="i">
                 <if test="condition.name not in
                 {'name', 'owner', 'createTime', 'updateTime', 'customerId', 'createUser', 'updateUser',
-                 'departmentId', 'number', 'amount', 'approvalStatus', 'startTime', 'endTime'}">
+                 'departmentId', 'number', 'amount', 'approvalStatus', 'startTime', 'endTime',
+                 'orderStatus', 'order_status', 'currency', 'orderCurrency'}">
                     <if test="condition.multipleValue">
                         left join contract_field_blob ${tablePrefix}_${i}
                         on ct.id = ${tablePrefix}_${i}.resource_id and ${tablePrefix}_${i}.field_id = #{condition.name}
@@ -279,7 +297,8 @@
     <sql id="fieldSortJoin">
         <if test="${sort} != null and ${sort}.valid() and ${sort}.name not in
                 {'name', 'owner', 'customer_id', 'amount', 'update_user', 'create_time',
-                 'approval_status', 'update_time', 'create_user', 'department_id', 'startTime', 'endTime'}">
+                 'approval_status', 'update_time', 'create_user', 'department_id', 'startTime', 'endTime',
+                 'order_status', 'orderStatus', 'currency', 'orderCurrency'}">
             <bind name="sortName" value="${sort}.name"/>
             left join contract_field sort_table
             on ct.id = sort_table.resource_id and sort_table.field_id = #{sortName}
@@ -351,6 +370,18 @@
                 <include refid="cn.cordys.common.mapper.CommonMapper.condition">
                     <property name="condition" value="condition"/>
                     <property name="column" value="ct.end_time"/>
+                </include>
+            </when>
+            <when test="condition.name == 'orderStatus' or condition.name == 'order_status'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="ct.order_status"/>
+                </include>
+            </when>
+            <when test="condition.name == 'currency' or condition.name == 'orderCurrency'">
+                <include refid="cn.cordys.common.mapper.CommonMapper.condition">
+                    <property name="condition" value="condition"/>
+                    <property name="column" value="ct.currency"/>
                 </include>
             </when>
             <when test="condition.name == 'departmentId'">
@@ -472,6 +503,12 @@
                     <when test="${sort}.name == 'end_time'">
                         ct.`end_time` ${sortType}, ct.id ASC
                     </when>
+                    <when test="${sort}.name == 'order_status' or ${sort}.name == 'orderStatus'">
+                        ct.`order_status` ${sortType}, ct.id ASC
+                    </when>
+                    <when test="${sort}.name == 'currency' or ${sort}.name == 'orderCurrency'">
+                        ct.`currency` ${sortType}, ct.id ASC
+                    </when>
 
 
                     <otherwise>
@@ -498,6 +535,8 @@
                c.in_shared_pool AS inCustomerPool,
                c.pool_id,
                ct.amount,
+               ct.order_status,
+               ct.currency,
                ct.approval_status,
                ct.`owner`,
                ct.create_user,

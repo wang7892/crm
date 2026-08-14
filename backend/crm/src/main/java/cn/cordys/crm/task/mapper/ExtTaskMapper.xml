@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.cordys.crm.task.mapper.ExtTaskMapper">
+
+    <sql id="taskExecutorFrom">
+        FROM sys_organization_user ou
+        INNER JOIN sys_user u ON u.id = ou.user_id
+        INNER JOIN sys_user_role ur ON ur.user_id = ou.user_id
+        INNER JOIN sys_role r ON r.id = ur.role_id
+        INNER JOIN sys_role_permission rp ON rp.role_id = ur.role_id
+        WHERE ou.organization_id = #{organizationId}
+          AND ou.enable = 1
+          AND rp.permission_id = 'TASK:EXECUTE'
+          AND (r.internal = 1 OR r.organization_id = #{organizationId})
+    </sql>
+
+    <select id="selectTaskPage" resultType="cn.cordys.crm.task.dto.response.TaskListResponse">
+        SELECT t.id,
+               t.name,
+               t.source,
+               t.assignee_id,
+               assignee.name AS assignee_name,
+               t.customer_id,
+               customer.name AS customer_name,
+               t.description,
+               t.deadline,
+               t.status,
+               t.report_content,
+               t.ai_reply,
+               t.started_at,
+               t.completed_at,
+               t.report_submitted_at,
+               t.create_time,
+               t.update_time,
+               t.create_user,
+               t.update_user
+        FROM crm_task t
+        LEFT JOIN sys_user assignee ON assignee.id = t.assignee_id
+        LEFT JOIN customer ON customer.id = t.customer_id
+                          AND customer.organization_id = t.organization_id
+        WHERE t.organization_id = #{organizationId}
+        <if test="!manager">
+            AND t.assignee_id = #{userId}
+        </if>
+        <if test="manager and request.assigneeId != null and request.assigneeId != ''">
+            <choose>
+                <when test="request.assigneeId == '__UNASSIGNED__'">
+                    AND t.assignee_id IS NULL
+                </when>
+                <otherwise>
+                    AND t.assignee_id = #{request.assigneeId}
+                </otherwise>
+            </choose>
+        </if>
+        <if test="request.keyword != null and request.keyword != ''">
+            AND (
+                t.name LIKE CONCAT('%', #{request.keyword}, '%')
+                OR assignee.name LIKE CONCAT('%', #{request.keyword}, '%')
+                OR customer.name LIKE CONCAT('%', #{request.keyword}, '%')
+            )
+        </if>
+        <choose>
+            <when test="request.status == 'OVERDUE'">
+                AND t.status != 'COMPLETED'
+                AND t.deadline &lt; #{now}
+            </when>
+            <when test="request.status == 'COMPLETED'">
+                AND t.status = 'COMPLETED'
+            </when>
+            <when test="request.status == 'PENDING'">
+                AND t.status = 'PENDING'
+                AND t.deadline &gt;= #{now}
+            </when>
+            <when test="request.status == 'IN_PROGRESS'">
+                AND t.status = 'IN_PROGRESS'
+                AND t.deadline &gt;= #{now}
+            </when>
+        </choose>
+        ORDER BY CASE WHEN t.assignee_id IS NULL THEN 0 ELSE 1 END,
+                 CASE
+                     WHEN t.status != 'COMPLETED' AND t.deadline &lt; #{now} THEN 0
+                     WHEN t.status = 'PENDING' THEN 1
+                     WHEN t.status = 'IN_PROGRESS' THEN 2
+                     ELSE 3
+                 END,
+                 t.deadline ASC,
+                 t.create_time DESC
+    </select>
+
+    <select id="selectTaskById" resultType="cn.cordys.crm.task.dto.response.TaskListResponse">
+        SELECT t.id,
+               t.name,
+               t.source,
+               t.assignee_id,
+               assignee.name AS assignee_name,
+               t.customer_id,
+               customer.name AS customer_name,
+               t.description,
+               t.deadline,
+               t.status,
+               t.report_content,
+               t.ai_reply,
+               t.started_at,
+               t.completed_at,
+               t.report_submitted_at,
+               t.create_time,
+               t.update_time,
+               t.create_user,
+               t.update_user
+        FROM crm_task t
+        LEFT JOIN sys_user assignee ON assignee.id = t.assignee_id
+        LEFT JOIN customer ON customer.id = t.customer_id
+                          AND customer.organization_id = t.organization_id
+        WHERE t.id = #{id}
+          AND t.organization_id = #{organizationId}
+    </select>
+
+    <select id="selectTaskExecutorOptions" resultType="cn.cordys.common.dto.OptionDTO">
+        SELECT DISTINCT u.id, u.name
+        <include refid="taskExecutorFrom"/>
+        ORDER BY u.name
+    </select>
+
+    <select id="countTaskExecutor" resultType="int">
+        SELECT COUNT(DISTINCT u.id)
+        <include refid="taskExecutorFrom"/>
+        AND u.id = #{userId}
+    </select>
+
+    <select id="countCustomer" resultType="int">
+        SELECT COUNT(*)
+        FROM customer
+        WHERE organization_id = #{organizationId}
+          AND id = #{customerId}
+    </select>
+
+    <select id="countContactSpecialist" resultType="int">
+        SELECT COUNT(DISTINCT u.id)
+        FROM sys_organization_user ou
+        INNER JOIN sys_user u ON u.id = ou.user_id
+        INNER JOIN sys_user_role ur ON ur.user_id = ou.user_id
+        WHERE ou.organization_id = #{organizationId}
+          AND ou.enable = 1
+          AND ur.role_id = 'sales_staff'
+          AND u.id = #{userId}
+    </select>
+
+    <select id="countTaskBusinessKey" resultType="int">
+        SELECT COUNT(*)
+        FROM crm_task
+        WHERE organization_id = #{organizationId}
+          AND business_key = #{businessKey}
+    </select>
+
+    <insert id="insertShipmentTask">
+        INSERT INTO crm_task
+        (id, organization_id, name, source, business_key, assignee_id, customer_id, description,
+         deadline, status, report_content, ai_reply, started_at, completed_at, report_submitted_at,
+         create_time, update_time, create_user, update_user)
+        VALUES
+        (#{task.id}, #{task.organizationId}, #{task.name}, #{task.source}, #{task.businessKey},
+         #{task.assigneeId}, #{task.customerId}, #{task.description}, #{task.deadline}, #{task.status},
+         #{task.reportContent}, #{task.aiReply}, #{task.startedAt}, #{task.completedAt},
+         #{task.reportSubmittedAt}, #{task.createTime}, #{task.updateTime}, #{task.createUser},
+         #{task.updateUser})
+    </insert>
+
+    <select id="selectCustomerOptions" resultType="cn.cordys.common.dto.OptionDTO">
+        SELECT id, name
+        FROM customer
+        WHERE organization_id = #{organizationId}
+        <if test="keyword != null and keyword != ''">
+            AND name LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        ORDER BY update_time DESC
+        LIMIT 100
+    </select>
+</mapper>

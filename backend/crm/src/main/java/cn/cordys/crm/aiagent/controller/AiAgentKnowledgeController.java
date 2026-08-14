@@ -6,10 +6,19 @@ import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeChunkPageRequest;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeDocumentPageRequest;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeSearchTestRequest;
+import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleBatchReviewRequest;
+import cn.cordys.crm.aiagent.dto.request.AiSemanticRulePageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleReviewRequest;
+import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleSaveRequest;
+import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleVersionPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleVersionSwitchRequest;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeChunkResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
+import cn.cordys.crm.aiagent.dto.response.AiSemanticRuleResponse;
+import cn.cordys.crm.aiagent.dto.response.AiSemanticSchemaOptionsResponse;
 import cn.cordys.crm.aiagent.service.AiAgentKnowledgeService;
+import cn.cordys.crm.aiagent.service.AiAgentSemanticRuleService;
 import cn.cordys.security.SessionUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -31,6 +40,8 @@ public class AiAgentKnowledgeController {
 
     @Resource
     private AiAgentKnowledgeService aiAgentKnowledgeService;
+    @Resource
+    private AiAgentSemanticRuleService aiAgentSemanticRuleService;
 
     @PostMapping("/page")
     @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
@@ -44,11 +55,9 @@ public class AiAgentKnowledgeController {
     @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
     @Operation(summary = "上传知识文档")
     public AiKnowledgeDocumentResponse upload(@RequestParam("file") MultipartFile file,
-                                              @RequestParam(value = "category", required = false) String category,
                                               @RequestParam(value = "remark", required = false) String remark) {
         return aiAgentKnowledgeService.uploadDocument(
                 file,
-                category,
                 remark,
                 OrganizationContext.getOrganizationId(),
                 SessionUtils.getUserId()
@@ -111,7 +120,67 @@ public class AiAgentKnowledgeController {
         return aiAgentKnowledgeService.searchTest(
                 request.getQuestion(),
                 request.getTopK(),
+                request.getMode(),
                 OrganizationContext.getOrganizationId()
         );
+    }
+
+    @PostMapping("/semantic-rule/page")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "语义规则分页")
+    public Pager<List<AiSemanticRuleResponse>> pageSemanticRules(
+            @Valid @RequestBody AiSemanticRulePageRequest request) {
+        return aiAgentSemanticRuleService.pageRules(request, OrganizationContext.getOrganizationId());
+    }
+
+    @PostMapping("/semantic-rule/save/{chunkId}")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "保存语义规则")
+    public AiSemanticRuleResponse saveSemanticRule(@PathVariable String chunkId,
+                                                   @Valid @RequestBody AiSemanticRuleSaveRequest request) {
+        return aiAgentSemanticRuleService.saveRule(
+                chunkId, request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
+    }
+
+    @PostMapping("/semantic-rule/review/{chunkId}")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "审核语义规则")
+    public AiSemanticRuleResponse reviewSemanticRule(@PathVariable String chunkId,
+                                                     @Valid @RequestBody AiSemanticRuleReviewRequest request) {
+        return aiAgentSemanticRuleService.reviewRule(
+                chunkId, request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
+    }
+
+    @PostMapping("/semantic-rule/review/batch")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "批量审核语义规则")
+    public List<AiSemanticRuleResponse> reviewSemanticRules(
+            @Valid @RequestBody AiSemanticRuleBatchReviewRequest request) {
+        return aiAgentSemanticRuleService.reviewRules(
+                request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
+    }
+
+    @GetMapping("/semantic-rule/schema-options")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "语义规则可选实体和字段")
+    public AiSemanticSchemaOptionsResponse semanticSchemaOptions() {
+        return aiAgentSemanticRuleService.schemaOptions();
+    }
+
+    @PostMapping("/semantic-rule/version/page")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "语义规则版本分页")
+    public Pager<List<AiSemanticRuleResponse>> pageSemanticRuleVersions(
+            @Valid @RequestBody AiSemanticRuleVersionPageRequest request) {
+        return aiAgentSemanticRuleService.pageVersions(request, OrganizationContext.getOrganizationId());
+    }
+
+    @PostMapping("/semantic-rule/version/switch")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "切换语义规则版本")
+    public AiSemanticRuleResponse switchSemanticRuleVersion(
+            @Valid @RequestBody AiSemanticRuleVersionSwitchRequest request) {
+        return aiAgentSemanticRuleService.switchVersion(
+                request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
     }
 }

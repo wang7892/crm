@@ -36,6 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
 import java.time.*;
@@ -53,12 +54,17 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
-@Transactional(rollbackFor = Exception.class)
+@Transactional(rollbackFor = Exception.class, noRollbackFor = AiAgentRequestCancelledException.class)
 public class AiAgentChatService {
 
     private static final Logger log = LoggerFactory.getLogger(AiAgentChatService.class);
     private static final ZoneId AGENT_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final Pattern EXPLICIT_YEAR_MONTH_PATTERN = Pattern.compile(
+            "(20\\d{2})\\s*年\\s*(1[0-2]|0?[1-9]|十一|十二|十|[一二三四五六七八九])\\s*月(?:份)?");
+    private static final Pattern EXPLICIT_YEAR_PATTERN = Pattern.compile("(20\\d{2})\\s*年");
+    private static final Pattern RECENT_MONTHS_PATTERN = Pattern.compile(
+            "(?:最近|近)\\s*(\\d{1,2}|十一|十二|十|[一二三四五六七八九])\\s*个?月");
     private static final int STALE_FOLLOW_DAYS = 30;
     private static final int LOW_COMMUNICATION_COUNT = 2;
     private static final Map<String, String> CONTRACT_FIELD_LABELS = Map.ofEntries(
@@ -122,30 +128,31 @@ public class AiAgentChatService {
     private AiAgentDatabaseQueryService aiAgentDatabaseQueryService;
     @Resource
     private AiAgentKnowledgeService aiAgentKnowledgeService;
+    @Resource
+    private AiAgentSemanticRuleRetrievalService semanticRuleRetrievalService;
+    @Resource
+    private AiAgentSemanticPlanGuard semanticPlanGuard;
+    @Resource
+    private AiAgentAttachmentService aiAgentAttachmentService;
+    @Resource
+    private AiAgentRequestCancellationService aiAgentRequestCancellationService;
 
     public AiAgentChatResponse chat(AiAgentChatRequest request) {
         String userId = SessionUtils.getUserId();
         String orgId = OrganizationContext.getOrganizationId();
-        DeptDataPermissionDTO unrestrictedDataPermission = unrestrictedDataPermission();
 
         AiAgentSession session = aiAgentAuditService.ensureSession(request.getSessionId(), request.getQuestion(), userId, orgId);
         AiAgentMessage userMessage = aiAgentAuditService.saveMessage(
                 session.getId(), "user", request.getQuestion(), null, null, userId);
+        aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
 
-        AiAgentContext context = new AiAgentContext();
-        context.setUserId(userId);
-        context.setOrganizationId(orgId);
-        context.setDataScope(request.getDataScope());
-        context.setDataPermission(unrestrictedDataPermission);
-        context.setCustomerDataPermission(unrestrictedDataPermission);
-        context.setContractDataPermission(unrestrictedDataPermission);
-        context.setOrderDataPermission(unrestrictedDataPermission);
-        context.setLlmProvider(request.getLlmProvider());
-        context.setTimeWindow(resolveTimeWindow(request.getQuestion(), request.getTimeRange()));
+        AiAgentContext context = createContext(userId, orgId, request);
 
         AiAgentChatResponse response = route(request.getQuestion(), context);
+        aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
         recordQuestionBankUsage(request.getQuestion(), response, context, session, userMessage);
         addKnowledgeSearchTrace(response, context.getKnowledgeSearch());
+        addSemanticRuleTrace(response, context);
         addLlmAttemptTrace(response, context);
         AiAgentMessage assistantMessage = aiAgentAuditService.saveMessage(
                 session.getId(),
@@ -215,16 +222,31 @@ public class AiAgentChatService {
         if (containsAny(question, "数据范围", "全公司、我的团队、仅本人", "全公司 我的团队 仅本人")) {
             return dataScopeGuide();
         }
-        context.setKnowledgeSearch(aiAgentKnowledgeService.searchTest(question, 5, context.getOrganizationId()));
-        AiAgentChatResponse knowledgeGuidedResponse = routeKnowledgeGuidedQuestion(question, context);
-        if (knowledgeGuidedResponse != null) {
-            return knowledgeGuidedResponse;
+        AiAgentSemanticRuleRetrievalService.RetrievalResult semanticRetrieval =
+                retrieveSemanticKnowledge(question, context.getOrganizationId());
+        context.setSemanticRuleConflict(semanticRetrieval.conflict());
+        context.setSemanticRuleFallbackReason(semanticRetrieval.fallbackReason());
+        context.setSemanticRuleMatches(semanticRetrieval.conflict() ? List.of() : semanticRetrieval.matches());
+
+        context.setKnowledgeSearch(retrieveDocumentKnowledge(question, context.getOrganizationId()));
+        if (!semanticRuleRetrievalService.isEnabled() || context.getSemanticRuleMatches().isEmpty()) {
+            AiAgentChatResponse knowledgeGuidedResponse = routeKnowledgeGuidedQuestion(question, context);
+            if (knowledgeGuidedResponse != null) {
+                return knowledgeGuidedResponse;
+            }
         }
-        ParsedAiAgentQuestion parsedQuestion = llmAiAgentQuestionParser.parse(question, context.getLlmProvider());
+        ParsedAiAgentQuestion parsedQuestion = llmAiAgentQuestionParser.parse(
+                question, context.getLlmProvider(), context);
+        boolean semanticRepairAttempted = false;
+        if (parsedQuestion == null && semanticPlanGuard.isEnforced(context)) {
+            parsedQuestion = repairSemanticPlan(
+                    question, context, "大模型第一次未返回合法 JSON 查询计划");
+            semanticRepairAttempted = true;
+        }
         context.setLlmParseAttempted(true);
         context.setLlmParsedQuestion(parsedQuestion);
         logLlmParsedQuestion(question, parsedQuestion);
-        AiAgentChatResponse llmResponse = routeParsedQuestion(parsedQuestion, context);
+        AiAgentChatResponse llmResponse = routeParsedQuestion(parsedQuestion, context, !semanticRepairAttempted);
         if (llmResponse != null) {
             return llmResponse;
         }
@@ -337,6 +359,37 @@ public class AiAgentChatService {
             return customerSummary(question, context);
         }
         return fallback(context);
+    }
+
+    private AiAgentSemanticRuleRetrievalService.RetrievalResult retrieveSemanticKnowledge(
+            String question, String organizationId) {
+        try {
+            return semanticRuleRetrievalService.retrieve(question, organizationId);
+        } catch (RuntimeException e) {
+            log.warn("AI agent semantic knowledge retrieval failed, continuing without semantic knowledge: "
+                    + "organizationId={}, error={}", organizationId, e.toString());
+            log.debug("AI agent semantic knowledge retrieval failure detail", e);
+            return new AiAgentSemanticRuleRetrievalService.RetrievalResult(
+                    List.of(), false, "RETRIEVAL_FAILED");
+        }
+    }
+
+    private AiKnowledgeSearchTestResponse retrieveDocumentKnowledge(String question, String organizationId) {
+        try {
+            return aiAgentKnowledgeService.searchTest(question, 5, organizationId);
+        } catch (RuntimeException e) {
+            log.warn("AI agent document knowledge retrieval failed, continuing with the original answer flow: "
+                    + "organizationId={}, error={}", organizationId, e.toString());
+            log.debug("AI agent document knowledge retrieval failure detail", e);
+            AiKnowledgeSearchTestResponse response = new AiKnowledgeSearchTestResponse();
+            response.setQuestion(question);
+            response.setRewriteQuestion(question);
+            response.setMatches(List.of());
+            response.setMatchedRules(List.of());
+            response.setRetrievalMode("FAILED_OPEN");
+            response.setFallbackReason("DOCUMENT_RETRIEVAL_FAILED");
+            return response;
+        }
     }
 
     private AiAgentChatResponse routeStableRuleQuestion(String question, AiAgentContext context) {
@@ -1338,7 +1391,8 @@ public class AiAgentChatService {
         return accepted;
     }
 
-    private void applyDeterministicParameterHints(ParsedAiAgentQuestion parsedQuestion) {
+    private void applyDeterministicParameterHints(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
+        normalizeQueryTimeFilters(parsedQuestion, context);
         if (!isSpecialistIntent(parsedQuestion.getIntent())) {
             return;
         }
@@ -1355,6 +1409,30 @@ public class AiAgentChatService {
         parsedQuestion.setSpecialistName(specialistName);
     }
 
+    private void normalizeQueryTimeFilters(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
+        if (parsedQuestion.getQueryPlan() == null || parsedQuestion.getQueryPlan().getFilters() == null) {
+            return;
+        }
+        boolean normalized = false;
+        for (AiAgentQueryFilter filter : parsedQuestion.getQueryPlan().getFilters()) {
+            if (!StringUtils.equalsIgnoreCase(filter.getOperator(), "between")
+                    || isValidBetweenValue(filter.getValue())) {
+                continue;
+            }
+            filter.setValue("CURRENT_TIME_WINDOW");
+            normalized = true;
+        }
+        if (normalized && context != null) {
+            context.setTimeWindow(resolveTimeWindow(
+                    parsedQuestion.getRawQuestion(), parsedQuestion.getTimeRange()));
+        }
+    }
+
+    private boolean isValidBetweenValue(Object value) {
+        return StringUtils.equalsIgnoreCase(String.valueOf(value), "CURRENT_TIME_WINDOW")
+                || (value instanceof List<?> values && values.size() >= 2);
+    }
+
     private boolean isSpecialistIntent(String intent) {
         return switch (StringUtils.defaultString(intent)) {
             case "SPECIALIST_CUSTOMER_LIST",
@@ -1367,35 +1445,82 @@ public class AiAgentChatService {
         };
     }
 
-    private AiAgentChatResponse routeParsedQuestion(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
+    private ParsedAiAgentQuestion repairSemanticPlan(String question,
+                                                     AiAgentContext context,
+                                                     String rejectionReason) {
+        ParsedAiAgentQuestion repaired = llmAiAgentQuestionParser.repair(
+                question, context.getLlmProvider(), context, rejectionReason);
+        context.setLlmParsedQuestion(repaired);
+        logLlmParsedQuestion(question, repaired);
+        return repaired;
+    }
+
+    private AiAgentChatResponse routeParsedQuestion(ParsedAiAgentQuestion parsedQuestion,
+                                                     AiAgentContext context,
+                                                     boolean allowSemanticRepair) {
         if (parsedQuestion == null) {
             return null;
         }
         if (!hasRequiredLlmConfidence(parsedQuestion)) {
-            return null;
+            if (!semanticPlanGuard.isEnforced(context)) {
+                return null;
+            }
+            if (!allowSemanticRepair) {
+                return null;
+            }
+            ParsedAiAgentQuestion repaired = repairSemanticPlan(
+                    parsedQuestion.getRawQuestion(), context, "查询计划置信度不足");
+            if (repaired == null || !hasRequiredLlmConfidence(repaired)) {
+                return null;
+            }
+            parsedQuestion = repaired;
+            allowSemanticRepair = false;
         }
-        applyDeterministicParameterHints(parsedQuestion);
-        rewriteCrmOrderQueryToSalesOrder(parsedQuestion);
+        applyDeterministicParameterHints(parsedQuestion, context);
+        rewriteCrmOrderQueryToSalesOrder(parsedQuestion, context);
+        AiAgentSemanticPlanGuard.GuardResult guardResult = validateSemanticPlan(parsedQuestion, context);
+        if (!guardResult.allowed() && semanticPlanGuard.isEnforced(context) && allowSemanticRepair) {
+            ParsedAiAgentQuestion repaired = repairSemanticPlan(
+                    parsedQuestion.getRawQuestion(), context, guardResult.reason());
+            if (repaired != null && hasRequiredLlmConfidence(repaired)) {
+                applyDeterministicParameterHints(repaired, context);
+                rewriteCrmOrderQueryToSalesOrder(repaired, context);
+                AiAgentSemanticPlanGuard.GuardResult repairedResult = validateSemanticPlan(repaired, context);
+                if (repairedResult.allowed()) {
+                    parsedQuestion = repaired;
+                } else {
+                    context.setLlmParsedQuestion(parsedQuestion);
+                    log.warn("AI agent knowledge-assisted repair still conflicts with retrieved knowledge; "
+                            + "continuing with the original executable plan: reason={}", repairedResult.reason());
+                }
+            } else {
+                context.setLlmParsedQuestion(parsedQuestion);
+                log.warn("AI agent knowledge-assisted repair did not produce an executable plan; "
+                        + "continuing with the original executable plan: reason={}", guardResult.reason());
+            }
+        }
         String rawQuestion = StringUtils.defaultString(parsedQuestion.getRawQuestion());
-        if (isCustomerOrderContractYearGapQuestion(rawQuestion)) {
-            AiAgentChatResponse response = customerOrderContractYearGap(rawQuestion, context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
-        }
-        if (isCustomerWithoutOrderYearQuestion(rawQuestion)) {
-            AiAgentChatResponse response = customersWithoutOrderYear(rawQuestion, context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
-        }
-        if (isCustomerWithoutMaterialOrderQuestion(rawQuestion)) {
-            AiAgentChatResponse response = customersWithoutMaterialOrder(rawQuestion, context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
-        }
-        if (isOrderMaterialSummaryQuestion(rawQuestion)) {
-            AiAgentChatResponse response = salesOrderMaterialSummary(rawQuestion, context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
+        if (!semanticPlanGuard.isEnforced(context)) {
+            if (isCustomerOrderContractYearGapQuestion(rawQuestion)) {
+                AiAgentChatResponse response = customerOrderContractYearGap(rawQuestion, context);
+                addLlmReasoningTrace(response, parsedQuestion);
+                return response;
+            }
+            if (isCustomerWithoutOrderYearQuestion(rawQuestion)) {
+                AiAgentChatResponse response = customersWithoutOrderYear(rawQuestion, context);
+                addLlmReasoningTrace(response, parsedQuestion);
+                return response;
+            }
+            if (isCustomerWithoutMaterialOrderQuestion(rawQuestion)) {
+                AiAgentChatResponse response = customersWithoutMaterialOrder(rawQuestion, context);
+                addLlmReasoningTrace(response, parsedQuestion);
+                return response;
+            }
+            if (isOrderMaterialSummaryQuestion(rawQuestion)) {
+                AiAgentChatResponse response = salesOrderMaterialSummary(rawQuestion, context);
+                addLlmReasoningTrace(response, parsedQuestion);
+                return response;
+            }
         }
         if (parsedQuestion.isNeedClarification()) {
             AiAgentChatResponse response = clarification(parsedQuestion);
@@ -1484,10 +1609,59 @@ public class AiAgentChatService {
         return response;
     }
 
-    private void rewriteCrmOrderQueryToSalesOrder(ParsedAiAgentQuestion parsedQuestion) {
+    public AiAgentChatResponse chatWithAttachments(AiAgentChatRequest request, List<MultipartFile> files) {
+        String userId = SessionUtils.getUserId();
+        String orgId = OrganizationContext.getOrganizationId();
+        aiAgentAttachmentService.validate(files);
+        AiAgentAttachmentService.AttachmentMode mode = aiAgentAttachmentService.resolveMode(request.getQuestion());
+
+        AiAgentSession session = aiAgentAuditService.ensureSession(
+                request.getSessionId(), request.getQuestion(), userId, orgId);
+        aiAgentAuditService.saveMessage(
+                session.getId(),
+                "user",
+                request.getQuestion(),
+                null,
+                aiAgentAttachmentService.evidenceSnapshot(files, mode),
+                userId
+        );
+        aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
+
+        AiAgentChatResponse response = aiAgentAttachmentService.handle(
+                request.getQuestion(), request.getLlmProvider(), files, orgId, userId, mode);
+        aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
+        AiAgentMessage assistantMessage = aiAgentAuditService.saveMessage(
+                session.getId(),
+                "assistant",
+                response.getAnswer(),
+                response.getIntent(),
+                aiAgentAuditService.responseEvidenceSnapshot(response),
+                userId
+        );
+        response.setSessionId(session.getId());
+        response.setMessageId(assistantMessage.getId());
+        aiAgentAuditService.saveToolLogs(assistantMessage.getId(), response.getTools(), userId);
+        aiAgentAuditService.touch(session.getId(), userId);
+        return response;
+    }
+
+    private AiAgentSemanticPlanGuard.GuardResult validateSemanticPlan(
+            ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
+        try {
+            return semanticPlanGuard.validate(parsedQuestion, context);
+        } catch (RuntimeException e) {
+            log.warn("AI agent semantic plan validation failed, continuing with the original executable plan: error={}",
+                    e.toString());
+            log.debug("AI agent semantic plan validation failure detail", e);
+            return AiAgentSemanticPlanGuard.GuardResult.pass();
+        }
+    }
+
+    private void rewriteCrmOrderQueryToSalesOrder(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
         if (!StringUtils.equals(parsedQuestion.getIntent(), "CRM_DATABASE_QUERY")
                 || parsedQuestion.getQueryPlan() == null
-                || !isCrmOrderQuestion(parsedQuestion.getRawQuestion())) {
+                || !isCrmOrderQuestion(parsedQuestion.getRawQuestion())
+                || semanticPlanGuard.targetsEntity(context, "contract_info")) {
             return;
         }
         AiAgentQueryPlan plan = parsedQuestion.getQueryPlan();
@@ -1572,8 +1746,8 @@ public class AiAgentChatService {
         ParsedAiAgentQuestion parsedQuestion = context.getLlmParsedQuestion();
         if (parsedQuestion == null) {
             addToolFirst(response, tool("llm_question_parser", "SKIPPED",
-                    "已先调用大模型解析问题，但模型未返回可执行 JSON 解析结果", 0L));
-            addWarningOnce(response, "已先经过大模型解析；模型未返回可执行计划时，后端只使用兜底规则或帮助提示。");
+                    "大模型增强解析未返回可执行 JSON，已继续使用原有回答流程", 0L));
+            addWarningOnce(response, "知识库和大模型增强解析失败时已自动回退，不会阻断原本能够回答的问题。");
             return;
         }
         addLlmReasoningTrace(response, parsedQuestion);
@@ -1589,6 +1763,27 @@ public class AiAgentChatService {
             summary += "，最高相关来源=" + StringUtils.abbreviate(documentName, 80);
         }
         addToolFirst(response, tool("company_knowledge_retrieval", "SUCCESS", summary, 0L));
+    }
+
+    private void addSemanticRuleTrace(AiAgentChatResponse response, AiAgentContext context) {
+        if (response == null || context == null) {
+            return;
+        }
+        if (context.isSemanticRuleConflict()) {
+            addToolFirst(response, tool("semantic_rule_retrieval", "SKIPPED",
+                    StringUtils.defaultIfBlank(context.getSemanticRuleFallbackReason(), "业务知识存在冲突，已忽略冲突知识并继续原有回答流程"), 0L));
+            return;
+        }
+        if (context.getSemanticRuleMatches() == null || context.getSemanticRuleMatches().isEmpty()) {
+            return;
+        }
+        String ruleIds = context.getSemanticRuleMatches().stream()
+                .map(match -> match.getRuleId() + ":v" + match.getVersion())
+                .collect(java.util.stream.Collectors.joining(","));
+        String status = semanticRuleRetrievalService.isEnabled() ? "SUCCESS" : "SHADOW";
+        addToolFirst(response, tool("semantic_rule_retrieval", status,
+                "精确命中 " + context.getSemanticRuleMatches().size() + " 条已生效业务知识规则："
+                        + StringUtils.abbreviate(ruleIds, 200), 0L));
     }
 
     private void addLlmReasoningTrace(AiAgentChatResponse response, ParsedAiAgentQuestion parsedQuestion) {
@@ -1722,23 +1917,23 @@ public class AiAgentChatService {
 
     private AiAgentChatResponse externalOrderConfigGuide() {
         AiAgentChatResponse response = base("EXTERNAL_ORDER_CONFIG_GUIDE");
-        response.setAnswer("订单数据为空通常有三类原因：外部订单数据源未配置、当前账号没有对应客户/合同权限，或 CRM 客户名称没有匹配到外部订单表 customer 字段。");
+        response.setAnswer("订单数据为空通常有两类原因：外部订单数据源未配置或未启用，或者 CRM 客户名称没有匹配到外部订单表 customer 字段。");
         response.getEvidence().add("mls_agent_data.contract_info");
         response.getTools().add(tool("external_order_config_guide", "SUCCESS", "返回外部订单数据源排查说明", 0L));
         response.getPoints().add("配置项：crm.ai-agent.external-order.enabled/url/username/password。");
         response.getPoints().add("匹配口径：CRM customer.name 与外部 contract_info.customer 做模糊匹配。");
-        response.getPoints().add("权限口径：合同数据会按当前账号可见负责人范围过滤。");
+        response.getPoints().add("数据口径：已开通智能体的账号可以查询已配置外部数据源中的合同数据。");
         return response;
     }
 
     private AiAgentChatResponse dataScopeGuide() {
         AiAgentChatResponse response = base("DATA_SCOPE_GUIDE");
-        response.setAnswer("数据范围决定智能体能看哪些客户和订单：全公司、我的团队、仅本人客户分别对应 ALL、DEPARTMENT、SELF。");
-        response.getTools().add(tool("data_scope_guide", "SUCCESS", "返回 AI Agent 数据范围说明", 0L));
-        response.getPoints().add("全公司：按当前账号拥有的全量权限查询。");
-        response.getPoints().add("我的团队：按部门权限查询。");
-        response.getPoints().add("仅本人客户：只查询 owner 为当前用户的客户。");
-        response.getWarnings().add("无论选择哪个范围，都不会绕过系统权限。");
+        response.setAnswer("当前阶段只要开通智能体功能，就默认查询当前组织内的全量客户、合同和订单数据。");
+        response.getTools().add(tool("data_scope_guide", "SUCCESS", "返回 AI Agent 当前全量数据策略", 0L));
+        response.getPoints().add("准入条件：当前账号拥有 AGENT_READ 权限。");
+        response.getPoints().add("数据范围：当前组织内全量数据，暂不区分全公司、团队或本人。");
+        response.getPoints().add("外部数据：仅查询与当前组织绑定的外部数据源。");
+        response.getWarnings().add("客户、合同和订单的细粒度数据权限将在后续阶段实现。");
         return response;
     }
 
@@ -2266,9 +2461,9 @@ public class AiAgentChatService {
         long emailCount = rows.stream().mapToLong(row -> safeLong(row.getEmailCount())).sum();
         long followCount = rows.stream().mapToLong(row -> safeLong(row.getFollowRecordCount())).sum();
         if (rows.isEmpty()) {
-            response.setAnswer("在你当前权限范围内，未查到“" + specialistName + "”在" + context.getTimeWindow().label()
+            response.setAnswer("在当前组织内，未查到“" + specialistName + "”在" + context.getTimeWindow().label()
                     + "与客户发生的企微、邮件或跟进记录。");
-            response.getWarnings().add("只统计当前登录用户有权限查看的客户，不展示聊天内容和邮件正文。");
+            response.getWarnings().add("统计当前组织内客户，不展示聊天内容和邮件正文。");
             return response;
         }
 
@@ -2597,8 +2792,8 @@ public class AiAgentChatService {
 
     private AiAgentChatResponse refusal(String question) {
         AiAgentChatResponse response = base("SECURITY_REFUSAL");
-        response.setAnswer("这个问题涉及无权限数据、敏感字段或消息正文，我不能直接返回明细。可以在你有权限的范围内返回脱敏后的聚合统计。");
-        response.getWarnings().add("默认拒绝返回聊天正文、邮件正文、密码、token、授权码、无权限客户或无权限销售的明细。");
+        response.setAnswer("这个问题涉及敏感字段或消息正文，我不能直接返回明细，可以返回脱敏后的聚合统计。");
+        response.getWarnings().add("默认拒绝返回聊天正文、邮件正文、密码、token 和授权码等敏感信息。");
         response.getTools().add(tool("permission_guard", "SUCCESS", "命中越权/敏感内容保护规则", 0L));
         return response;
     }
@@ -2609,7 +2804,7 @@ public class AiAgentChatService {
         response.getPoints().add("例如：张三这个月和客户沟通的情况怎么样？");
         response.getPoints().add("例如：张三负责的客户这个月有没有新的订单？");
         response.getPoints().add("例如：某客户最近有没有新订单？");
-        response.getWarnings().add("所有结果只基于当前账号可见客户和已配置的数据源。");
+        response.getWarnings().add("所有结果基于当前组织内全量数据和已配置的数据源。");
         return response;
     }
 
@@ -2794,6 +2989,10 @@ public class AiAgentChatService {
 
     private AiAgentTimeWindow resolveTimeWindow(String question, String requestedRange) {
         LocalDate today = LocalDate.now(AGENT_ZONE);
+        AiAgentTimeWindow questionWindow = resolveQuestionTimeWindow(question, requestedRange, today);
+        if (questionWindow != null) {
+            return questionWindow;
+        }
         LocalDate startDate;
         String label;
         if (StringUtils.equals(requestedRange, "7d")) {
@@ -2827,13 +3026,91 @@ public class AiAgentChatService {
         return new AiAgentTimeWindow(start, end, label);
     }
 
-    private DeptDataPermissionDTO unrestrictedDataPermission() {
+    private AiAgentTimeWindow resolveQuestionTimeWindow(String question,
+                                                        String requestedRange,
+                                                        LocalDate today) {
+        String text = StringUtils.defaultString(question) + " " + StringUtils.defaultString(requestedRange);
+        Matcher monthMatcher = EXPLICIT_YEAR_MONTH_PATTERN.matcher(text);
+        if (monthMatcher.find()) {
+            int year = Integer.parseInt(monthMatcher.group(1));
+            int month = parseMonthNumber(monthMatcher.group(2));
+            if (month >= 1 && month <= 12) {
+                LocalDate start = LocalDate.of(year, month, 1);
+                return timeWindow(start, start.plusMonths(1), year + "年" + month + "月");
+            }
+        }
+
+        Matcher recentMonthsMatcher = RECENT_MONTHS_PATTERN.matcher(text);
+        if (recentMonthsMatcher.find()) {
+            int months = parseMonthNumber(recentMonthsMatcher.group(1));
+            if (months >= 1 && months <= 24) {
+                return timeWindow(today.minusMonths(months), today.plusDays(1), "近" + months + "个月");
+            }
+        }
+
+        Matcher yearMatcher = EXPLICIT_YEAR_PATTERN.matcher(text);
+        if (yearMatcher.find()) {
+            int year = Integer.parseInt(yearMatcher.group(1));
+            return timeWindow(LocalDate.of(year, 1, 1), LocalDate.of(year + 1, 1, 1), year + "年");
+        }
+        return null;
+    }
+
+    private int parseMonthNumber(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return switch (StringUtils.defaultString(value)) {
+                case "一" -> 1;
+                case "二" -> 2;
+                case "三" -> 3;
+                case "四" -> 4;
+                case "五" -> 5;
+                case "六" -> 6;
+                case "七" -> 7;
+                case "八" -> 8;
+                case "九" -> 9;
+                case "十" -> 10;
+                case "十一" -> 11;
+                case "十二" -> 12;
+                default -> -1;
+            };
+        }
+    }
+
+    private AiAgentTimeWindow timeWindow(LocalDate start, LocalDate end, String label) {
+        return new AiAgentTimeWindow(
+                start.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
+                end.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
+                label);
+    }
+
+    DataPermissions unrestrictedDataPermissions() {
         DeptDataPermissionDTO permission = new DeptDataPermissionDTO();
         permission.setViewId(InternalUserView.ALL.name());
         permission.setAll(true);
         permission.setSelf(false);
         permission.setVisible(false);
-        return permission;
+        return new DataPermissions(permission, permission, permission);
+    }
+
+    AiAgentContext createContext(String userId, String orgId, AiAgentChatRequest request) {
+        DataPermissions dataPermissions = unrestrictedDataPermissions();
+        AiAgentContext context = new AiAgentContext();
+        context.setUserId(userId);
+        context.setOrganizationId(orgId);
+        context.setDataScope("all");
+        context.setDataPermission(dataPermissions.customer());
+        context.setCustomerDataPermission(dataPermissions.customer());
+        context.setContractDataPermission(dataPermissions.contract());
+        context.setOrderDataPermission(dataPermissions.order());
+        context.setLlmProvider(request.getLlmProvider());
+        context.setTimeWindow(resolveTimeWindow(request.getQuestion(), request.getTimeRange()));
+        return context;
+    }
+
+    record DataPermissions(DeptDataPermissionDTO customer, DeptDataPermissionDTO contract,
+                           DeptDataPermissionDTO order) {
     }
 
     private boolean isSensitiveOrUnauthorizedProbe(String question) {

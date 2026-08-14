@@ -11,6 +11,8 @@ export interface ContractItem {
   customerId: string;
   customerName: string;
   amount: number;
+  orderStatus: string;
+  currency: string;
   approvalStatus: QuotationStatusEnum;
   owner: string;
   ownerName: string;
@@ -36,6 +38,8 @@ export interface SaveContractParams {
   name: string;
   customerId: string; // 客户id
   amount?: number; // 金额
+  orderStatus?: string; // 外部订单状态
+  currency?: string; // 币种
   owner: string; // 负责人
   moduleFields: ModuleField[]; // 自定义字段
 }

@@ -115,9 +115,7 @@ public class AiAgentQueryPermissionService {
     }
 
     private PermissionSql orderPermission(AiAgentContext context) {
-        DeptDataPermissionDTO dataPermission = context.getOrderDataPermission() == null
-                ? context.getDataPermission()
-                : context.getOrderDataPermission();
+        DeptDataPermissionDTO dataPermission = context.getOrderDataPermission();
         StringBuilder join = new StringBuilder();
         StringBuilder where = new StringBuilder(" AND so.organization_id = :orgId");
         if (dataPermission == null) {
@@ -204,10 +202,14 @@ public class AiAgentQueryPermissionService {
     }
 
     private PermissionSql externalContractPermission(AiAgentContext context) {
-        DeptDataPermissionDTO dataPermission = context.getContractDataPermission() == null
-                ? context.getDataPermission()
-                : context.getContractDataPermission();
-        if (dataPermission == null || Boolean.TRUE.equals(dataPermission.getAll())) {
+        if (context == null) {
+            return new PermissionSql("", " AND 1 = 0");
+        }
+        DeptDataPermissionDTO dataPermission = context.getContractDataPermission();
+        if (dataPermission == null) {
+            return new PermissionSql("", " AND 1 = 0");
+        }
+        if (Boolean.TRUE.equals(dataPermission.getAll())) {
             return new PermissionSql("", "");
         }
         List<String> managerNames = aiAgentInternalMapper.findUserNamesByDataPermission(
@@ -215,7 +217,7 @@ public class AiAgentQueryPermissionService {
         List<String> clauses = new ArrayList<>();
         for (int index = 0; index < managerNames.size(); index++) {
             if (StringUtils.isNotBlank(managerNames.get(index))) {
-                clauses.add("ci.manager LIKE :allowedManagerName" + index);
+                clauses.add("TRIM(ci.manager) = :allowedManagerName" + index);
             }
         }
         if (clauses.isEmpty()) {
@@ -229,12 +231,8 @@ public class AiAgentQueryPermissionService {
         params.put("orgId", context.getOrganizationId());
         params.put("userId", context.getUserId());
         DeptDataPermissionDTO dataPermission = switch (entity.permissionKind()) {
-            case CONTRACT, EXTERNAL_CONTRACT -> context.getContractDataPermission() == null
-                    ? context.getDataPermission()
-                    : context.getContractDataPermission();
-            case ORDER -> context.getOrderDataPermission() == null
-                    ? context.getDataPermission()
-                    : context.getOrderDataPermission();
+            case CONTRACT, EXTERNAL_CONTRACT -> context.getContractDataPermission();
+            case ORDER -> context.getOrderDataPermission();
             default -> context.getDataPermission();
         };
         if (dataPermission != null && dataPermission.getDeptIds() != null && !dataPermission.getDeptIds().isEmpty()) {
@@ -248,9 +246,7 @@ public class AiAgentQueryPermissionService {
         if (entity.permissionKind() != AiAgentSemanticSchemaService.PermissionKind.EXTERNAL_CONTRACT) {
             return;
         }
-        DeptDataPermissionDTO dataPermission = context.getContractDataPermission() == null
-                ? context.getDataPermission()
-                : context.getContractDataPermission();
+        DeptDataPermissionDTO dataPermission = context.getContractDataPermission();
         if (dataPermission == null || Boolean.TRUE.equals(dataPermission.getAll())) {
             return;
         }
@@ -259,7 +255,7 @@ public class AiAgentQueryPermissionService {
         for (int index = 0; index < managerNames.size(); index++) {
             String managerName = managerNames.get(index);
             if (StringUtils.isNotBlank(managerName)) {
-                params.put("allowedManagerName" + index, "%" + managerName.trim() + "%");
+                params.put("allowedManagerName" + index, managerName.trim());
             }
         }
     }

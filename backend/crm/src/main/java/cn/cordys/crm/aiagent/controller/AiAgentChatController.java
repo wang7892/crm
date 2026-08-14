@@ -11,17 +11,22 @@ import cn.cordys.crm.aiagent.dto.response.AiAgentSessionResponse;
 import cn.cordys.crm.aiagent.service.AiAgentAudioTranscriptionService;
 import cn.cordys.crm.aiagent.service.AiAgentAuditService;
 import cn.cordys.crm.aiagent.service.AiAgentChatService;
+import cn.cordys.crm.aiagent.service.AiAgentRequestCancellationService;
+import cn.cordys.crm.aiagent.service.AiAgentRequestCancelledException;
+import cn.cordys.security.SessionUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
+import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 @Tag(name = "自研智能问答Agent")
 @Validated
@@ -35,12 +40,29 @@ public class AiAgentChatController {
     private AiAgentAuditService aiAgentAuditService;
     @Resource
     private AiAgentAudioTranscriptionService aiAgentAudioTranscriptionService;
+    @Resource
+    private AiAgentRequestCancellationService aiAgentRequestCancellationService;
 
     @PostMapping("/chat")
     @RequiresPermissions(PermissionConstants.AGENT_READ)
     @Operation(summary = "智能问答")
     public AiAgentChatResponse chat(@Valid @RequestBody AiAgentChatRequest request) {
-        return aiAgentChatService.chat(request);
+        return withCancellation(request, () -> aiAgentChatService.chat(request));
+    }
+
+    @PostMapping(value = "/chat/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @RequiresPermissions(PermissionConstants.AGENT_READ)
+    @Operation(summary = "带附件的智能问答")
+    public AiAgentChatResponse chatWithAttachments(@Valid @RequestPart("request") AiAgentChatRequest request,
+                                                   @RequestPart("files") List<MultipartFile> files) {
+        return withCancellation(request, () -> aiAgentChatService.chatWithAttachments(request, files));
+    }
+
+    @PostMapping("/chat/cancel/{requestId}")
+    @RequiresPermissions(PermissionConstants.AGENT_READ)
+    @Operation(summary = "停止当前智能问答")
+    public void cancelChat(@PathVariable String requestId) {
+        aiAgentRequestCancellationService.cancel(requestId, SessionUtils.getUserId());
     }
 
     @PostMapping("/audio/transcriptions")
@@ -88,6 +110,19 @@ public class AiAgentChatController {
     @Operation(summary = "删除智能问答会话")
     public void deleteSession(@PathVariable String sessionId) {
         aiAgentAuditService.deleteCurrentUserSession(sessionId);
+    }
+
+    private AiAgentChatResponse withCancellation(AiAgentChatRequest request,
+                                                 Supplier<AiAgentChatResponse> action) {
+        String requestId = request.getRequestId();
+        aiAgentRequestCancellationService.register(requestId, SessionUtils.getUserId());
+        try {
+            return action.get();
+        } catch (AiAgentRequestCancelledException ignored) {
+            return null;
+        } finally {
+            aiAgentRequestCancellationService.unregister(requestId);
+        }
     }
 
     private String resolveAudioLanguage(String language, String request) {

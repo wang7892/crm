@@ -245,4 +245,12 @@ public class PermissionConstants {
     public static final String ORDER_DELETE = "ORDER:DELETE";
     public static final String ORDER_DOWNLOAD = "ORDER:DOWNLOAD";
     /*------ end: ORDER_ROLE ------*/
+
+    /*------ start: TASK_ROLE ------*/
+    public static final String TASK_READ = "TASK:READ";
+    public static final String TASK_ADD = "TASK:ADD";
+    public static final String TASK_UPDATE = "TASK:UPDATE";
+    public static final String TASK_DELETE = "TASK:DELETE";
+    public static final String TASK_EXECUTE = "TASK:EXECUTE";
+    /*------ end: TASK_ROLE ------*/
 }

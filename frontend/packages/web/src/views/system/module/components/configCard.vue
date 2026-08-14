@@ -457,6 +457,13 @@
         },
       ],
     },
+    {
+      label: t('menu.task'),
+      key: ModuleConfigEnum.TASK,
+      icon: 'iconicon_data_plan',
+      groupList: [],
+      enable: true,
+    },
     // TODO 不上 xxw
     // {
     //   label: t('module.dataManagement'),

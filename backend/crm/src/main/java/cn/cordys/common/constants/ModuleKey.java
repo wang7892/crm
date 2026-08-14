@@ -28,7 +28,11 @@ public enum ModuleKey {
     /**
      * 系统设置
      */
-    SETTING("setting");
+    SETTING("setting"),
+    /**
+     * 任务列表
+     */
+    TASK("task");
 
     private final String key;
 

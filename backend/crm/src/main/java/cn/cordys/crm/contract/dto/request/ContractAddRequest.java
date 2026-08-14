@@ -32,6 +32,14 @@ public class ContractAddRequest {
     @Schema(description = "累计金额")
     private String amount;
 
+    @Schema(description = "订单状态")
+    @Size(max = 255)
+    private String orderStatus;
+
+    @Schema(description = "币种")
+    @Size(max = 20)
+    private String currency;
+
     @Schema(description = "合同开始时间", requiredMode = Schema.RequiredMode.REQUIRED)
     @NotNull
     private Long startTime;

@@ -15,6 +15,7 @@
 <script setup lang="ts">
   import { useRouter } from 'vue-router';
   import { dateEnUS, dateZhCN, enUS, NConfigProvider, NDialogProvider, NMessageProvider, zhCN } from 'naive-ui';
+  import axios from 'axios';
 
   import { CompanyTypeEnum } from '@lib/shared/enums/commonEnum';
   import useLocale from '@lib/shared/locale/useLocale';
@@ -169,6 +170,10 @@
     };
 
     window.onunhandledrejection = (event: PromiseRejectionEvent) => {
+      if (axios.isCancel(event.reason)) {
+        event.preventDefault();
+        return;
+      }
       if (
         event &&
         event.reason &&

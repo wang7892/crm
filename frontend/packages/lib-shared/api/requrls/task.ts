@@ -1,0 +1,16 @@
+export const GetTaskPageUrl = '/task/page';
+export const GetTaskUrl = '/task/get';
+export const AddTaskUrl = '/task/add';
+export const UpdateTaskUrl = '/task/update';
+export const ReassignTaskUrl = '/task/reassign';
+export const DeleteTaskUrl = '/task/delete';
+export const StartTaskUrl = '/task/start';
+export const SaveTaskReportUrl = '/task/report/save';
+export const SubmitTaskReportUrl = '/task/report/submit';
+export const RegenerateTaskAiReplyUrl = '/task/ai-reply/regenerate';
+export const GetTaskAssigneeOptionsUrl = '/task/assignee/options';
+export const GetTaskCustomerOptionsUrl = '/task/customer/options';
+export const UploadTaskAttachmentUrl = '/task/attachment/upload';
+export const DeleteTaskAttachmentUrl = '/task/attachment/delete';
+export const DownloadTaskAttachmentUrl = '/task/attachment/download';
+export const PreviewTaskAttachmentUrl = '/task/attachment/preview';

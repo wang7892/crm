@@ -654,6 +654,35 @@
     ]
   },
   {
+    "id": "TASK_MANAGEMENT",
+    "name": "permission.task_management.name",
+    "license": false,
+    "children": [
+      {
+        "id": "TASK",
+        "name": "permission.task.name",
+        "permissions": [
+          {
+            "id": "TASK:READ"
+          },
+          {
+            "id": "TASK:ADD"
+          },
+          {
+            "id": "TASK:UPDATE"
+          },
+          {
+            "id": "TASK:DELETE"
+          },
+          {
+            "id": "TASK:EXECUTE",
+            "name": "permission.task.execute"
+          }
+        ]
+      }
+    ]
+  },
+  {
     "id": "ORDER_MANAGEMENT",
     "name": "permission.order_management.name",
     "license": false,

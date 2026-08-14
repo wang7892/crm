@@ -14,6 +14,7 @@ import useLoginApi from '@lib/shared/api/modules/system/login';
 import useMessageApi from '@lib/shared/api/modules/system/message';
 import useModuleApi from '@lib/shared/api/modules/system/module';
 import useOrgApi from '@lib/shared/api/modules/system/org';
+import useTaskApi from '@lib/shared/api/modules/task';
 
 import checkStatus from '../http/checkStatus';
 
@@ -35,6 +36,20 @@ const licenseApi = useLicenseApi(CDR);
 const followApi = useFollowApi(CDR);
 const contractApi = useContractApi(CDR);
 const orderApi = useOrderApi(CDR);
+const taskApi = useTaskApi(CDR);
+
+export const {
+  getTaskPage,
+  getTask,
+  addTask,
+  getTaskAssigneeOptions,
+  getTaskCustomerOptions,
+  saveTaskReport,
+  submitTaskReport,
+  uploadTaskAttachments,
+  deleteTaskAttachment,
+  downloadTaskAttachment,
+} = taskApi;
 
 export const {
   getFollowPlanDetail,

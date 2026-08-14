@@ -279,9 +279,11 @@ public class CustomerService {
                 String followerName = baseService.getAndCheckOptionName(userNameMap.get(customerListResponse.getFollower()));
                 customerListResponse.setFollowerName(followerName);
             }
-            String createUserName = baseService.getAndCheckOptionName(userNameMap.get(customerListResponse.getCreateUser()));
+            String createUserName = StringUtils.defaultIfBlank(
+                    userNameMap.get(customerListResponse.getCreateUser()), customerListResponse.getCreateUser());
             customerListResponse.setCreateUserName(createUserName);
-            String updateUserName = baseService.getAndCheckOptionName(userNameMap.get(customerListResponse.getUpdateUser()));
+            String updateUserName = StringUtils.defaultIfBlank(
+                    userNameMap.get(customerListResponse.getUpdateUser()), customerListResponse.getUpdateUser());
             customerListResponse.setUpdateUserName(updateUserName);
             customerListResponse.setOwnerName(userNameMap.get(customerListResponse.getOwner()));
             if (StringUtils.isNotBlank(customerListResponse.getReasonId())) {
@@ -325,6 +327,15 @@ public class CustomerService {
         }
         CustomerGetResponse customerGetResponse = BeanUtils.copyBean(new CustomerGetResponse(), customer);
         customerGetResponse = baseService.setCreateUpdateOwnerUserName(customerGetResponse);
+        List<String> auditUserIds = Stream.of(customer.getCreateUser(), customer.getUpdateUser())
+                .filter(StringUtils::isNotBlank).distinct().toList();
+        if (!auditUserIds.isEmpty()) {
+            Map<String, String> auditUserNameMap = baseService.getUserNameMap(auditUserIds);
+            customerGetResponse.setCreateUserName(StringUtils.defaultIfBlank(
+                    auditUserNameMap.get(customer.getCreateUser()), customer.getCreateUser()));
+            customerGetResponse.setUpdateUserName(StringUtils.defaultIfBlank(
+                    auditUserNameMap.get(customer.getUpdateUser()), customer.getUpdateUser()));
+        }
         // 获取模块字段
         List<BaseModuleFieldValue> customerFields = filterPromotedModuleFields(customerFieldService.getModuleFieldValuesByResourceId(id));
         ModuleFormConfigDTO customerFormConfig = getFormConfig(customer.getOrganizationId());

@@ -41,9 +41,11 @@
         FROM ai_knowledge_chunk c
         INNER JOIN ai_knowledge_document d ON d.id = c.document_id
         WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
           AND c.enabled = 1
           AND d.enabled = 1
           AND d.parse_status = 'PARSED'
+          AND (d.category IS NULL OR d.category != 'SEMANTIC_RULE')
           AND (
               c.content LIKE CONCAT('%', #{question}, '%')
               <foreach collection="keywords" item="keyword">
@@ -55,6 +57,280 @@
         ORDER BY c.update_time DESC
         LIMIT #{limit}
     </select>
+
+    <select id="getParseJobForUpdate" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob">
+        SELECT *
+        FROM ai_knowledge_parse_job
+        WHERE id = #{jobId}
+        FOR UPDATE
+    </select>
+
+    <select id="getLatestParseJobForUpdate" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob">
+        SELECT *
+        FROM ai_knowledge_parse_job
+        WHERE document_id = #{documentId}
+          AND organization_id = #{orgId}
+        ORDER BY create_time DESC, id DESC
+        LIMIT 1
+        FOR UPDATE
+    </select>
+
+    <select id="getKnowledgeDocumentForUpdate" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocument">
+        SELECT *
+        FROM ai_knowledge_document
+        WHERE id = #{documentId}
+          AND organization_id = #{orgId}
+        FOR UPDATE
+    </select>
+
+    <update id="claimParseJob">
+        UPDATE ai_knowledge_parse_job
+        SET status = 'RUNNING',
+            message = '文档解析中',
+            error_stack = NULL,
+            start_time = #{now},
+            finish_time = NULL,
+            update_time = #{now}
+        WHERE id = #{jobId}
+          AND status = 'PENDING'
+    </update>
+
+    <update id="updateParseJobState">
+        UPDATE ai_knowledge_parse_job
+        SET status = #{status},
+            step = #{step},
+            message = #{message},
+            error_stack = #{errorStack},
+            start_time = #{startTime},
+            finish_time = #{finishTime},
+            update_time = #{updateTime}
+        WHERE id = #{jobId}
+          AND organization_id = #{orgId}
+    </update>
+
+    <update id="updateKnowledgeDocumentParseState">
+        UPDATE ai_knowledge_document
+        SET parse_status = #{parseStatus},
+            parse_error = #{parseError},
+        <if test="chunkCount != null">
+            chunk_count = #{chunkCount},
+        </if>
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE id = #{documentId}
+          AND organization_id = #{orgId}
+    </update>
+
+    <select id="listPendingParseJobIds" resultType="string">
+        SELECT id
+        FROM ai_knowledge_parse_job
+        WHERE status = 'PENDING'
+        ORDER BY create_time ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listStaleRunningParseJobIds" resultType="string">
+        SELECT id
+        FROM ai_knowledge_parse_job
+        WHERE status = 'RUNNING'
+          AND COALESCE(start_time, update_time, create_time) &lt;= #{staleBefore}
+        ORDER BY COALESCE(start_time, update_time, create_time) ASC, id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listSemanticRuleChunks" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.id = #{request.documentId}
+          AND d.category = 'SEMANTIC_RULE'
+        <if test="request.keyword != null and request.keyword != ''">
+            AND (
+                c.title LIKE CONCAT('%', #{request.keyword}, '%')
+                OR c.content LIKE CONCAT('%', #{request.keyword}, '%')
+            )
+        </if>
+        <if test="request.reviewStatus != null and request.reviewStatus != ''">
+            AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.review.status')) = #{request.reviewStatus}
+        </if>
+        ORDER BY c.chunk_index ASC
+    </select>
+
+    <select id="getSemanticRuleChunk" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.id = #{chunkId}
+          AND c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+        LIMIT 1
+    </select>
+
+    <select id="getSemanticDocumentForUpdate" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocument">
+        SELECT *
+        FROM ai_knowledge_document
+        WHERE id = #{documentId}
+          AND organization_id = #{orgId}
+          AND category = 'SEMANTIC_RULE'
+        FOR UPDATE
+    </select>
+
+    <update id="updateSemanticRuleChunkOptimistic">
+        UPDATE ai_knowledge_chunk
+        SET title = #{title},
+            content = #{content},
+            content_hash = #{contentHash},
+            enabled = #{enabled},
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE id = #{chunkId}
+          AND organization_id = #{orgId}
+          AND update_time = #{expectedUpdateTime}
+    </update>
+
+    <update id="updateSemanticRuleChunk">
+        UPDATE ai_knowledge_chunk
+        SET title = #{title},
+            content = #{content},
+            content_hash = #{contentHash},
+            enabled = #{enabled},
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE id = #{chunkId}
+          AND organization_id = #{orgId}
+    </update>
+
+    <update id="updateSemanticRuleChunkEnabled">
+        UPDATE ai_knowledge_chunk
+        SET enabled = #{enabled},
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE id = #{chunkId}
+          AND organization_id = #{orgId}
+    </update>
+
+    <update id="updateSemanticDocumentEnabled">
+        UPDATE ai_knowledge_document
+        SET enabled = #{enabled},
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE id = #{documentId}
+          AND organization_id = #{orgId}
+          AND category = 'SEMANTIC_RULE'
+    </update>
+
+    <update id="updateSemanticChunksEnabledByDocument">
+        UPDATE ai_knowledge_chunk
+        SET enabled = #{enabled},
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE document_id = #{documentId}
+          AND organization_id = #{orgId}
+    </update>
+
+    <select id="listSemanticRuleChunksByDocument" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.document_id = #{documentId}
+          AND c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+        ORDER BY c.chunk_index ASC
+    </select>
+
+    <select id="listPublishedSemanticRuleChunks" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND d.parse_status = 'PARSED'
+          AND d.enabled = 1
+          AND c.enabled = 1
+        ORDER BY c.update_time DESC, c.chunk_index ASC
+    </select>
+
+    <select id="revalidatePublishedSemanticRuleChunks" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND d.parse_status = 'PARSED'
+          AND d.enabled = 1
+          AND c.enabled = 1
+          AND c.id IN
+          <foreach collection="chunkIds" item="chunkId" open="(" separator="," close=")">
+              #{chunkId}
+          </foreach>
+    </select>
+
+    <select id="listSemanticRuleVersions" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.ruleId')) = #{ruleId}
+        ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.version')) AS UNSIGNED) DESC,
+                 c.update_time DESC
+    </select>
+
+    <select id="getSemanticRuleVersion" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.ruleId')) = #{ruleId}
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.version')) AS UNSIGNED) = #{version}
+        LIMIT 1
+    </select>
+
+    <select id="listActiveSemanticRuleVersions" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeChunk">
+        SELECT c.*
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND d.parse_status = 'PARSED'
+          AND d.enabled = 1
+          AND c.enabled = 1
+          AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.ruleId')) = #{ruleId}
+        FOR UPDATE
+    </select>
+
+    <select id="maxSemanticRuleVersion" resultType="int">
+        SELECT COALESCE(MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.version')) AS UNSIGNED)), 0)
+        FROM ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.ruleId')) = #{ruleId}
+    </select>
+
+    <update id="disableOtherSemanticRuleVersions">
+        UPDATE ai_knowledge_chunk c
+        INNER JOIN ai_knowledge_document d ON d.id = c.document_id
+        SET c.enabled = 0,
+            c.update_user = #{updateUser},
+            c.update_time = #{updateTime}
+        WHERE c.organization_id = #{orgId}
+          AND d.organization_id = #{orgId}
+          AND d.category = 'SEMANTIC_RULE'
+          AND c.id != #{exceptChunkId}
+          AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.ruleId')) = #{ruleId}
+    </update>
 
     <delete id="deleteChunksByDocumentId">
         DELETE FROM ai_knowledge_chunk

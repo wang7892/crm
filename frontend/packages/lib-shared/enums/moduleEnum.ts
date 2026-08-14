@@ -35,6 +35,9 @@ export enum ModuleConfigEnum {
   /** 订单 */
   ORDER = 'order',
 
+  /** 任务列表 */
+  TASK = 'task',
+
   /** 招标 */
   TENDER = 'tender',
 }

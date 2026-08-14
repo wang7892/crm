@@ -47,7 +47,6 @@ public class AiAgentQueryExecutor {
             result.setDurationMs(System.currentTimeMillis() - start);
             return result;
         }
-
         NamedParameterJdbcTemplate jdbcTemplate = resolveJdbcTemplate(builtQuery.dataSourceKind());
         if (jdbcTemplate == null) {
             result.getWarnings().add(builtQuery.dataSourceKind() == AiAgentSemanticSchemaService.DataSourceKind.EXTERNAL_CONTRACT

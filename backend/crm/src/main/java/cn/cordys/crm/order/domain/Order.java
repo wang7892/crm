@@ -59,6 +59,9 @@ public class Order extends BaseModel {
     @Schema(description = "下单时间")
     private Long orderTime;
 
+    @Schema(description = "仓库实际发货日期")
+    private Long warehouseActualShipDate;
+
     @Schema(description = "数量")
     private BigDecimal quantity;
 

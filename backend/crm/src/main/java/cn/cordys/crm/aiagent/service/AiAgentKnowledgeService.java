@@ -15,6 +15,11 @@ import cn.cordys.crm.aiagent.dto.response.AiKnowledgeChunkResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchMatchResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
+import cn.cordys.crm.aiagent.dto.response.AiSemanticRuleMatchResponse;
+import cn.cordys.crm.aiagent.dto.response.AiSemanticRuleStats;
+import cn.cordys.crm.aiagent.dto.semantic.AiAgentSemanticRule;
+import cn.cordys.crm.aiagent.dto.semantic.AiAgentSemanticRuleContext;
+import cn.cordys.crm.aiagent.dto.semantic.AiAgentSemanticRuleMatch;
 import cn.cordys.crm.aiagent.mapper.AiAgentKnowledgeMapper;
 import cn.cordys.mybatis.BaseMapper;
 import com.github.pagehelper.Page;
@@ -24,22 +29,18 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -47,13 +48,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 @Service
 @Transactional(rollbackFor = Exception.class)
@@ -62,19 +63,39 @@ public class AiAgentKnowledgeService {
     private static final long MAX_FILE_SIZE = 50L * 1024 * 1024;
     private static final int CHUNK_SIZE = 800;
     private static final int CHUNK_OVERLAP = 150;
+    private static final int MAX_SEARCH_KEYWORDS = 64;
+    private static final String DEFAULT_CATEGORY = "GENERAL";
     private static final Pattern WORD_SPLIT_PATTERN = Pattern.compile("[\\s，。？！；：、,.?;:()（）【】\\[\\]{}<>《》\"'“”‘’]+");
-    private static final List<String> ALLOWED_TYPES = List.of("pdf", "docx", "txt", "md");
+    private static final Pattern ASCII_TERM_PATTERN = Pattern.compile("[A-Za-z0-9_\\-]{2,}");
+    private static final Pattern CHINESE_TERM_PATTERN = Pattern.compile("[\\u4e00-\\u9fff]{2,}");
+    private static final Set<String> SEARCH_STOP_KEYWORDS = Set.of(
+            "什么", "哪些", "怎么", "怎样", "是否", "可以", "这个", "那个",
+            "现在", "最近", "一下", "进行", "回答", "问题", "多少", "有没有", "为什么");
+    private static final List<String> ALLOWED_TYPES = List.of(
+            "jpg", "jpeg", "png", "webp", "pdf", "docx", "xls", "xlsx", "txt", "md");
 
     @Resource
     private BaseMapper<AiKnowledgeDocument> documentMapper;
-    @Resource
-    private BaseMapper<AiKnowledgeChunk> chunkMapper;
     @Resource
     private BaseMapper<AiKnowledgeParseJob> parseJobMapper;
     @Resource
     private BaseMapper<AiKnowledgeQueryLog> queryLogMapper;
     @Resource
     private AiAgentKnowledgeMapper aiAgentKnowledgeMapper;
+    @Resource
+    private AiAgentSemanticRuleExtractionService semanticRuleExtractionService;
+    @Resource
+    private AiAgentSemanticRuleValidationService semanticRuleValidationService;
+    @Resource
+    private AiAgentSemanticRuleService semanticRuleService;
+    @Resource
+    private AiAgentSemanticRuleRetrievalService semanticRuleRetrievalService;
+    @Resource
+    private AiAgentSemanticContextBuilder semanticContextBuilder;
+    @Resource
+    private AiAgentFileContentService aiAgentFileContentService;
+    @Resource
+    private ApplicationEventPublisher eventPublisher;
 
     public Pager<List<AiKnowledgeDocumentResponse>> pageDocuments(AiKnowledgeDocumentPageRequest request, String orgId) {
         Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
@@ -86,7 +107,6 @@ public class AiAgentKnowledgeService {
     }
 
     public AiKnowledgeDocumentResponse uploadDocument(MultipartFile file,
-                                                      String category,
                                                       String remark,
                                                       String orgId,
                                                       String userId) {
@@ -100,7 +120,7 @@ public class AiAgentKnowledgeService {
         String originalName = StringUtils.defaultString(file.getOriginalFilename(), "knowledge-file");
         String fileType = normalizeFileType(FilenameUtils.getExtension(originalName));
         if (!ALLOWED_TYPES.contains(fileType)) {
-            throw new GenericException("暂只支持 pdf、docx、txt、md 文件");
+            throw new GenericException("暂只支持图片、pdf、docx、xls、xlsx、txt、md 文件");
         }
 
         long now = System.currentTimeMillis();
@@ -122,7 +142,7 @@ public class AiAgentKnowledgeService {
         document.setFileType(fileType);
         document.setFileSize(file.getSize());
         document.setStoragePath(storagePath.toString());
-        document.setCategory(StringUtils.trimToNull(category));
+        document.setCategory(DEFAULT_CATEGORY);
         document.setParseStatus("UPLOADED");
         document.setParseError(null);
         document.setChunkCount(0);
@@ -134,7 +154,7 @@ public class AiAgentKnowledgeService {
         document.setUpdateTime(now);
         documentMapper.insert(document);
 
-        parseDocument(documentId, orgId, userId);
+        enqueueParse(document, userId);
         return getDocument(documentId, orgId);
     }
 
@@ -153,12 +173,23 @@ public class AiAgentKnowledgeService {
     }
 
     public void reparseDocument(String id, String orgId, String userId) {
-        requireDocument(id, orgId);
-        parseDocument(id, orgId, userId);
+        AiKnowledgeDocument document = aiAgentKnowledgeMapper.getKnowledgeDocumentForUpdate(id, orgId);
+        if (document == null) {
+            throw new GenericException("文档不存在或无权限");
+        }
+        enqueueParse(document, userId);
     }
 
     public void setEnabled(String id, String orgId, String userId, boolean enabled) {
         AiKnowledgeDocument document = requireDocument(id, orgId);
+        if (semanticRuleService.isSemanticDocument(document)) {
+            if (enabled) {
+                semanticRuleService.publish(id, orgId, userId);
+            } else {
+                semanticRuleService.withdraw(id, orgId, userId);
+            }
+            return;
+        }
         document.setEnabled(enabled ? 1 : 0);
         document.setUpdateUser(userId);
         document.setUpdateTime(System.currentTimeMillis());
@@ -186,6 +217,27 @@ public class AiAgentKnowledgeService {
     }
 
     public AiKnowledgeSearchTestResponse searchTest(String question, int topK, String orgId) {
+        return searchDocument(question, topK, orgId);
+    }
+
+    public AiKnowledgeSearchTestResponse searchTest(String question, int topK, String mode, String orgId) {
+        String retrievalMode = StringUtils.upperCase(StringUtils.defaultIfBlank(mode, "AUTO"), Locale.ROOT);
+        if (StringUtils.equals(retrievalMode, "DOCUMENT")) {
+            return searchDocument(question, topK, orgId);
+        }
+        AiAgentSemanticRuleRetrievalService.RetrievalResult semanticResult =
+                semanticRuleRetrievalService.retrieve(StringUtils.trimToEmpty(question), orgId);
+        if (StringUtils.equals(retrievalMode, "SEMANTIC_RULE")
+                || semanticResult.conflict()
+                || !semanticResult.matches().isEmpty()) {
+            return semanticSearchResponse(question, semanticResult, orgId);
+        }
+        AiKnowledgeSearchTestResponse response = searchDocument(question, topK, orgId);
+        response.setFallbackReason(semanticResult.fallbackReason());
+        return response;
+    }
+
+    private AiKnowledgeSearchTestResponse searchDocument(String question, int topK, String orgId) {
         String normalizedQuestion = StringUtils.trimToEmpty(question);
         List<String> keywords = extractKeywords(normalizedQuestion);
         List<AiKnowledgeChunk> chunks = aiAgentKnowledgeMapper.searchChunks(
@@ -206,70 +258,91 @@ public class AiAgentKnowledgeService {
         response.setRewriteQuestion(buildRewriteQuestion(normalizedQuestion, matches));
         response.setMatches(matches);
         response.setAnswerPreview(buildAnswerPreview(normalizedQuestion, matches));
+        response.setRetrievalMode("KEYWORD");
+        response.setMatchedRules(List.of());
         saveQueryLog(normalizedQuestion, response, orgId);
         return response;
     }
 
-    private void parseDocument(String id, String orgId, String userId) {
-        AiKnowledgeDocument document = requireDocument(id, orgId);
+    private AiKnowledgeSearchTestResponse semanticSearchResponse(
+            String question,
+            AiAgentSemanticRuleRetrievalService.RetrievalResult result,
+            String orgId) {
+        String normalizedQuestion = StringUtils.trimToEmpty(question);
+        AiKnowledgeSearchTestResponse response = new AiKnowledgeSearchTestResponse();
+        response.setQuestion(normalizedQuestion);
+        response.setRewriteQuestion(normalizedQuestion);
+        response.setMatches(List.of());
+        response.setRetrievalMode("SEMANTIC_EXACT");
+        response.setMatchedRules(result.matches().stream().map(this::toSemanticMatchResponse).toList());
+        AiAgentSemanticRuleContext context = result.conflict()
+                ? new AiAgentSemanticRuleContext()
+                : semanticContextBuilder.build(result.matches());
+        response.setInjectedContextPreview(context);
+        response.setFallbackReason(result.fallbackReason());
+        if (result.conflict()) {
+            response.setAnswerPreview("命中的业务术语规则存在冲突，本次不能注入查询解析器。");
+        } else if (result.matches().isEmpty()) {
+            response.setAnswerPreview("未命中已上传并生效的业务知识规则。");
+        } else {
+            response.setAnswerPreview("已命中 " + result.matches().size() + " 条已生效业务知识规则。");
+        }
+        saveQueryLog(normalizedQuestion, response, orgId);
+        return response;
+    }
+
+    private AiSemanticRuleMatchResponse toSemanticMatchResponse(AiAgentSemanticRuleMatch match) {
+        AiSemanticRuleMatchResponse response = new AiSemanticRuleMatchResponse();
+        response.setRuleId(match.getRuleId());
+        response.setVersion(match.getVersion());
+        response.setTerm(match.getCanonicalTerm());
+        response.setMatchedBy(match.getMatchedBy());
+        response.setScore(match.getScore());
+        response.setTarget(match.getTarget());
+        response.setDocumentId(match.getDocumentId());
+        response.setChunkId(match.getChunkId());
+        response.setPageNo(match.getPageNo());
+        response.setSectionPath(match.getSectionPath());
+        return response;
+    }
+
+    private void enqueueParse(AiKnowledgeDocument document, String userId) {
         long now = System.currentTimeMillis();
+        document.setParseStatus("UPLOADED");
+        document.setParseError(null);
+        document.setUpdateUser(userId);
+        document.setUpdateTime(now);
+        if (aiAgentKnowledgeMapper.updateKnowledgeDocumentParseState(
+                document.getId(), document.getOrganizationId(), "UPLOADED", null,
+                null, userId, now) != 1) {
+            throw new GenericException("更新文档解析状态失败");
+        }
+
         AiKnowledgeParseJob job = new AiKnowledgeParseJob();
         job.setId(IDGenerator.nextStr());
-        job.setOrganizationId(orgId);
-        job.setDocumentId(id);
-        job.setStatus("RUNNING");
-        job.setStep("PARSE");
-        job.setMessage("文档解析中");
-        job.setStartTime(now);
+        job.setOrganizationId(document.getOrganizationId());
+        job.setDocumentId(document.getId());
+        job.setStatus(AiAgentKnowledgeParsePersistenceService.STATUS_PENDING);
+        job.setStep(AiAgentKnowledgeParsePersistenceService.STEP_RETRY_PREFIX + "0");
+        job.setMessage("等待后台解析");
         job.setCreateUser(userId);
         job.setUpdateUser(userId);
         job.setCreateTime(now);
         job.setUpdateTime(now);
-        parseJobMapper.insert(job);
-
-        document.setParseStatus("PARSING");
-        document.setParseError(null);
-        document.setUpdateUser(userId);
-        document.setUpdateTime(now);
-        documentMapper.update(document);
-
-        try {
-            List<ParsedSection> sections = parseFile(document);
-            List<AiKnowledgeChunk> chunks = buildChunks(sections, document, orgId, userId);
-            aiAgentKnowledgeMapper.deleteChunksByDocumentId(id, orgId);
-            for (AiKnowledgeChunk chunk : chunks) {
-                chunkMapper.insert(chunk);
-            }
-
-            document.setParseStatus("PARSED");
-            document.setParseError(null);
-            document.setChunkCount(chunks.size());
-            document.setUpdateUser(userId);
-            document.setUpdateTime(System.currentTimeMillis());
-            documentMapper.update(document);
-
-            job.setStatus("SUCCESS");
-            job.setStep("DONE");
-            job.setMessage("解析成功，共生成 " + chunks.size() + " 个知识片段");
-            job.setFinishTime(System.currentTimeMillis());
-            job.setUpdateTime(System.currentTimeMillis());
-            parseJobMapper.update(job);
-        } catch (Exception e) {
-            document.setParseStatus("FAILED");
-            document.setParseError(StringUtils.left(e.getMessage(), 2000));
-            document.setChunkCount(0);
-            document.setUpdateUser(userId);
-            document.setUpdateTime(System.currentTimeMillis());
-            documentMapper.update(document);
-
-            job.setStatus("FAILED");
-            job.setStep("FAILED");
-            job.setMessage(StringUtils.left(e.getMessage(), 1000));
-            job.setErrorStack(StringUtils.left(stackTrace(e), 6000));
-            job.setFinishTime(System.currentTimeMillis());
-            job.setUpdateTime(System.currentTimeMillis());
-            parseJobMapper.update(job);
+        if (!Objects.equals(parseJobMapper.insert(job), 1)) {
+            throw new GenericException("创建文档解析任务失败");
         }
+        eventPublisher.publishEvent(new AiKnowledgeParseRequestedEvent(job.getId()));
+    }
+
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public PreparedParse prepareParse(AiKnowledgeDocument document, String orgId, String userId) throws IOException {
+        List<ParsedSection> sections = parseFile(document);
+        writeMarkdownFile(document, sections);
+        List<AiKnowledgeChunk> chunks = semanticRuleService.isSemanticDocument(document)
+                ? buildSemanticRuleChunks(sections, document, orgId, userId)
+                : buildChunks(sections, document, orgId, userId);
+        return new PreparedParse(chunks);
     }
 
     private List<ParsedSection> parseFile(AiKnowledgeDocument document) throws IOException {
@@ -277,70 +350,63 @@ public class AiAgentKnowledgeService {
         if (!Files.exists(path)) {
             throw new GenericException("文件不存在");
         }
-        return switch (document.getFileType()) {
-            case "pdf" -> parsePdf(path);
-            case "docx" -> parseDocx(path);
-            case "txt", "md" -> parseText(path, document.getName());
-            default -> throw new GenericException("暂不支持该文件类型：" + document.getFileType());
-        };
+        return aiAgentFileContentService
+                .parse(path, document.getFileType(), document.getName(), null)
+                .stream()
+                .map(section -> new ParsedSection(
+                        section.title(), section.sectionPath(), section.pageNo(), section.content()))
+                .toList();
     }
 
-    private List<ParsedSection> parsePdf(Path path) throws IOException {
-        List<ParsedSection> sections = new ArrayList<>();
-        try (PDDocument pdf = Loader.loadPDF(path.toFile())) {
-            PDFTextStripper stripper = new PDFTextStripper();
-            for (int i = 1; i <= pdf.getNumberOfPages(); i++) {
-                stripper.setStartPage(i);
-                stripper.setEndPage(i);
-                String text = cleanText(stripper.getText(pdf));
-                if (StringUtils.isNotBlank(text)) {
-                    sections.add(new ParsedSection("第 " + i + " 页", null, i, text));
-                }
+    void writeMarkdownFile(AiKnowledgeDocument document, List<ParsedSection> sections) throws IOException {
+        if ("md".equals(document.getFileType())) {
+            return;
+        }
+        Path documentDir = Path.of(document.getStoragePath()).getParent();
+        if (documentDir == null) {
+            throw new GenericException("文档存储路径无效");
+        }
+        Files.writeString(
+                documentDir.resolve("normalized.md"),
+                renderMarkdown(document, sections),
+                StandardCharsets.UTF_8
+        );
+    }
+
+    String renderMarkdown(AiKnowledgeDocument document, List<ParsedSection> sections) {
+        String title = StringUtils.defaultIfBlank(
+                FilenameUtils.getBaseName(document.getOriginalName()),
+                "知识文档"
+        );
+        StringBuilder markdown = new StringBuilder()
+                .append("# ")
+                .append(cleanMarkdownHeading(title))
+                .append("\n\n");
+
+        for (ParsedSection section : sections) {
+            String heading = null;
+            if (section.pageNo() != null) {
+                heading = "第 " + section.pageNo() + " 页";
+            } else if (StringUtils.isNotBlank(section.sectionPath())) {
+                heading = section.sectionPath();
+            } else if (sections.size() > 1 && StringUtils.isNotBlank(section.title())) {
+                heading = section.title();
             }
-        }
-        if (sections.isEmpty()) {
-            throw new GenericException("PDF 未解析出文本，扫描件 PDF 需要 OCR 后续支持");
-        }
-        return sections;
-    }
-
-    private List<ParsedSection> parseDocx(Path path) throws IOException {
-        String xml = null;
-        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(Files.readAllBytes(path)))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                if ("word/document.xml".equals(entry.getName())) {
-                    xml = new String(zip.readAllBytes(), StandardCharsets.UTF_8);
-                    break;
-                }
+            if (StringUtils.isNotBlank(heading)) {
+                markdown.append("## ")
+                        .append(cleanMarkdownHeading(heading))
+                        .append("\n\n");
             }
+            markdown.append(section.content().trim()).append("\n\n");
         }
-        if (StringUtils.isBlank(xml)) {
-            throw new GenericException("Word 文档内容为空或格式不支持");
-        }
-        String text = xml
-                .replaceAll("</w:p>", "\n")
-                .replaceAll("</w:tr>", "\n")
-                .replaceAll("</w:tc>", " ")
-                .replaceAll("<[^>]+>", "")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&amp;", "&")
-                .replace("&quot;", "\"")
-                .replace("&apos;", "'");
-        text = cleanText(text);
-        if (StringUtils.isBlank(text)) {
-            throw new GenericException("Word 文档未解析出文本");
-        }
-        return List.of(new ParsedSection("Word 文档", "正文", null, text));
+        return markdown.toString();
     }
 
-    private List<ParsedSection> parseText(Path path, String title) throws IOException {
-        String text = cleanText(Files.readString(path, StandardCharsets.UTF_8));
-        if (StringUtils.isBlank(text)) {
-            throw new GenericException("文档内容为空");
-        }
-        return List.of(new ParsedSection(title, null, null, text));
+    private String cleanMarkdownHeading(String value) {
+        return StringUtils.defaultString(value)
+                .replaceAll("[\\r\\n]+", " ")
+                .replaceAll("^#+\\s*", "")
+                .trim();
     }
 
     private List<AiKnowledgeChunk> buildChunks(List<ParsedSection> sections,
@@ -375,6 +441,55 @@ public class AiAgentKnowledgeService {
         }
         if (chunks.isEmpty()) {
             throw new GenericException("文档未生成有效知识片段");
+        }
+        return chunks;
+    }
+
+    private List<AiKnowledgeChunk> buildSemanticRuleChunks(List<ParsedSection> sections,
+                                                           AiKnowledgeDocument document,
+                                                           String orgId,
+                                                           String userId) throws IOException {
+        String normalizedMarkdown = "md".equals(document.getFileType())
+                ? Files.readString(Path.of(document.getStoragePath()), StandardCharsets.UTF_8)
+                : renderMarkdown(document, sections);
+        List<AiAgentSemanticRuleExtractionService.SourceFragment> fragments = sections.stream()
+                .map(section -> new AiAgentSemanticRuleExtractionService.SourceFragment(
+                        section.pageNo(),
+                        StringUtils.defaultIfBlank(section.sectionPath(), section.title()),
+                        section.content()))
+                .toList();
+        List<AiAgentSemanticRule> rules = semanticRuleExtractionService.extract(
+                document, orgId, normalizedMarkdown, fragments);
+        List<AiKnowledgeChunk> chunks = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        int index = 0;
+        for (AiAgentSemanticRule rule : rules) {
+            if (rule.getValidationErrors() != null && !rule.getValidationErrors().isEmpty()) {
+                continue;
+            }
+            String content = semanticRuleValidationService.serialize(rule);
+            AiKnowledgeChunk chunk = new AiKnowledgeChunk();
+            chunk.setId(IDGenerator.nextStr());
+            chunk.setOrganizationId(orgId);
+            chunk.setDocumentId(document.getId());
+            chunk.setChunkIndex(index++);
+            chunk.setTitle(rule.getCanonicalTerm());
+            chunk.setContent(content);
+            chunk.setContentHash(semanticRuleValidationService.semanticPayloadHash(rule));
+            chunk.setPageNo(rule.getSource() == null ? null : rule.getSource().getPageNo());
+            chunk.setSectionPath(rule.getSource() == null ? null : rule.getSource().getSectionPath());
+            chunk.setTokenCount(Math.max(1, content.length() / 2));
+            chunk.setEmbeddingStatus("NONE");
+            chunk.setEmbeddingId(null);
+            chunk.setEnabled(0);
+            chunk.setCreateUser(userId);
+            chunk.setUpdateUser(userId);
+            chunk.setCreateTime(now);
+            chunk.setUpdateTime(now);
+            chunks.add(chunk);
+        }
+        if (chunks.isEmpty()) {
+            throw new GenericException("语义规则文档未生成候选规则");
         }
         return chunks;
     }
@@ -450,6 +565,11 @@ public class AiAgentKnowledgeService {
         response.setChunkCount(document.getChunkCount());
         response.setEnabled(document.getEnabled());
         response.setRemark(document.getRemark());
+        if (semanticRuleService.isSemanticDocument(document)) {
+            AiSemanticRuleStats stats = semanticRuleService.ruleStats(document.getId(), document.getOrganizationId());
+            response.setRuleStats(stats);
+            response.setSemanticStatus(semanticRuleService.semanticStatus(document, stats));
+        }
         response.setCreateUser(document.getCreateUser());
         response.setUpdateUser(document.getUpdateUser());
         response.setCreateTime(document.getCreateTime());
@@ -505,14 +625,33 @@ public class AiAgentKnowledgeService {
         return score;
     }
 
-    private List<String> extractKeywords(String question) {
-        return WORD_SPLIT_PATTERN.splitAsStream(StringUtils.defaultString(question))
+    List<String> extractKeywords(String question) {
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        List<String> segments = WORD_SPLIT_PATTERN.splitAsStream(StringUtils.defaultString(question))
                 .map(String::trim)
                 .filter(StringUtils::isNotBlank)
-                .filter(item -> item.length() >= 2)
-                .distinct()
-                .limit(12)
                 .toList();
+        segments.stream().filter(item -> item.length() >= 2).forEach(keywords::add);
+
+        var asciiMatcher = ASCII_TERM_PATTERN.matcher(StringUtils.defaultString(question));
+        while (asciiMatcher.find()) {
+            keywords.add(asciiMatcher.group());
+        }
+
+        var chineseMatcher = CHINESE_TERM_PATTERN.matcher(StringUtils.defaultString(question));
+        while (chineseMatcher.find()) {
+            String text = chineseMatcher.group();
+            int maxGramLength = Math.min(8, text.length());
+            for (int gramLength = 2; gramLength <= maxGramLength; gramLength++) {
+                for (int start = 0; start + gramLength <= text.length(); start++) {
+                    String candidate = text.substring(start, start + gramLength);
+                    if (!SEARCH_STOP_KEYWORDS.contains(candidate)) {
+                        keywords.add(candidate);
+                    }
+                }
+            }
+        }
+        return keywords.stream().limit(MAX_SEARCH_KEYWORDS).toList();
     }
 
     private String buildRewriteQuestion(String question, List<AiKnowledgeSearchMatchResponse> matches) {
@@ -538,9 +677,15 @@ public class AiAgentKnowledgeService {
         log.setOrganizationId(orgId);
         log.setQuestion(question);
         log.setRewriteQuestion(response.getRewriteQuestion());
-        log.setRetrievalMode("KEYWORD");
-        log.setMatchedChunks(JSON.toJSONString(response.getMatches()));
-        log.setAnswerMode(response.getMatches().isEmpty() ? "CLARIFY" : "DOC");
+        log.setRetrievalMode(StringUtils.defaultIfBlank(response.getRetrievalMode(), "KEYWORD"));
+        Map<String, Object> matches = new LinkedHashMap<>();
+        matches.put("documentChunks", response.getMatches());
+        matches.put("semanticRules", response.getMatchedRules());
+        matches.put("fallbackReason", response.getFallbackReason());
+        log.setMatchedChunks(JSON.toJSONString(matches));
+        boolean hasDocumentMatch = response.getMatches() != null && !response.getMatches().isEmpty();
+        boolean hasRuleMatch = response.getMatchedRules() != null && !response.getMatchedRules().isEmpty();
+        log.setAnswerMode(hasDocumentMatch || hasRuleMatch ? "DOC" : "CLARIFY");
         log.setCreateTime(now);
         log.setUpdateTime(now);
         queryLogMapper.insert(log);
@@ -567,12 +712,6 @@ public class AiAgentKnowledgeService {
                 .trim();
     }
 
-    private String stackTrace(Exception e) {
-        StringWriter writer = new StringWriter();
-        e.printStackTrace(new PrintWriter(writer));
-        return writer.toString();
-    }
-
     private void deleteQuietly(Path path) {
         if (path == null) {
             return;
@@ -583,6 +722,9 @@ public class AiAgentKnowledgeService {
         }
     }
 
-    private record ParsedSection(String title, String sectionPath, Integer pageNo, String content) {
+    record ParsedSection(String title, String sectionPath, Integer pageNo, String content) {
+    }
+
+    public record PreparedParse(List<AiKnowledgeChunk> chunks) {
     }
 }

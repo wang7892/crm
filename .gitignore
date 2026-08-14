@@ -105,3 +105,8 @@ mail monitoring/attachments/
 
 # Accidental Windows cache copy
 frontend/packages/web/%SystemDrive%/
+
+# Local generated files
+.codex-tmp/
+.pnpm-store/
+runtime/

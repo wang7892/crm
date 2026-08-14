@@ -22,6 +22,8 @@ public interface ExtContractMapper {
 
     List<ContractListResponse> getListByIds(@Param("ids") List<String> ids, @Param("userId") String userId, @Param("orgId") String orgId, @Param("dataPermission") DeptDataPermissionDTO deptDataPermission);
 
+    List<String> selectMlsSyncedContractIds(@Param("ids") List<String> ids, @Param("orgId") String orgId);
+
     CustomerContractStatisticResponse calculateContractStatisticByCustomerId(@Param("customerId") String customerId, @Param("userId") String userId, @Param("orgId") String orgId, @Param("dataPermission") DeptDataPermissionDTO deptDataPermission);
 
     List<String> selectByStatusAndIds(@Param("ids") List<String> ids, @Param("approvalStatus") String approvalStatus);

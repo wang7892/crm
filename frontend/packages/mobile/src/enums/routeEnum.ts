@@ -51,6 +51,12 @@ export enum WorkbenchRouteEnum {
   WORKBENCH_DUPLICATE_CHECK_DETAIL = 'workbenchDuplicateCheckDetail',
 }
 
+export enum TaskRouteEnum {
+  TASK = 'task',
+  TASK_INDEX = 'taskList',
+  TASK_DETAIL = 'taskDetail',
+}
+
 export const AppRouteEnum = {
   ...OpportunityRouteEnum,
   ...ClueRouteEnum,
@@ -59,4 +65,5 @@ export const AppRouteEnum = {
   ...ProductRouteEnum,
   ...MineRouteEnum,
   ...WorkbenchRouteEnum,
+  ...TaskRouteEnum,
 };

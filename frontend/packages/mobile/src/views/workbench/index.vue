@@ -82,7 +82,7 @@
   import useAppStore from '@/store/modules/app';
   import useUserStore from '@/store/modules/user';
 
-  import { CommonRouteEnum, MineRouteEnum, WorkbenchRouteEnum } from '@/enums/routeEnum';
+  import { CommonRouteEnum, MineRouteEnum, TaskRouteEnum, WorkbenchRouteEnum } from '@/enums/routeEnum';
 
   import { lastScopedOptions } from './duplicateCheck/config';
 
@@ -104,7 +104,12 @@
   }
 
   const keyword = ref('');
-  const entryCardList = [
+  const entryCardList: Array<{
+    icon: string;
+    label: string;
+    name: FormDesignKeyEnum | TaskRouteEnum.TASK_INDEX;
+    permission: string[];
+  }> = [
     {
       icon: 'icon-newClue',
       label: t('common.newClue'),
@@ -128,6 +133,12 @@
       label: t('common.newOpportunity'),
       name: FormDesignKeyEnum.BUSINESS,
       permission: ['OPPORTUNITY_MANAGEMENT:ADD'],
+    },
+    {
+      icon: 'iconicon_data_plan',
+      label: t('menu.task'),
+      name: TaskRouteEnum.TASK_INDEX,
+      permission: ['TASK:READ'],
     },
     // {
     //   icon: 'icon-newRecord',
@@ -153,8 +164,12 @@
     router.push({ name: WorkbenchRouteEnum.WORKBENCH_DUPLICATE_CHECK });
   }
 
-  function goCardRoute(formKey: FormDesignKeyEnum) {
-    router.push({ name: CommonRouteEnum.FORM_CREATE, query: { formKey } });
+  function goCardRoute(name: FormDesignKeyEnum | TaskRouteEnum.TASK_INDEX) {
+    if (name === TaskRouteEnum.TASK_INDEX) {
+      router.push({ name });
+      return;
+    }
+    router.push({ name: CommonRouteEnum.FORM_CREATE, query: { formKey: name } });
   }
 
   const crmListRef = ref<InstanceType<typeof CrmList>>();

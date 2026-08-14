@@ -7,6 +7,7 @@ import cn.cordys.aspectj.context.OperationLogContext;
 import cn.cordys.aspectj.dto.LogContextInfo;
 import cn.cordys.common.constants.BusinessModuleField;
 import cn.cordys.common.constants.CustomerPromotedField;
+import cn.cordys.common.constants.ContractPromotedField;
 import cn.cordys.common.constants.FormKey;
 import cn.cordys.common.constants.InternalUser;
 import cn.cordys.common.constants.LinkScenarioKey;
@@ -745,6 +746,7 @@ public class ModuleFormService {
         }
         CustomerPromotedField promotedField = CustomerPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey());
         OrderPromotedField orderPromotedField = OrderPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey());
+        ContractPromotedField contractPromotedField = ContractPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey());
         BusinessModuleField businessEnum = businessModuleFieldMap.get(field.getInternalKey());
         if (businessEnum != null) {
             // 设置特殊的业务字段 key
@@ -757,6 +759,10 @@ public class ModuleFormService {
         } else if (orderPromotedField != null) {
             field.setInternalKey(orderPromotedField.getInternalKey());
             field.setBusinessKey(orderPromotedField.getBusinessKey());
+            field.setDisabledProps(Set.of());
+        } else if (contractPromotedField != null) {
+            field.setInternalKey(contractPromotedField.getInternalKey());
+            field.setBusinessKey(contractPromotedField.getBusinessKey());
             field.setDisabledProps(Set.of());
         } else {
             field.setBusinessKey(null);

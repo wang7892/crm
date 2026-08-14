@@ -1,4 +1,6 @@
 export const AiAgentChatUrl = '/ai-agent/chat';
+export const AiAgentAttachmentChatUrl = '/ai-agent/chat/attachments';
+export const AiAgentCancelChatUrl = '/ai-agent/chat/cancel';
 export const AiAgentAudioTranscriptionsUrl = '/ai-agent/audio/transcriptions';
 export const AiAgentAudioTranscriptionQueryUrl = '/ai-agent/audio/transcriptions';
 export const AiAgentFeedbackUrl = '/ai-agent/feedback';
@@ -15,3 +17,8 @@ export const AiKnowledgeDocumentDisableUrl = '/ai-agent/knowledge/document/disab
 export const AiKnowledgeDocumentDeleteUrl = '/ai-agent/knowledge/document/delete';
 export const AiKnowledgeDocumentDownloadUrl = '/ai-agent/knowledge/document/download';
 export const AiKnowledgeSearchTestUrl = '/ai-agent/knowledge/document/search-test';
+export const AiSemanticRulePageUrl = '/ai-agent/knowledge/document/semantic-rule/page';
+export const AiSemanticRuleSaveUrl = '/ai-agent/knowledge/document/semantic-rule/save';
+export const AiSemanticRuleReviewUrl = '/ai-agent/knowledge/document/semantic-rule/review';
+export const AiSemanticRuleBatchReviewUrl = '/ai-agent/knowledge/document/semantic-rule/review/batch';
+export const AiSemanticRuleSchemaOptionsUrl = '/ai-agent/knowledge/document/semantic-rule/schema-options';

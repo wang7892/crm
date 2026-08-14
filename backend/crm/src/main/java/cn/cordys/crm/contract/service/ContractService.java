@@ -6,6 +6,7 @@ import cn.cordys.aspectj.constants.LogType;
 import cn.cordys.aspectj.context.OperationLogContext;
 import cn.cordys.aspectj.dto.LogDTO;
 import cn.cordys.common.constants.BusinessModuleField;
+import cn.cordys.common.constants.ContractPromotedField;
 import cn.cordys.common.constants.FormKey;
 import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.domain.BaseModuleFieldValue;
@@ -111,6 +112,7 @@ public class ContractService {
     private ExtContractInvoiceMapper extContractInvoiceMapper;
 
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("9999999999");
+    private static final String MLS_CONTRACT_DEPARTMENT_NAME = "木林森";
 
     /**
      * 新建合同
@@ -137,6 +139,8 @@ public class ContractService {
         contract.setName(request.getName());
         contract.setCustomerId(request.getCustomerId());
         contract.setOwner(request.getOwner());
+        contract.setOrderStatus(request.getOrderStatus());
+        contract.setCurrency(request.getCurrency());
         contract.setNumber(createContractNumber(moduleFormConfigDTO, orgId, request.getNumber()));
         contract.setOrganizationId(orgId);
         contract.setApprovalStatus(ContractApprovalStatus.NONE.name());
@@ -151,6 +155,7 @@ public class ContractService {
         setAmount(request.getAmount(), contract);
 
         // 设置子表格字段值
+        moduleFields = extractPromotedModuleFields(contract, moduleFields, moduleFormConfigDTO);
         moduleFields.add(new BaseModuleFieldValue("products", request.getProducts()));
         //自定义字段
         contractFieldService.saveModuleField(contract, orgId, operatorId, moduleFields, false);
@@ -229,9 +234,49 @@ public class ContractService {
         return createUser;
     }
 
+    private void fallbackExternalAuditUserNames(ContractListResponse response) {
+        if (response == null) {
+            return;
+        }
+        if (isMissingResolvedUserName(response.getCreateUserName())) {
+            response.setCreateUserName(response.getCreateUser());
+        }
+        if (isMissingResolvedUserName(response.getUpdateUserName())) {
+            response.setUpdateUserName(response.getUpdateUser());
+        }
+    }
+
+    private boolean isMissingResolvedUserName(String value) {
+        return StringUtils.isBlank(value)
+                || Strings.CS.equals(value, Translator.get("common.option.not_exist"));
+    }
+
+    private void applyMlsContractDepartment(List<? extends ContractListResponse> responses, String orgId) {
+        if (CollectionUtils.isEmpty(responses) || StringUtils.isBlank(orgId)) {
+            return;
+        }
+        List<String> contractIds = responses.stream()
+                .map(ContractListResponse::getId)
+                .filter(StringUtils::isNotBlank)
+                .distinct()
+                .toList();
+        if (contractIds.isEmpty()) {
+            return;
+        }
+        Set<String> mlsContractIds = new HashSet<>(
+                extContractMapper.selectMlsSyncedContractIds(contractIds, orgId));
+        responses.stream()
+                .filter(response -> mlsContractIds.contains(response.getId()))
+                .forEach(response -> {
+                    response.setDepartmentId(null);
+                    response.setDepartmentName(MLS_CONTRACT_DEPARTMENT_NAME);
+                });
+    }
+
     private ContractGetResponse get(Contract contract, List<BaseModuleFieldValue> contractFields, ModuleFormConfigDTO contractFormConfig) {
         ContractGetResponse contractGetResponse = BeanUtils.copyBean(new ContractGetResponse(), contract);
         contractGetResponse = baseService.setCreateUpdateOwnerUserName(contractGetResponse);
+        fallbackExternalAuditUserNames(contractGetResponse);
         if (StringUtils.isNotBlank(contract.getOwner()) &&
                 (StringUtils.isBlank(contractGetResponse.getOwnerName()) ||
                         Strings.CS.equals(contractGetResponse.getOwnerName(), Translator.get("common.option.not_exist")))) {
@@ -268,6 +313,7 @@ public class ContractService {
                 contractGetResponse.setDepartmentName(userDeptDTO.getDeptName());
             }
         }
+        applyMlsContractDepartment(List.of(contractGetResponse), contract.getOrganizationId());
 
         // 附件信息
         contractGetResponse.setAttachmentMap(moduleFormService.getAttachmentMap(contractFormConfig, contractFields));
@@ -313,6 +359,7 @@ public class ContractService {
 
             List<BaseModuleFieldValue> originFields = contractFieldService.getModuleFieldValuesByResourceId(request.getId());
             Contract contract = BeanUtils.copyBean(new Contract(), request);
+            List<BaseModuleFieldValue> updateModuleFields = extractPromotedModuleFields(contract, moduleFields, moduleFormConfigDTO);
             contract.setStartTime(request.getStartTime());
             contract.setEndTime(request.getEndTime());
             contract.setUpdateTime(System.currentTimeMillis());
@@ -325,8 +372,8 @@ public class ContractService {
 
             //判断总金额
             setAmount(request.getAmount(), contract);
-            moduleFields.add(new BaseModuleFieldValue("products", request.getProducts()));
-            updateFields(moduleFields, contract, orgId, userId);
+            updateModuleFields.add(new BaseModuleFieldValue("products", request.getProducts()));
+            updateFields(updateModuleFields, contract, orgId, userId);
             contractMapper.update(contract);
             //删除快照
             LambdaQueryWrapper<ContractSnapshot> delWrapper = new LambdaQueryWrapper<>();
@@ -343,13 +390,13 @@ public class ContractService {
             }
             snapshotBaseMapper.deleteByLambda(delWrapper);
             //保存快照
-            List<BaseModuleFieldValue> resolveFieldValues = moduleFormService.resolveSnapshotFields(moduleFields, moduleFormConfigDTO, contractFieldService, contract.getId());
+            List<BaseModuleFieldValue> resolveFieldValues = moduleFormService.resolveSnapshotFields(updateModuleFields, moduleFormConfigDTO, contractFieldService, contract.getId());
             // get 方法需要使用orgId
             contract.setOrganizationId(orgId);
             ContractGetResponse response = get(contract, resolveFieldValues, moduleFormConfigDTO);
             saveSnapshot(contract, saveModuleFormConfigDTO, response);
             // 处理日志上下文
-            baseService.handleUpdateLogWithSubTable(oldContract, contract, originFields, moduleFields, request.getId(), contract.getName(), Translator.get("products_info"), moduleFormConfigDTO);
+            baseService.handleUpdateLogWithSubTable(oldContract, contract, originFields, updateModuleFields, request.getId(), contract.getName(), Translator.get("products_info"), moduleFormConfigDTO);
         }, () -> {
             throw new GenericException(Translator.get("contract.not.exist"));
         });
@@ -365,6 +412,64 @@ public class ContractService {
         } else {
             contract.setAmount(BigDecimal.ZERO);
         }
+    }
+
+    /**
+     * Move promoted form values onto the contract entity so they are persisted
+     * in contract.order_status/currency rather than contract_field.
+     */
+    private List<BaseModuleFieldValue> extractPromotedModuleFields(Contract contract,
+                                                                    List<BaseModuleFieldValue> moduleFields,
+                                                                    ModuleFormConfigDTO formConfig) {
+        if (CollectionUtils.isEmpty(moduleFields)) {
+            return moduleFields;
+        }
+        Map<String, ContractPromotedField> promotedFieldMap = Optional.ofNullable(formConfig)
+                .map(ModuleFormConfigDTO::getFields)
+                .orElse(List.of())
+                .stream()
+                .map(field -> new AbstractMap.SimpleImmutableEntry<>(field.getId(),
+                        ContractPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey())))
+                .filter(entry -> entry.getValue() != null)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (first, second) -> first));
+
+        return moduleFields.stream()
+                .filter(fieldValue -> {
+                    ContractPromotedField promotedField = promotedFieldMap.get(fieldValue.getFieldId());
+                    if (promotedField == null) {
+                        return true;
+                    }
+                    setPromotedFieldValue(contract, promotedField, fieldValue.getFieldValue());
+                    return false;
+                })
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    private void setPromotedFieldValue(Contract contract, ContractPromotedField promotedField, Object fieldValue) {
+        switch (promotedField) {
+            case ORDER_STATUS -> contract.setOrderStatus(toStringValue(fieldValue));
+            case CURRENCY -> contract.setCurrency(toStringValue(fieldValue));
+        }
+    }
+
+    private String toStringValue(Object value) {
+        return value == null ? null : StringUtils.trimToNull(value.toString());
+    }
+
+    private Set<String> getSnapshotPromotedFieldIds(String contractProp) {
+        if (StringUtils.isBlank(contractProp)) {
+            return Collections.emptySet();
+        }
+        ModuleFormConfigDTO snapshotFormConfig = JSON.parseObject(contractProp, ModuleFormConfigDTO.class);
+        return Optional.ofNullable(snapshotFormConfig)
+                .map(ModuleFormConfigDTO::getFields)
+                .orElse(List.of())
+                .stream()
+                .filter(field -> ContractPromotedField.of(
+                        field.getId(), field.getInternalKey(), field.getBusinessKey()) != null)
+                .map(field -> field.getId())
+                .filter(StringUtils::isNotBlank)
+                .collect(Collectors.toSet());
     }
 
 
@@ -417,7 +522,6 @@ public class ContractService {
      * @return 合同详情
      */
     public ContractGetResponse getSnapshot(String id) {
-        ContractGetResponse response = new ContractGetResponse();
         Contract contract = contractMapper.selectByPrimaryKey(id);
         if (contract == null) {
             return null;
@@ -425,22 +529,63 @@ public class ContractService {
         LambdaQueryWrapper<ContractSnapshot> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(ContractSnapshot::getContractId, id);
         ContractSnapshot snapshot = snapshotBaseMapper.selectListByLambda(wrapper).stream().findFirst().orElse(null);
-        if (snapshot != null) {
-            response = JSON.parseObject(snapshot.getContractValue(), ContractGetResponse.class);
-            Customer customer = customerBaseMapper.selectByPrimaryKey(contract.getCustomerId());
-            if (customer != null) {
-                response.setInCustomerPool(customer.getInSharedPool());
-                response.setPoolId(customer.getPoolId());
-                if (StringUtils.isBlank(response.getCustomerName())) {
-                    response.setCustomerName(customer.getName());
-                }
-            } else if (StringUtils.isBlank(response.getCustomerName()) && StringUtils.isNotBlank(contract.getCustomerId())) {
-                response.setCustomerName(contract.getCustomerId());
-            }
-            if (StringUtils.isBlank(response.getOwnerName()) && StringUtils.isNotBlank(contract.getOwner())) {
+        if (snapshot == null) {
+            return get(id);
+        }
+
+        ContractGetResponse response = JSON.parseObject(snapshot.getContractValue(), ContractGetResponse.class);
+        BeanUtils.copyBean(response, contract);
+        response.setOwnerName(null);
+        response.setCustomerName(null);
+        response.setInCustomerPool(null);
+        response.setPoolId(null);
+        response.setDepartmentId(null);
+        response.setDepartmentName(null);
+        response = baseService.setCreateUpdateOwnerUserName(response);
+        fallbackExternalAuditUserNames(response);
+        if (StringUtils.isBlank(contract.getOwner())) {
+            response.setOwnerName(null);
+        }
+        Set<String> promotedFieldIds = getSnapshotPromotedFieldIds(snapshot.getContractProp());
+        if (CollectionUtils.isNotEmpty(response.getModuleFields())) {
+            response.setModuleFields(response.getModuleFields().stream()
+                    .filter(field -> field != null && !promotedFieldIds.contains(field.getFieldId()))
+                    .toList());
+        }
+
+        Map<String, List<OptionDTO>> optionMap = response.getOptionMap() == null
+                ? new HashMap<>() : new HashMap<>(response.getOptionMap());
+        optionMap.remove(BusinessModuleField.CONTRACT_OWNER.getBusinessKey());
+        optionMap.remove(BusinessModuleField.CONTRACT_CUSTOMER_NAME.getBusinessKey());
+        if (StringUtils.isNotBlank(contract.getOwner())) {
+            if (isMissingResolvedUserName(response.getOwnerName())) {
                 response.setOwnerName(contract.getOwner());
             }
+            optionMap.put(BusinessModuleField.CONTRACT_OWNER.getBusinessKey(),
+                    moduleFormService.getBusinessFieldOption(response,
+                            ContractGetResponse::getOwner, ContractGetResponse::getOwnerName));
         }
+        if (StringUtils.isNotBlank(contract.getOwner())) {
+            UserDeptDTO userDept = baseService.getUserDeptMapByUserId(contract.getOwner(), contract.getOrganizationId());
+            if (userDept != null) {
+                response.setDepartmentId(userDept.getDeptId());
+                response.setDepartmentName(userDept.getDeptName());
+            }
+        }
+        Customer customer = customerBaseMapper.selectByPrimaryKey(contract.getCustomerId());
+        if (customer != null) {
+            response.setInCustomerPool(customer.getInSharedPool());
+            response.setPoolId(customer.getPoolId());
+            response.setCustomerName(customer.getName());
+            optionMap.put(BusinessModuleField.CONTRACT_CUSTOMER_NAME.getBusinessKey(),
+                    Collections.singletonList(new OptionDTO(customer.getId(), customer.getName())));
+        } else if (StringUtils.isNotBlank(contract.getCustomerId())) {
+            response.setCustomerName(contract.getCustomerId());
+            optionMap.put(BusinessModuleField.CONTRACT_CUSTOMER_NAME.getBusinessKey(),
+                    Collections.singletonList(new OptionDTO(contract.getCustomerId(), contract.getCustomerId())));
+        }
+        applyMlsContractDepartment(List.of(response), contract.getOrganizationId());
+        response.setOptionMap(optionMap);
         return response;
     }
 
@@ -537,7 +682,10 @@ public class ContractService {
             List<BaseModuleFieldValue> contractFields = resolvefieldValueMap.get(item.getId());
             item.setModuleFields(contractFields);
         });
-        return baseService.setCreateAndUpdateUserName(list);
+        List<ContractListResponse> responses = baseService.setCreateAndUpdateUserName(list);
+        responses.forEach(this::fallbackExternalAuditUserNames);
+        applyMlsContractDepartment(responses, orgId);
+        return responses;
     }
 
 
@@ -561,6 +709,9 @@ public class ContractService {
             moduleFormConfigDTO = JSON.parseObject(snapshot.getContractProp(), ModuleFormConfigDTO.class);
         } else {
             moduleFormConfigDTO = moduleFormCacheService.getBusinessFormConfig(FormKey.CONTRACT.getKey(), orgId);
+        }
+        if (CollectionUtils.isNotEmpty(moduleFormConfigDTO.getFields())) {
+            moduleFormConfigDTO.getFields().forEach(moduleFormService::setFieldBusinessParam);
         }
         return moduleFormConfigDTO;
 

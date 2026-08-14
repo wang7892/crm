@@ -359,7 +359,8 @@ public class OrderService {
                 .map(ModuleFormConfigDTO::getFields)
                 .orElse(List.of())
                 .stream()
-                .map(field -> Map.entry(field.getId(), OrderPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey())))
+                .map(field -> new AbstractMap.SimpleImmutableEntry<>(field.getId(),
+                        OrderPromotedField.of(field.getId(), field.getInternalKey(), field.getBusinessKey())))
                 .filter(entry -> entry.getValue() != null)
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (first, second) -> first));
 
@@ -537,7 +538,6 @@ public class OrderService {
      * @return 订单详情
      */
     public OrderGetResponse getSnapshot(String id) {
-        OrderGetResponse response = new OrderGetResponse();
         Order order = orderMapper.selectByPrimaryKey(id);
         if (order == null) {
             return null;
@@ -545,16 +545,61 @@ public class OrderService {
         LambdaQueryWrapper<OrderSnapshot> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(OrderSnapshot::getOrderId, id);
         OrderSnapshot snapshot = snapshotBaseMapper.selectListByLambda(wrapper).stream().findFirst().orElse(null);
-        if (snapshot != null) {
-            response = JSON.parseObject(snapshot.getOrderValue(), OrderGetResponse.class);
-            if (StringUtils.isNotBlank(order.getCustomerId())) {
-                Customer customer = customerBaseMapper.selectByPrimaryKey(order.getCustomerId());
-                if (customer != null) {
-                    response.setInCustomerPool(customer.getInSharedPool());
-                    response.setPoolId(customer.getPoolId());
-                }
+        if (snapshot == null) {
+            return get(id);
+        }
+
+        OrderGetResponse response = JSON.parseObject(snapshot.getOrderValue(), OrderGetResponse.class);
+        BeanUtils.copyBean(response, order);
+        response.setOwnerName(null);
+        response.setCustomerName(null);
+        response.setContractName(null);
+        response.setInCustomerPool(null);
+        response.setPoolId(null);
+        response.setDepartmentId(null);
+        response.setDepartmentName(null);
+        response = baseService.setCreateUpdateOwnerUserName(response);
+        response.setName(orderDisplayName(order));
+        response.setStage(order.getStatus());
+        response.setOwnerName(resolveOwnerName(order.getOwner(), order.getOrganizationId()));
+        Map<String, String> stageNameMap = extOrderStageConfigMapper.getStageConfigList(order.getOrganizationId()).stream()
+                .collect(Collectors.toMap(OrderStageConfigResponse::getId,
+                        OrderStageConfigResponse::getName));
+        response.setStageName(StringUtils.defaultIfBlank(stageNameMap.get(order.getStatus()), order.getStatus()));
+        String ownerId = resolveOwnerId(order.getOwner(), order.getOrganizationId());
+        if (StringUtils.isNotBlank(ownerId)) {
+            UserDeptDTO userDept = baseService.getUserDeptMapByUserId(ownerId, order.getOrganizationId());
+            if (userDept != null) {
+                response.setDepartmentId(userDept.getDeptId());
+                response.setDepartmentName(userDept.getDeptName());
             }
         }
+
+        Map<String, List<OptionDTO>> optionMap = response.getOptionMap() == null
+                ? new HashMap<>() : new HashMap<>(response.getOptionMap());
+        optionMap.remove(BusinessModuleField.ORDER_OWNER.getBusinessKey());
+        optionMap.remove("customerId");
+        optionMap.remove("contractId");
+        if (StringUtils.isNotBlank(order.getOwner())) {
+            optionMap.put(BusinessModuleField.ORDER_OWNER.getBusinessKey(),
+                    moduleFormService.getBusinessFieldOption(response,
+                            OrderGetResponse::getOwner, OrderGetResponse::getOwnerName));
+        }
+        Customer customer = customerBaseMapper.selectByPrimaryKey(order.getCustomerId());
+        if (customer != null) {
+            response.setInCustomerPool(customer.getInSharedPool());
+            response.setPoolId(customer.getPoolId());
+            response.setCustomerName(customer.getName());
+            optionMap.put("customerId", Collections.singletonList(
+                    new OptionDTO(customer.getId(), customer.getName())));
+        }
+        Contract contract = contractMapper.selectByPrimaryKey(order.getContractId());
+        if (contract != null) {
+            response.setContractName(contract.getName());
+            optionMap.put("contractId", Collections.singletonList(
+                    new OptionDTO(contract.getId(), contract.getName())));
+        }
+        response.setOptionMap(optionMap);
         return response;
     }
 

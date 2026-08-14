@@ -56,6 +56,7 @@ export interface OrderItem {
   materialType?: string;
   processTechnology?: string;
   orderTime?: number;
+  warehouseActualShipDate?: number;
   quantity?: number;
   unit?: string;
   unitPrice?: number;

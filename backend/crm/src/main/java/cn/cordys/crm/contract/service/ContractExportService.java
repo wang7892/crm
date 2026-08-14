@@ -133,6 +133,8 @@ public class ContractExportService extends BaseExportService {
         systemFieldMap.put("departmentId", data.getDepartmentName());
         systemFieldMap.put("customerId", data.getCustomerName());
         systemFieldMap.put("amount", data.getAmount());
+        systemFieldMap.put("orderStatus", data.getOrderStatus());
+        systemFieldMap.put("currency", data.getCurrency());
         systemFieldMap.put("number", data.getNumber());
         if (StringUtils.isNotBlank(data.getApprovalStatus())) {
             systemFieldMap.put("approvalStatus", Translator.get("contract.approval_status." + data.getApprovalStatus().toLowerCase(), Locale.SIMPLIFIED_CHINESE));

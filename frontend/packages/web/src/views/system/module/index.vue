@@ -138,6 +138,11 @@
       icon: 'iconicon_order_form',
     },
     {
+      label: t('menu.task'),
+      key: ModuleConfigEnum.TASK,
+      icon: 'iconicon_data_plan',
+    },
+    {
       label: t('module.clueManagement'),
       key: ModuleConfigEnum.CLUE_MANAGEMENT,
       icon: 'iconicon_clue',

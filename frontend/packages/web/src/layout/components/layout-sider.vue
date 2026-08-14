@@ -89,7 +89,8 @@
 
 <script setup lang="ts">
   import { RouteLocationNormalizedGeneric, useRoute, useRouter } from 'vue-router';
-  import { NDivider, NDropdown, NLayoutSider, NMenu, NScrollbar, NTooltip } from 'naive-ui';
+  import { NDivider, NDropdown, NIcon, NLayoutSider, NMenu, NScrollbar, NTooltip } from 'naive-ui';
+  import { BookOutline } from '@vicons/ionicons5';
 
   import { PersonalEnum } from '@lib/shared/enums/systemEnum';
   import { useI18n } from '@lib/shared/hooks/useI18n';
@@ -150,6 +151,18 @@
   );
 
   function renderIcon(type: string) {
+    if (type === 'iconicon_book_open') {
+      return () =>
+        h(
+          NIcon,
+          {
+            size: 18,
+            class: 'text-[var(--text-n1)]',
+          },
+          { default: () => h(BookOutline) }
+        );
+    }
+
     return () =>
       h(CrmIcon, {
         size: 18,
