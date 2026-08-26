@@ -41,7 +41,8 @@
           class="quick-entry-card"
           @click="goCardRoute(card.name)"
         >
-          <CrmIcon :name="card.icon" width="30px" height="30px" />
+          <BookOutlineIcon v-if="card.icon === 'iconicon_book_open'" class="knowledge-entry-icon" />
+          <CrmIcon v-else :name="card.icon" width="30px" height="30px" />
           <div class="text-[12px] text-[var(--text-n1)]">{{ card.label }}</div>
         </div>
       </div>
@@ -82,9 +83,17 @@
   import useAppStore from '@/store/modules/app';
   import useUserStore from '@/store/modules/user';
 
-  import { CommonRouteEnum, MineRouteEnum, TaskRouteEnum, WorkbenchRouteEnum } from '@/enums/routeEnum';
+  import {
+    AgentRouteEnum,
+    AiKnowledgeRouteEnum,
+    CommonRouteEnum,
+    MineRouteEnum,
+    TaskRouteEnum,
+    WorkbenchRouteEnum,
+  } from '@/enums/routeEnum';
 
   import { lastScopedOptions } from './duplicateCheck/config';
+  import BookOutlineIcon from './book-outline-icon.vue';
 
   const appStore = useAppStore();
 
@@ -107,7 +116,11 @@
   const entryCardList: Array<{
     icon: string;
     label: string;
-    name: FormDesignKeyEnum | TaskRouteEnum.TASK_INDEX;
+    name:
+      | FormDesignKeyEnum
+      | TaskRouteEnum.TASK_INDEX
+      | AgentRouteEnum.AGENT_CHAT
+      | AiKnowledgeRouteEnum.AI_KNOWLEDGE_INDEX;
     permission: string[];
   }> = [
     {
@@ -140,6 +153,18 @@
       name: TaskRouteEnum.TASK_INDEX,
       permission: ['TASK:READ'],
     },
+    {
+      icon: 'iconicon_bot',
+      label: t('menu.agent'),
+      name: AgentRouteEnum.AGENT_CHAT,
+      permission: ['AGENT:READ'],
+    },
+    {
+      icon: 'iconicon_book_open',
+      label: t('menu.aiKnowledge'),
+      name: AiKnowledgeRouteEnum.AI_KNOWLEDGE_INDEX,
+      permission: ['AGENT:UPDATE'],
+    },
     // {
     //   icon: 'icon-newRecord',
     //   label: t('common.newFollowRecord'),
@@ -164,8 +189,18 @@
     router.push({ name: WorkbenchRouteEnum.WORKBENCH_DUPLICATE_CHECK });
   }
 
-  function goCardRoute(name: FormDesignKeyEnum | TaskRouteEnum.TASK_INDEX) {
-    if (name === TaskRouteEnum.TASK_INDEX) {
+  function goCardRoute(
+    name:
+      | FormDesignKeyEnum
+      | TaskRouteEnum.TASK_INDEX
+      | AgentRouteEnum.AGENT_CHAT
+      | AiKnowledgeRouteEnum.AI_KNOWLEDGE_INDEX
+  ) {
+    if (
+      name === TaskRouteEnum.TASK_INDEX ||
+      name === AgentRouteEnum.AGENT_CHAT ||
+      name === AiKnowledgeRouteEnum.AI_KNOWLEDGE_INDEX
+    ) {
       router.push({ name });
       return;
     }
@@ -204,5 +239,10 @@
     &:active {
       background-color: var(--text-n9);
     }
+  }
+  .knowledge-entry-icon {
+    width: 30px;
+    height: 30px;
+    color: #000000;
   }
 </style>

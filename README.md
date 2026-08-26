@@ -107,6 +107,8 @@ docker run -d \
 - [x] 2026.01.29：[v1.5.0 新增工商抬头管理、发票管理、回款管理](https://github.com/1Panel-dev/CordysCRM/releases/tag/v1.5.0)
 - [x] 2026.03.11：[Cordys CRM Skills 正式发布](https://github.com/1Panel-dev/CordysCRM-skills)
 
+7892从这里从导师推荐那里接收了这个项目，利用这个项目的框架进行开发一个符合自己使用的CRM，现在已经添加了AI智能体，添加了公司的数据，添加了任务列表
+
 ## 技术栈
 
 -  后端：[Spring Boot](https://spring.io/projects/spring-boot)

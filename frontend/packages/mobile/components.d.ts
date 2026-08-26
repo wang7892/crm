@@ -76,14 +76,17 @@ declare module 'vue' {
     VanLoading: typeof import('vant/es')['Loading'];
     VanNavBar: typeof import('vant/es')['NavBar'];
     VanNoticeBar: typeof import('vant/es')['NoticeBar'];
+    VanPagination: typeof import('vant/es')['Pagination'];
     VanPicker: typeof import('vant/es')['Picker'];
     VanPickerGroup: typeof import('vant/es')['PickerGroup'];
     VanPopover: typeof import('vant/es')['Popover'];
     VanPopup: typeof import('vant/es')['Popup'];
+    VanProgress: typeof import('vant/es')['Progress'];
     VanPullRefresh: typeof import('vant/es')['PullRefresh'];
     VanRadio: typeof import('vant/es')['Radio'];
     VanRadioGroup: typeof import('vant/es')['RadioGroup'];
     VanSearch: typeof import('vant/es')['Search'];
+    VanSkeleton: typeof import('vant/es')['Skeleton'];
     VanTab: typeof import('vant/es')['Tab'];
     VanTabbar: typeof import('vant/es')['Tabbar'];
     VanTabbarItem: typeof import('vant/es')['TabbarItem'];

@@ -1,6 +1,7 @@
 import { showFailToast } from 'vant';
 
 import createAxios from '@lib/shared/api/http';
+import useAiAgentApi from '@lib/shared/api/modules/aiAgent';
 import useClueApi from '@lib/shared/api/modules/clue';
 import useContractApi from '@lib/shared/api/modules/contract';
 import useCustomerApi from '@lib/shared/api/modules/customer';
@@ -23,6 +24,7 @@ const CDR = createAxios({
   checkStatus,
 });
 
+const aiAgentApi = useAiAgentApi(CDR);
 const productApi = useProductApi(CDR);
 const opportunityApi = useOpportunityApi(CDR);
 const clueApi = useClueApi(CDR);
@@ -39,9 +41,29 @@ const orderApi = useOrderApi(CDR);
 const taskApi = useTaskApi(CDR);
 
 export const {
+  chatAiAgent,
+  chatAiAgentWithAttachments,
+  cancelAiAgentChat,
+  deleteAiAgentSession,
+  getAiAgentSessions,
+  getAiAgentMessages,
+  deleteAiKnowledgeDocument,
+  getAiKnowledgeChunkPage,
+  getAiKnowledgeDocumentDetail,
+  getAiKnowledgeDocumentDownloadUrl,
+  getAiKnowledgeDocumentPage,
+  reparseAiKnowledgeDocument,
+  testAiKnowledgeSearch,
+  uploadAiKnowledgeDocument,
+} = aiAgentApi;
+
+export const {
   getTaskPage,
   getTask,
   addTask,
+  updateTask,
+  reassignTask,
+  deleteTask,
   getTaskAssigneeOptions,
   getTaskCustomerOptions,
   saveTaskReport,

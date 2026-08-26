@@ -72,6 +72,39 @@
               <span>{{ t('task.deadline') }}</span>
               <time>{{ formatDateTime(item.deadline) }}</time>
             </div>
+
+            <div v-if="isTaskManager" class="task-card__management" @click.stop>
+              <button
+                v-if="item.status !== 'COMPLETED'"
+                type="button"
+                :aria-label="t('task.manage.reassign')"
+                :title="t('task.manage.reassign')"
+                @click="openReassignTask(item)"
+              >
+                <van-icon name="friends-o" />
+                <span>{{ t('task.manage.reassign') }}</span>
+              </button>
+              <button
+                type="button"
+                :aria-label="t('task.manage.edit')"
+                :title="t('task.manage.edit')"
+                @click="openEditTask(item)"
+              >
+                <van-icon name="edit" />
+                <span>{{ t('task.manage.edit') }}</span>
+              </button>
+              <button
+                type="button"
+                class="task-card__delete-button"
+                :disabled="deletingTaskIds.includes(item.id)"
+                :aria-label="t('task.manage.delete')"
+                :title="t('task.manage.delete')"
+                @click="confirmDeleteTask(item)"
+              >
+                <van-icon name="delete-o" />
+                <span>{{ t('task.manage.delete') }}</span>
+              </button>
+            </div>
           </article>
         </template>
       </CrmList>
@@ -95,59 +128,70 @@
       @select="selectAssigneeFilter"
     />
 
-    <van-popup v-model:show="showCreateTask" position="bottom" round class="task-create-popup">
+    <van-popup
+      v-model:show="showTaskForm"
+      position="bottom"
+      round
+      class="task-create-popup"
+      :class="{ 'task-create-popup--compact': taskFormMode === 'REASSIGN' }"
+    >
       <div class="task-create-popup__header">
-        <button type="button" @click="showCreateTask = false">{{ t('task.manage.cancel') }}</button>
-        <h2>{{ t('task.manage.createTitle') }}</h2>
-        <button type="button" class="primary" :disabled="taskCreating" @click="createTask">
-          {{ t('task.manage.confirm') }}
+        <button type="button" @click="showTaskForm = false">{{ t('task.manage.cancel') }}</button>
+        <h2>{{ taskFormTitle }}</h2>
+        <button type="button" class="primary" :disabled="taskFormSaving" @click="saveTaskForm">
+          {{ taskFormConfirmText }}
         </button>
       </div>
 
       <div class="task-create-form">
         <van-cell-group inset>
-          <van-field
-            v-model="taskForm.name"
-            required
-            clearable
-            :label="t('task.manage.name')"
-            :placeholder="t('task.manage.namePlaceholder')"
-            maxlength="255"
-          />
+          <template v-if="taskFormMode !== 'REASSIGN'">
+            <van-field
+              v-model="taskForm.name"
+              required
+              clearable
+              :label="t('task.manage.name')"
+              :placeholder="t('task.manage.namePlaceholder')"
+              maxlength="255"
+            />
+          </template>
           <van-field
             :model-value="taskForm.assigneeName"
             required
             readonly
-            is-link
+            :is-link="!taskForm.completed"
+            :disabled="taskForm.completed"
             :label="t('task.assignee')"
             :placeholder="t('task.manage.assigneePlaceholder')"
             @click="openFormAssigneeSelector"
           />
-          <van-field
-            :model-value="taskForm.customerName"
-            readonly
-            is-link
-            :label="t('task.customer')"
-            :placeholder="t('task.manage.customerPlaceholder')"
-            @click="openCustomerSelector"
-          />
-          <div class="task-create-form__datetime">
-            <label for="task-deadline">{{ t('task.manage.deadline') }}<span>*</span></label>
-            <input id="task-deadline" v-model="taskForm.deadline" type="datetime-local" />
-          </div>
-          <van-field
-            v-model="taskForm.description"
-            type="textarea"
-            rows="3"
-            autosize
-            maxlength="2000"
-            show-word-limit
-            :label="t('task.manage.description')"
-            :placeholder="t('task.manage.descriptionPlaceholder')"
-          />
+          <template v-if="taskFormMode !== 'REASSIGN'">
+            <van-field
+              :model-value="taskForm.customerName"
+              readonly
+              is-link
+              :label="t('task.customer')"
+              :placeholder="t('task.manage.customerPlaceholder')"
+              @click="openCustomerSelector"
+            />
+            <div class="task-create-form__datetime">
+              <label for="task-deadline">{{ t('task.manage.deadline') }}<span>*</span></label>
+              <input id="task-deadline" v-model="taskForm.deadline" type="datetime-local" />
+            </div>
+            <van-field
+              v-model="taskForm.description"
+              type="textarea"
+              rows="3"
+              autosize
+              maxlength="2000"
+              show-word-limit
+              :label="t('task.manage.description')"
+              :placeholder="t('task.manage.descriptionPlaceholder')"
+            />
+          </template>
         </van-cell-group>
 
-        <section class="task-create-attachments">
+        <section v-if="taskFormMode !== 'REASSIGN'" class="task-create-attachments">
           <div class="task-create-attachments__heading">
             <h3>{{ t('task.manage.attachments') }}</h3>
             <span>{{ taskForm.attachments.length }}/10</span>
@@ -199,20 +243,24 @@
 
 <script setup lang="ts">
   import { useRouter } from 'vue-router';
-  import { closeToast, showFailToast, showLoadingToast, showSuccessToast } from 'vant';
+  import { closeToast, showConfirmDialog, showFailToast, showLoadingToast, showSuccessToast } from 'vant';
   import dayjs from 'dayjs';
 
   import { useI18n } from '@lib/shared/hooks/useI18n';
-  import type { TaskItem, TaskOptionItem, TaskStatus } from '@lib/shared/models/task';
+  import type { TaskAttachmentItem, TaskItem, TaskOptionItem, TaskStatus } from '@lib/shared/models/task';
 
   import CrmList from '@/components/pure/crm-list/index.vue';
   import CrmPageWrapper from '@/components/pure/crm-page-wrapper/index.vue';
 
   import {
     addTask,
+    deleteTask,
+    deleteTaskAttachment,
     getTaskAssigneeOptions,
     getTaskCustomerOptions,
     getTaskPage,
+    reassignTask,
+    updateTask,
     uploadTaskAttachments,
   } from '@/api/modules';
   import { TaskRouteEnum, WorkbenchRouteEnum } from '@/enums/routeEnum';
@@ -225,7 +273,17 @@
     color?: string;
   }
 
-  interface TaskCreateForm {
+  type TaskFormMode = 'CREATE' | 'EDIT' | 'REASSIGN';
+
+  interface TaskFormAttachment {
+    id?: string;
+    name: string;
+    size: number;
+    file?: File;
+  }
+
+  interface TaskForm {
+    id: string;
     name: string;
     assigneeId: string;
     assigneeName: string;
@@ -233,7 +291,9 @@
     customerName: string;
     deadline: string;
     description: string;
-    attachments: File[];
+    attachments: TaskFormAttachment[];
+    persistedAttachmentIds: string[];
+    completed: boolean;
   }
 
   const MAX_FILE_COUNT = 10;
@@ -255,21 +315,46 @@
   const customerOptions = ref<TaskOptionItem[]>([]);
   const showStatusSheet = ref(false);
   const showAssigneeSheet = ref(false);
-  const showCreateTask = ref(false);
+  const showTaskForm = ref(false);
   const showFormAssigneeSheet = ref(false);
   const showCustomerSheet = ref(false);
-  const taskCreating = ref(false);
+  const taskFormMode = ref<TaskFormMode>('CREATE');
+  const taskFormSaving = ref(false);
+  const deletingTaskIds = ref<string[]>([]);
   const assigneeOptionsLoading = ref(false);
   const customerOptionsLoading = ref(false);
 
-  const isTaskManager = computed(() => userStore.isAdmin || hasAnyPermission(['TASK:ADD']));
+  const isTaskManager = computed(() => {
+    if (userStore.isAdmin || hasAnyPermission(['TASK:ADD', 'TASK:UPDATE', 'TASK:DELETE'])) {
+      return true;
+    }
+    return (userStore.userInfo.roles as unknown[]).some((role) => {
+      const roleId = typeof role === 'string' ? role : String((role as { id?: string })?.id || '');
+      const roleName = typeof role === 'string' ? role : String((role as { name?: string })?.name || '');
+      return (
+        ['org_admin', 'sales_manager'].includes(roleId) ||
+        ['管理员', '销售经理', 'Organization Administrator', 'Sales Manager'].includes(roleName)
+      );
+    });
+  });
+
+  const taskFormTitle = computed(() => {
+    if (taskFormMode.value === 'REASSIGN') return t('task.manage.reassignTitle');
+    return t(taskFormMode.value === 'EDIT' ? 'task.manage.editTitle' : 'task.manage.createTitle');
+  });
+
+  const taskFormConfirmText = computed(() => {
+    if (taskFormMode.value === 'REASSIGN') return t('task.manage.reassignConfirm');
+    return t(taskFormMode.value === 'EDIT' ? 'task.manage.save' : 'task.manage.confirm');
+  });
 
   function defaultDeadline() {
     return dayjs().add(1, 'day').format('YYYY-MM-DDTHH:mm');
   }
 
-  function createTaskForm(): TaskCreateForm {
+  function createTaskForm(): TaskForm {
     return {
+      id: '',
       name: '',
       assigneeId: '',
       assigneeName: '',
@@ -278,10 +363,12 @@
       deadline: defaultDeadline(),
       description: '',
       attachments: [],
+      persistedAttachmentIds: [],
+      completed: false,
     };
   }
 
-  const taskForm = ref<TaskCreateForm>(createTaskForm());
+  const taskForm = ref<TaskForm>(createTaskForm());
 
   const statusOptions = computed<Array<{ label: string; value: TaskStatus | '' }>>(() => [
     { label: t('task.allStatus'), value: '' },
@@ -374,8 +461,16 @@
     return `${(size / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  function fileKey(file: File, index: number) {
-    return `${file.name}-${file.size}-${file.lastModified}-${index}`;
+  function fileKey(attachment: TaskFormAttachment, index: number) {
+    return attachment.id || `${attachment.name}-${attachment.size}-${attachment.file?.lastModified || 0}-${index}`;
+  }
+
+  function mapTaskAttachment(attachment: TaskAttachmentItem): TaskFormAttachment {
+    return {
+      id: attachment.id,
+      name: attachment.originalName,
+      size: attachment.sizeBytes,
+    };
   }
 
   async function reload(showLoading = true) {
@@ -457,6 +552,7 @@
   }
 
   async function openFormAssigneeSelector() {
+    if (taskForm.value.completed) return;
     if (!assigneeOptions.value.length) {
       const loaded = await loadAssigneeOptions();
       if (!loaded) return;
@@ -473,12 +569,46 @@
   }
 
   async function openCreateTask() {
+    taskFormMode.value = 'CREATE';
     taskForm.value = createTaskForm();
     if (!assigneeOptions.value.length) {
       const loaded = await loadAssigneeOptions();
       if (!loaded) return;
     }
-    showCreateTask.value = true;
+    showTaskForm.value = true;
+  }
+
+  function openEditTask(item: TaskItem) {
+    taskFormMode.value = 'EDIT';
+    taskForm.value = {
+      id: item.id,
+      name: item.name,
+      assigneeId: item.assigneeId || '',
+      assigneeName: item.assigneeName || '',
+      customerId: item.customerId || '',
+      customerName: item.customerName || '',
+      deadline: dayjs(item.deadline).format('YYYY-MM-DDTHH:mm'),
+      description: item.description || '',
+      attachments: item.taskAttachments.map(mapTaskAttachment),
+      persistedAttachmentIds: item.taskAttachments.map((attachment) => attachment.id),
+      completed: item.status === 'COMPLETED',
+    };
+    showTaskForm.value = true;
+  }
+
+  async function openReassignTask(item: TaskItem) {
+    taskFormMode.value = 'REASSIGN';
+    taskForm.value = {
+      ...createTaskForm(),
+      id: item.id,
+      assigneeId: item.assigneeId || '',
+      assigneeName: item.assigneeName || '',
+    };
+    if (!assigneeOptions.value.length) {
+      const loaded = await loadAssigneeOptions();
+      if (!loaded) return;
+    }
+    showTaskForm.value = true;
   }
 
   function selectTaskAttachments(event: Event) {
@@ -494,21 +624,52 @@
       showFailToast(t('task.attachment.tooLarge'));
       return;
     }
-    taskForm.value.attachments.push(...files);
+    taskForm.value.attachments.push(
+      ...files.map((file) => ({
+        name: file.name,
+        size: file.size,
+        file,
+      }))
+    );
   }
 
   function removeTaskAttachment(index: number) {
     taskForm.value.attachments.splice(index, 1);
   }
 
-  async function createTask() {
-    const form = taskForm.value;
-    if (!form.name.trim()) {
-      showFailToast(t('task.manage.nameRequired'));
-      return;
+  async function syncTaskAttachments(taskId: string, form: TaskForm) {
+    const retainedIds = form.attachments.flatMap((attachment) => (attachment.id ? [attachment.id] : []));
+    const removedIds = form.persistedAttachmentIds.filter((id) => !retainedIds.includes(id));
+    await Promise.all(removedIds.map((id) => deleteTaskAttachment(id)));
+
+    const files = form.attachments.flatMap((attachment) => (attachment.file ? [attachment.file] : []));
+    if (files.length) {
+      await uploadTaskAttachments(taskId, 'TASK', files);
     }
+  }
+
+  async function saveTaskForm() {
+    const form = taskForm.value;
     if (!form.assigneeId) {
       showFailToast(t('task.manage.assigneeRequired'));
+      return;
+    }
+
+    if (taskFormMode.value === 'REASSIGN') {
+      taskFormSaving.value = true;
+      try {
+        await reassignTask({ id: form.id, assigneeId: form.assigneeId });
+        showTaskForm.value = false;
+        await reload(false);
+        showSuccessToast(t('task.manage.reassigned'));
+      } finally {
+        taskFormSaving.value = false;
+      }
+      return;
+    }
+
+    if (!form.name.trim()) {
+      showFailToast(t('task.manage.nameRequired'));
       return;
     }
     const deadline = dayjs(form.deadline).valueOf();
@@ -517,30 +678,50 @@
       return;
     }
 
-    taskCreating.value = true;
+    taskFormSaving.value = true;
     try {
-      const createdTask = await addTask({
+      const wasCreate = taskFormMode.value === 'CREATE';
+      const payload = {
         name: form.name.trim(),
         assigneeId: form.assigneeId,
         customerId: form.customerId || undefined,
         description: form.description.trim() || undefined,
         deadline,
-      });
-      if (form.attachments.length) {
-        try {
-          await uploadTaskAttachments(createdTask.id, 'TASK', form.attachments);
-        } catch {
-          showCreateTask.value = false;
-          await reload(false);
-          showFailToast(t('task.manage.createdAttachmentFailed'));
-          return;
-        }
+      };
+      const savedTask = wasCreate ? await addTask(payload) : await updateTask({ id: form.id, ...payload });
+      try {
+        await syncTaskAttachments(savedTask.id, form);
+      } catch {
+        showTaskForm.value = false;
+        await reload(false);
+        showFailToast(t(wasCreate ? 'task.manage.createdAttachmentFailed' : 'task.manage.updatedAttachmentFailed'));
+        return;
       }
-      showCreateTask.value = false;
+      showTaskForm.value = false;
       await reload(false);
-      showSuccessToast(t('task.manage.created'));
+      showSuccessToast(t(wasCreate ? 'task.manage.created' : 'task.manage.updated'));
     } finally {
-      taskCreating.value = false;
+      taskFormSaving.value = false;
+    }
+  }
+
+  async function confirmDeleteTask(item: TaskItem) {
+    try {
+      await showConfirmDialog({
+        title: t('task.manage.delete'),
+        message: t('task.manage.deleteConfirm'),
+      });
+    } catch {
+      return;
+    }
+
+    deletingTaskIds.value.push(item.id);
+    try {
+      await deleteTask(item.id);
+      await reload(false);
+      showSuccessToast(t('task.manage.deleted'));
+    } finally {
+      deletingTaskIds.value = deletingTaskIds.value.filter((id) => id !== item.id);
     }
   }
 
@@ -709,10 +890,53 @@
     line-height: 20px;
     color: var(--text-n2);
   }
+  .task-card__management {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 8px;
+    gap: 4px;
+  }
+  .task-card__management button {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    padding: 0 10px;
+    min-width: 0;
+    height: 36px;
+    font-size: 13px;
+    border: 0;
+    border-radius: 6px;
+    white-space: nowrap;
+    color: var(--text-n2);
+    background: transparent;
+    gap: 5px;
+  }
+  .task-card__management button:active {
+    background: var(--text-n9);
+  }
+  .task-card__management button:disabled {
+    opacity: 0.5;
+  }
+  .task-card__management button span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .task-card__management .task-card__delete-button {
+    color: var(--error-1);
+  }
   .task-create-popup {
     overflow: hidden;
     height: min(88vh, 760px);
     background: var(--text-n9);
+  }
+  .task-create-popup--compact {
+    height: auto;
+    max-height: 50vh;
+  }
+  .task-create-popup--compact .task-create-form {
+    height: auto;
   }
   .task-create-popup__header {
     display: grid;

@@ -57,6 +57,16 @@ export enum TaskRouteEnum {
   TASK_DETAIL = 'taskDetail',
 }
 
+export enum AgentRouteEnum {
+  AGENT = 'agent',
+  AGENT_CHAT = 'agentChat',
+}
+
+export enum AiKnowledgeRouteEnum {
+  AI_KNOWLEDGE = 'aiKnowledge',
+  AI_KNOWLEDGE_INDEX = 'aiKnowledgePage',
+}
+
 export const AppRouteEnum = {
   ...OpportunityRouteEnum,
   ...ClueRouteEnum,
@@ -66,4 +76,6 @@ export const AppRouteEnum = {
   ...MineRouteEnum,
   ...WorkbenchRouteEnum,
   ...TaskRouteEnum,
+  ...AgentRouteEnum,
+  ...AiKnowledgeRouteEnum,
 };
