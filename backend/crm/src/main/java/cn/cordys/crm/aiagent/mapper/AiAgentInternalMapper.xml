@@ -84,6 +84,25 @@
         </choose>
     </select>
 
+    <!-- Matching an external order must not silently discard customers after a display limit. -->
+    <select id="findCustomerNamesForOrderQuery" resultType="java.lang.String">
+        SELECT DISTINCT c.name
+        FROM customer c
+        LEFT JOIN sys_user u ON CONVERT(c.owner USING utf8mb4) COLLATE utf8mb4_general_ci =
+            CONVERT(u.id USING utf8mb4) COLLATE utf8mb4_general_ci
+        <include refid="customerPermissionJoin"/>
+        WHERE <include refid="customerBaseWhere"/>
+        <include refid="customerPermissionWhere"/>
+        <if test="specialistName != null and specialistName != ''">
+            AND u.name = #{specialistName}
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND (c.name LIKE CONCAT('%', #{keyword}, '%') OR c.full_name LIKE CONCAT('%', #{keyword}, '%'))
+        </if>
+        AND c.name IS NOT NULL AND c.name != ''
+        ORDER BY c.name
+    </select>
+
     <select id="findCustomersBySpecialist" resultType="cn.cordys.crm.aiagent.dto.internal.AiAgentCustomerRow">
         SELECT c.id,
                c.name,
@@ -341,6 +360,18 @@
           AND s.organization_id = #{orgId}
           AND s.user_id = #{userId}
         ORDER BY m.create_time ASC
+    </select>
+
+    <select id="listRecentConversationMessages" resultType="cn.cordys.crm.aiagent.domain.AiAgentMessage">
+        SELECT m.id, m.session_id, m.role, m.content, m.intent, m.evidence_json, m.create_time
+        FROM ai_agent_message m
+        JOIN ai_agent_session s ON s.id = m.session_id
+        WHERE m.session_id = #{sessionId}
+          AND s.organization_id = #{orgId}
+          AND s.user_id = #{userId}
+          AND m.role IN ('user', 'assistant')
+        ORDER BY m.create_time DESC, m.id DESC
+        LIMIT #{limit}
     </select>
 
     <delete id="deleteToolLogsBySession">

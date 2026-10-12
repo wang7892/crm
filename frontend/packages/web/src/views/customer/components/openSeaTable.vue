@@ -156,7 +156,7 @@
 
   import { CustomerRouteEnum } from '@/enums/routeEnum';
 
-  import { SelectOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectOption } from 'naive-ui/es/select/src/interface';
 
   const props = defineProps<{
     formKey: FormDesignKeyEnum.CUSTOMER_OPEN_SEA | FormDesignKeyEnum.SEARCH_ADVANCED_PUBLIC;

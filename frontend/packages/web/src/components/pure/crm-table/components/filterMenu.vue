@@ -34,7 +34,7 @@
 
   import useRemoteFilterOptions from '@/hooks/useRemoteFilterOptions';
 
-  import { FilterOption } from 'naive-ui/es/data-table/src/interface';
+  import type { FilterOption } from 'naive-ui/es/data-table/src/interface';
 
   const { t } = useI18n();
   const props = defineProps<{

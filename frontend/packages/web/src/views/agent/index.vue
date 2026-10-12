@@ -1,6 +1,13 @@
 <template>
-  <div class="crm-chat-shell">
-    <aside class="chat-sidebar">
+  <div class="crm-chat-shell" :class="{ 'crm-chat-shell--config': activeFeature === 'config' }">
+    <button
+      v-if="mobileMenuOpen"
+      type="button"
+      class="mobile-sidebar-mask"
+      aria-label="关闭聊天菜单"
+      @click="mobileMenuOpen = false"
+    />
+    <aside class="chat-sidebar" :class="{ 'chat-sidebar--mobile-open': mobileMenuOpen }">
       <section class="sidebar-top">
         <div class="sidebar-actions">
           <button type="button" class="sidebar-action" @click="createNewChat">
@@ -41,7 +48,7 @@
             type="button"
             class="feature-item"
             :class="{ 'feature-item--active': activeFeature === feature.key }"
-            @click="selectFeature(feature.key, feature.question)"
+            @click="selectFeature(feature.key)"
           >
             <CrmIcon :type="feature.icon" :size="17" />
             <span>{{ feature.label }}</span>
@@ -91,30 +98,58 @@
       </div>
     </aside>
 
-    <section class="chat-main">
+    <DatasourceManager
+      v-if="activeFeature === 'config'"
+      :sources="datasources"
+      :loading="datasourcesLoading"
+      :error="datasourceError"
+      @refresh="loadDatasources"
+      @query="selectDatasource"
+      @close="activeFeature = null"
+    />
+    <section v-else class="chat-main">
       <header class="chat-header">
+        <n-button
+          class="mobile-menu-button"
+          circle
+          quaternary
+          aria-label="聊天菜单"
+          title="聊天菜单"
+          @click="mobileMenuOpen = !mobileMenuOpen"
+        >
+          <template #icon
+            ><n-icon><MenuOutline /></n-icon
+          ></template>
+        </n-button>
         <n-dropdown trigger="click" :options="llmProviderOptions" @select="selectLlmProvider">
           <button type="button" class="agent-picker">
             <span>{{ selectedLlmProviderLabel }}</span>
             <CrmIcon type="iconicon_chevron_down" :size="16" />
           </button>
         </n-dropdown>
-        <div class="chat-header__tools">
-          <n-select v-model:value="timeRange" class="header-select" size="small" :options="timeRangeOptions" />
-          <n-button size="small" quaternary circle>
-            <template #icon>
-              <CrmIcon type="iconicon_refresh" :size="16" />
-            </template>
-          </n-button>
-        </div>
+        <label class="row-limit-control">
+          <span>限制 1000 行数据</span>
+          <n-switch v-model:value="limitRows" size="small" :disabled="loading" aria-label="限制 1000 行数据" />
+        </label>
+        <n-select
+          :value="selectedDatasourceId"
+          :options="datasourceOptions"
+          :disabled="loading"
+          class="datasource-picker"
+          placeholder="选择数据源"
+          aria-label="选择数据源"
+          @update:value="selectDatasource"
+        />
       </header>
 
       <n-scrollbar class="chat-scroll">
         <div class="chat-space">
           <div v-if="currentSession.messages.length === 0" class="empty-state">
             <div class="empty-title">你好，我是客户经营智能体</div>
-            <div class="empty-subtitle">可以问销售专员、客户沟通、外部订单和跟进情况</div>
-            <div class="empty-prompts">
+            <div class="empty-subtitle">{{
+              selectedDatasourceId ? selectedDatasourceName : '可以问销售专员、客户沟通、外部订单和跟进情况'
+            }}</div>
+            <div v-if="!selectedDatasourceId" class="empty-prompts">
               <button
                 v-for="prompt in quickPrompts"
                 :key="prompt"
@@ -138,8 +173,25 @@
                 <CrmIcon type="iconicon_bot" :size="17" />
               </div>
               <div class="message-content">
-                <div v-if="message.role === 'assistant'" class="message-name">
-                  {{ message.llmProviderLabel || selectedLlmProviderLabel }}
+                <div v-if="message.role === 'assistant'" class="message-header">
+                  <span class="message-name">{{ message.llmProviderLabel || '模型未记录' }}</span>
+                  <n-tooltip>
+                    <template #trigger>
+                      <span class="message-sql-action">
+                        <n-button
+                          quaternary
+                          size="small"
+                          class="message-sql-button"
+                          :disabled="!message.sqlQueries?.length"
+                          aria-label="查看 SQL"
+                          @click="openSql(message)"
+                        >
+                          <template #icon><CrmIcon type="iconicon_file-sql_colorful" :size="20" /></template>
+                        </n-button>
+                      </span>
+                    </template>
+                    {{ message.sqlQueries?.length ? '查看 SQL' : '本回答没有可查看的 SQL' }}
+                  </n-tooltip>
                 </div>
                 <div v-if="message.attachments?.length" class="message-attachments">
                   <div
@@ -158,31 +210,54 @@
                     {{ attachmentModeText(message.attachmentMode) }}
                   </span>
                 </div>
+                <AiAgentThinking v-if="message.role === 'assistant'" :content="message.reasoningContent" />
                 <div class="message-text">{{ message.content }}</div>
-                <div v-if="message.points?.length" class="message-points">
+                <AiAgentResult
+                  v-if="message.role === 'assistant'"
+                  :result="message"
+                  :busy="loading"
+                  @action="runResultAction(message, $event)"
+                  @ask="askQuestion($event, undefined, { datasourceId: message.datasourceId })"
+                  @continue="askQuestion('继续查看', String(message.id), { datasourceId: message.datasourceId })"
+                  @export="exportResult(message)"
+                />
+                <AiAgentChart v-if="message.charts?.length" :charts="message.charts" />
+                <div v-if="!message.resultTable && message.points?.length" class="message-points">
                   <ul v-if="plainPoints(message.points).length" class="message-point-list">
                     <li v-for="point in plainPoints(message.points)" :key="point" class="message-point">
                       {{ point }}
                     </li>
                   </ul>
-                  <div v-if="detailRows(message.points).length" class="message-table-wrap">
-                    <div class="message-table-scroll">
+                  <div v-if="visibleDetailRows(message).length" class="message-table-wrap">
+                    <div class="message-table-scroll" tabindex="0" aria-label="查询结果，可上下左右滚动">
                       <table class="message-detail-table">
                         <thead>
                           <tr>
-                            <th v-for="column in detailColumns(message.points)" :key="column">
+                            <th v-for="column in detailColumns(message)" :key="column">
                               {{ column }}
                             </th>
                           </tr>
                         </thead>
                         <tbody>
-                          <tr v-for="(row, rowIndex) in detailRows(message.points)" :key="row.title || rowIndex">
-                            <td v-for="column in detailColumns(message.points)" :key="column">
+                          <tr v-for="(row, rowIndex) in visibleDetailRows(message)" :key="row.title || rowIndex">
+                            <td v-for="column in detailColumns(message)" :key="column">
                               <span :title="detailCell(row, column)">{{ detailCell(row, column) }}</span>
                             </td>
                           </tr>
                         </tbody>
                       </table>
+                    </div>
+                    <div v-if="message.pageInfo" class="message-page-info" role="status">
+                      {{ pageInfoText(message) }}
+                      <button
+                        v-if="message.pageInfo.continuable"
+                        type="button"
+                        class="message-table-toggle"
+                        :disabled="loading"
+                        @click="askQuestion('继续查看', String(message.id))"
+                      >
+                        继续查看
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -201,6 +276,17 @@
                     {{ item.label }}
                   </n-button>
                 </div>
+                <AiAgentExecution v-if="message.role === 'assistant'" :result="message" :data-message-id="message.id" />
+              </div>
+            </div>
+            <div v-if="loading" class="message-row message-row--assistant" role="status" aria-live="polite">
+              <div class="message-avatar">
+                <CrmIcon type="iconicon_bot" :size="17" />
+              </div>
+              <div class="message-content">
+                <div class="message-name">{{ activeLlmProviderLabel }}</div>
+                <AiAgentThinking :content="Object.values(streamReasoning).join('\n\n')" loading />
+                <div v-if="streamText" class="message-text message-stream-text">{{ streamText }}</div>
               </div>
             </div>
           </div>
@@ -209,7 +295,6 @@
 
       <footer class="composer-wrap">
         <div class="context-line">
-          <span>时间范围：{{ timeRangeLabel }}</span>
           <span>数据范围：当前组织全部数据</span>
           <span>证据：客户 / 邮件 / 企微 / 跟进 / 外部订单</span>
         </div>
@@ -297,30 +382,87 @@
         </div>
       </footer>
     </section>
+    <n-modal
+      v-model:show="showSql"
+      preset="card"
+      title="SQL 查询语句"
+      class="agent-sql-modal"
+      :style="{ width: 'min(900px, calc(100vw - 32px))' }"
+      :bordered="false"
+    >
+      <div class="sql-query-list">
+        <section v-for="(sql, index) in selectedSqlQueries" :key="index" class="sql-query">
+          <div class="sql-query-header">
+            <span>SQL{{ selectedSqlQueries.length > 1 ? ` ${index + 1}` : '' }}</span>
+            <n-button quaternary size="small" @click="copySql(sql)">
+              <template #icon
+                ><n-icon><CopyOutline /></n-icon
+              ></template>
+              复制
+            </n-button>
+          </div>
+          <pre class="sql-query-code" tabindex="0"><AiAgentSqlCode :code="sql" /></pre>
+        </section>
+      </div>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
   import { useRouter } from 'vue-router';
-  import { NButton, NDropdown, NIcon, NInput, NScrollbar, NSelect, useMessage } from 'naive-ui';
-  import { CloseOutline, DocumentOutline, ImageOutline, Search, Stop, TrashOutline } from '@vicons/ionicons5';
+  import { useClipboard, useStorage } from '@vueuse/core';
+  import {
+    NButton,
+    NDropdown,
+    NIcon,
+    NInput,
+    NModal,
+    NScrollbar,
+    NSelect,
+    NSwitch,
+    NTooltip,
+    useMessage,
+  } from 'naive-ui';
+  import {
+    CloseOutline,
+    CopyOutline,
+    DocumentOutline,
+    ImageOutline,
+    MenuOutline,
+    Search,
+    Stop,
+    TrashOutline,
+  } from '@vicons/ionicons5';
 
   import type {
+    AiAgentChatParams,
     AiAgentChatResult,
     AiAgentCitation,
+    AiAgentDatasourceItem,
     AiAgentMessageItem,
     AiAgentSessionItem,
   } from '@lib/shared/api/modules/aiAgent';
+  import AiAgentChart from '@lib/shared/components/ai-agent-chart.vue';
+  import AiAgentExecution from '@lib/shared/components/ai-agent-execution.vue';
+  import AiAgentResult from '@lib/shared/components/ai-agent-result.vue';
+  import AiAgentSqlCode from '@lib/shared/components/ai-agent-sql-code.vue';
+  import AiAgentThinking from '@lib/shared/components/ai-agent-thinking.vue';
+  import getAiAgentModelLabel from '@lib/shared/utils/aiAgentModel';
+  import getAiAgentSqlQueries, { formatAiAgentSql } from '@lib/shared/utils/aiAgentSql';
+  import { updateAiAgentReasoning } from '@lib/shared/utils/aiAgentStream';
 
   import CrmIcon from '@/components/pure/crm-icon-font/index.vue';
+  import DatasourceManager from './components/datasourceManager.vue';
 
   import {
     cancelAiAgentChat,
-    chatAiAgent,
     chatAiAgentWithAttachments,
     deleteAiAgentSession,
+    exportAiAgentResult,
+    getAiAgentDatasources,
     getAiAgentMessages,
     getAiAgentSessions,
+    streamAiAgent,
   } from '@/api/modules';
   import useUserStore from '@/store/modules/user';
 
@@ -340,8 +482,24 @@
   interface MessageItem {
     id: number | string;
     role: MessageRole;
+    datasourceId?: string;
+    datasourceType?: string;
     content: string;
+    resultTable?: AiAgentChatResult['resultTable'];
+    predictionTable?: AiAgentChatResult['predictionTable'];
+    recommendedQuestions?: string[];
+    queryQuestion?: string;
+    queryError?: string;
+    modelCalls?: AiAgentChatResult['modelCalls'];
+    durationMs?: AiAgentChatResult['durationMs'];
+    totalTokens?: AiAgentChatResult['totalTokens'];
+    warnings?: string[];
     points?: string[];
+    pageInfo?: AiAgentChatResult['pageInfo'];
+    sqlQueries?: string[];
+    charts?: AiAgentChatResult['charts'];
+    reasoningContent?: string;
+    processSteps?: AiAgentChatResult['processSteps'];
     evidence?: EvidenceItem[];
     llmProviderLabel?: string;
     attachments?: AttachmentItem[];
@@ -381,8 +539,12 @@
 
   const router = useRouter();
   const messageApi = useMessage();
+  const { copy } = useClipboard({ legacy: true });
+  const showSql = ref(false);
+  const selectedSqlQueries = ref<string[]>([]);
   const userStore = useUserStore();
   const activeFeature = ref<FeatureKey | null>(null);
+  const mobileMenuOpen = ref(false);
   const activeSessionId = ref('default');
   const chatSearchOpen = ref(false);
   const chatSearchQuery = ref('');
@@ -391,44 +553,30 @@
   const attachmentInputRef = ref<HTMLInputElement | null>(null);
   const selectedAttachmentFiles = ref<File[]>([]);
   const questionInput = ref('');
-  const timeRange = ref('30d');
   const loading = ref(false);
+  const streamText = ref('');
+  const streamReasoning = ref<Record<string, string>>({});
   const selectedLlmProvider = ref('primary');
+  const datasources = ref<AiAgentDatasourceItem[]>([]);
+  const datasourcesLoading = ref(false);
+  const datasourceError = ref('');
+  const selectedDatasourceId = ref('');
+  const selectedDatasourceName = computed(
+    () => datasources.value.find((s) => s.id === selectedDatasourceId.value)?.name || '数据源不可用'
+  );
+  const datasourceOptions = computed(() => [
+    { label: '内置 CRM', value: '' },
+    ...datasources.value.filter((s) => s.selectedTables.length > 0).map((s) => ({ label: s.name, value: s.id })),
+    ...(selectedDatasourceId.value &&
+    !datasources.value.some((s) => s.id === selectedDatasourceId.value && s.selectedTables.length)
+      ? [{ label: '原数据源不可用', value: selectedDatasourceId.value, disabled: true }]
+      : []),
+  ]);
+  const limitRows = useStorage('crm-ai-agent-limit-rows', true);
   let activeRequestController: AbortController | null = null;
   let activeRequestId: string | null = null;
 
   const allowedAttachmentTypes = new Set(['jpg', 'jpeg', 'png', 'webp', 'pdf', 'docx', 'xls', 'xlsx', 'txt']);
-  const knowledgeIntentPhrases = [
-    '加入知识库',
-    '添加到知识库',
-    '保存到知识库',
-    '存入知识库',
-    '放进知识库',
-    '上传到知识库',
-    '加入公司知识库',
-    '保存为公司知识',
-    '沉淀为知识',
-    '沉淀到知识库',
-  ];
-  const knowledgeQuestionPhrases = [
-    '是否加入知识库',
-    '适合加入知识库',
-    '能否加入知识库',
-    '能不能加入知识库',
-    '可以加入知识库吗',
-  ];
-  const knowledgeNegativePhrases = [
-    '不要加入知识库',
-    '不用加入知识库',
-    '别加入知识库',
-    '不要保存到知识库',
-    '仅当前聊天',
-    '只在当前聊天',
-  ];
-  const knowledgeNegativePattern = /(?:不|别|勿|无需|无须|暂不|禁止).{0,8}(?:知识库|公司知识)/;
-  const knowledgeQuestionPattern =
-    /(?:(?:是否|能否|可否|要不要|需不需要|该不该|能不能|可以不可以).{0,10}(?:知识库|公司知识)|(?:知识库|公司知识).{0,6}(?:吗|么|呢)[？?]?)/;
-  const knowledgeIntentPattern = /(?:加入|添加|保存|存入|存到|放进|放入|上传|沉淀).{0,16}(?:公司)?知识库(?:中|里|内)?/;
 
   const currentUserName = computed(() => userStore.userInfo.name || '当前用户');
   const currentUserInitial = computed(() => currentUserName.value.trim().charAt(0) || '用');
@@ -441,10 +589,11 @@
   });
 
   const llmProviderOptions = [
-    { label: 'GPT-5.6 Sol', key: 'primary' },
-    { label: 'qwen', key: 'qwen' },
-    { label: 'deepseek', key: 'deepseek' },
+    { label: 'GPT-6.1 Sol', key: 'primary' },
+    { label: 'DeepSeek-Flash', key: 'deepseek' },
   ];
+
+  const activeLlmProviderLabel = ref('');
 
   const selectedLlmProviderLabel = computed(
     () =>
@@ -515,13 +664,6 @@
       })
       .map((source) => buildEvidenceItem(source, findCitationForEvidence(source, citations)));
   }
-
-  const timeRangeOptions = [
-    { label: '近 7 天', value: '7d' },
-    { label: '近 30 天', value: '30d' },
-    { label: '本季度', value: 'quarter' },
-    { label: '本年度', value: 'year' },
-  ];
 
   const features: FeatureItem[] = [
     {
@@ -615,9 +757,6 @@
     },
   ]);
 
-  const timeRangeLabel = computed(
-    () => timeRangeOptions.find((item) => item.value === timeRange.value)?.label || '近 30 天'
-  );
   const currentSession = computed(
     () => sessions.value.find((item) => item.id === activeSessionId.value) || sessions.value[0]
   );
@@ -643,6 +782,7 @@
     return {
       id: Date.now() + 1,
       role: 'assistant',
+      datasourceId: selectedDatasourceId.value || undefined,
       content: '后端智能体接口暂时不可用，请确认 CRM 后端已启动并已应用 ai_agent 相关表结构。',
       points: ['接口：POST /ai-agent/chat。', '需要当前账号已开通智能体功能。', '外部订单查询需要配置只读数据源。'],
       evidence: buildEvidenceItems(['ai_agent_session', 'ai_agent_message']),
@@ -689,15 +829,50 @@
     );
   }
 
-  function toAssistantMessage(response: AiAgentChatResult, llmProviderLabel?: string): MessageItem {
+  function modelLabel(response?: Partial<AiAgentChatResult>) {
+    return getAiAgentModelLabel(response) || (response?.llmProvider === 'none' ? '智能助手' : '模型未记录');
+  }
+
+  function toAssistantMessage(response: AiAgentChatResult): MessageItem {
     return {
       id: response.messageId || `${Date.now()}-assistant`,
       role: 'assistant',
+      datasourceId: response.datasourceId,
+      datasourceType: response.datasourceType,
       content: response.answer,
       points: buildAssistantPoints(response),
+      pageInfo: response.pageInfo,
+      sqlQueries: getAiAgentSqlQueries(response),
+      charts: response.charts,
+      resultTable: response.resultTable,
+      predictionTable: response.predictionTable,
+      recommendedQuestions: response.recommendedQuestions,
+      queryQuestion: response.queryQuestion,
+      queryError: response.queryError,
+      modelCalls: response.modelCalls,
+      durationMs: response.durationMs,
+      totalTokens: response.totalTokens,
+      warnings: response.warnings,
+      reasoningContent: response.reasoningContent,
+      processSteps: response.processSteps,
       evidence: buildAssistantEvidence(response),
-      llmProviderLabel,
+      llmProviderLabel: modelLabel(response),
     };
+  }
+
+  function openSql(message: MessageItem) {
+    if (!message.sqlQueries?.length) return;
+    selectedSqlQueries.value = message.sqlQueries.map((sql) => formatAiAgentSql(sql, message.datasourceType));
+    showSql.value = true;
+  }
+
+  async function copySql(sql: string) {
+    try {
+      await copy(sql);
+      messageApi.success('SQL 已复制');
+    } catch {
+      messageApi.error('复制失败，请选择 SQL 手动复制');
+    }
   }
 
   function parseStoredAssistantResponse(evidenceJson?: string) {
@@ -783,9 +958,26 @@
     return {
       id: item.id,
       role: item.role,
+      datasourceId: storedResponse?.datasourceId,
+      datasourceType: storedResponse?.datasourceType,
       content: item.content || storedResponse?.answer || '',
       points: buildAssistantPoints(storedResponse),
+      pageInfo: storedResponse?.pageInfo,
+      sqlQueries: getAiAgentSqlQueries(storedResponse),
+      charts: storedResponse?.charts,
+      resultTable: storedResponse?.resultTable,
+      predictionTable: storedResponse?.predictionTable,
+      recommendedQuestions: storedResponse?.recommendedQuestions,
+      queryQuestion: storedResponse?.queryQuestion,
+      queryError: storedResponse?.queryError,
+      modelCalls: storedResponse?.modelCalls,
+      durationMs: storedResponse?.durationMs,
+      totalTokens: storedResponse?.totalTokens,
+      warnings: storedResponse?.warnings,
+      reasoningContent: storedResponse?.reasoningContent,
+      processSteps: storedResponse?.processSteps,
       evidence: buildAssistantEvidence(storedResponse),
+      llmProviderLabel: item.role === 'assistant' ? modelLabel(storedResponse) : undefined,
       attachments: attachmentSnapshot?.attachments,
       attachmentMode: attachmentSnapshot?.attachmentMode,
     };
@@ -806,28 +998,11 @@
     return `${(size / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  function isKnowledgeIntent(question: string) {
-    const text = question.replace(/\s+/g, '');
-    if (knowledgeNegativePhrases.some((phrase) => text.includes(phrase)) || knowledgeNegativePattern.test(text)) {
-      return false;
-    }
-    if (
-      knowledgeQuestionPhrases.some((phrase) => text.includes(phrase)) ||
-      knowledgeQuestionPattern.test(text) ||
-      /[?？]/.test(text)
-    ) {
-      return false;
-    }
-    return knowledgeIntentPhrases.some((phrase) => text.includes(phrase)) || knowledgeIntentPattern.test(text);
+  function attachmentModeText(_mode: AttachmentMode) {
+    return '用于当前聊天';
   }
 
-  function attachmentModeText(mode: AttachmentMode) {
-    return mode === 'KNOWLEDGE' ? '发送后加入公司知识库' : '用于当前聊天';
-  }
-
-  const selectedAttachmentMode = computed<AttachmentMode>(() =>
-    isKnowledgeIntent(questionInput.value) ? 'KNOWLEDGE' : 'CHAT'
-  );
+  const selectedAttachmentMode = computed<AttachmentMode>(() => 'CHAT');
   const selectedAttachmentModeText = computed(() => attachmentModeText(selectedAttachmentMode.value));
 
   function openAttachmentPicker() {
@@ -941,16 +1116,35 @@
       .filter((row) => row.title || Object.keys(row.fields).length > 0);
   }
 
-  function detailColumns(points: string[] = []) {
-    const columns = ['序号'];
-    detailRows(points).forEach((row) => {
-      Object.keys(row.fields).forEach((label) => {
-        if (!columns.includes(label)) {
-          columns.push(label);
-        }
-      });
-    });
-    return columns;
+  const detailTables = computed(
+    () =>
+      new Map(
+        currentSession.value.messages.map((message) => {
+          const rows = detailRows(message.points);
+          const columns = [...new Set(['序号', ...rows.flatMap((row) => Object.keys(row.fields))])];
+          return [message.id, { rows, columns }] as const;
+        })
+      )
+  );
+
+  function visibleDetailRows(message: MessageItem) {
+    return detailTables.value.get(message.id)?.rows || [];
+  }
+
+  function pageInfoText(message: MessageItem) {
+    const page = message.pageInfo;
+    if (!page) return '';
+    const visible = visibleDetailRows(message).length;
+    const total = page.total == null ? '总数尚未核实' : `符合条件共 ${page.total} ${page.unit}`;
+    let remaining = '剩余数量未知';
+    if (page.remaining != null) {
+      remaining = page.remaining > 0 ? `还有 ${page.remaining} ${page.unit}未获取` : '已获取全部结果';
+    }
+    return `${total}；本次已获取 ${page.returned} ${page.unit}，当前表格展示 ${visible} ${page.unit}；${remaining}。`;
+  }
+
+  function detailColumns(message: MessageItem) {
+    return detailTables.value.get(message.id)?.columns || [];
   }
 
   function detailCell(row: DetailTableRow, column: string) {
@@ -967,6 +1161,10 @@
       session.messages = (remoteMessages || []).map(toMessage);
       session.question = session.messages.find((message) => message.role === 'user')?.content || session.question;
       session.messagesLoaded = true;
+      if (sessionId === activeSessionId.value) {
+        selectedDatasourceId.value =
+          [...session.messages].reverse().find((m) => m.role === 'assistant')?.datasourceId || '';
+      }
     } catch {
       // History loading is best-effort; asking new questions still works if chat API is available.
     }
@@ -1017,12 +1215,17 @@
   }
 
   async function selectSession(sessionId: string) {
+    if (loading.value) return;
+    mobileMenuOpen.value = false;
+    activeFeature.value = null;
     clearSelectedAttachments();
     activeSessionId.value = sessionId;
     const session = currentSession.value;
     if (!session.messagesLoaded) {
       await loadMessages(sessionId);
     }
+    selectedDatasourceId.value =
+      [...session.messages].reverse().find((m) => m.role === 'assistant')?.datasourceId || '';
   }
 
   function openEvidence(item: EvidenceItem) {
@@ -1073,7 +1276,11 @@
     }
   }
 
-  async function askQuestion(question: string) {
+  async function askQuestion(
+    question: string,
+    continueFromMessageId?: string,
+    operation?: { action?: AiAgentChatParams['action']; referenceMessageId?: string; datasourceId?: string }
+  ) {
     const text = question.trim();
     if (!text) {
       return;
@@ -1082,7 +1289,7 @@
       return;
     }
     const session = currentSession.value;
-    const attachmentFiles = [...selectedAttachmentFiles.value];
+    const attachmentFiles = continueFromMessageId || operation ? [] : [...selectedAttachmentFiles.value];
     const attachmentMode = selectedAttachmentMode.value;
     if (session.messages.length === 0) {
       session.title = text.length > 14 ? `${text.slice(0, 14)}...` : text;
@@ -1100,21 +1307,27 @@
       })),
       attachmentMode: attachmentFiles.length ? attachmentMode : undefined,
     });
-    questionInput.value = '';
+    if (!continueFromMessageId) questionInput.value = '';
     loading.value = true;
+    streamText.value = '';
+    streamReasoning.value = {};
     const requestController = new AbortController();
     const requestId = createChatRequestId();
     activeRequestController = requestController;
     activeRequestId = requestId;
     const llmProvider = selectedLlmProvider.value;
-    const llmProviderLabel = selectedLlmProviderLabel.value;
+    activeLlmProviderLabel.value = selectedLlmProviderLabel.value;
     try {
       const request = {
+        datasourceId: operation ? operation.datasourceId : selectedDatasourceId.value || undefined,
         requestId,
         sessionId: isLocalSession(session.id) ? undefined : session.id,
+        continueFromMessageId,
+        action: operation?.action,
+        referenceMessageId: operation?.referenceMessageId,
         question: text,
         stream: false,
-        timeRange: timeRange.value,
+        limitRows: limitRows.value,
         dataScope: 'all',
         llmProvider,
         context: {
@@ -1123,14 +1336,22 @@
       };
       const response = attachmentFiles.length
         ? await chatAiAgentWithAttachments(request, attachmentFiles, requestController.signal)
-        : await chatAiAgent(request, requestController.signal);
+        : await streamAiAgent(
+            request,
+            (event) => {
+              streamReasoning.value = updateAiAgentReasoning(streamReasoning.value, event);
+              if (event.event === 'reset') streamText.value = '';
+              if (event.event === 'delta') streamText.value += event.data.text || '';
+            },
+            requestController.signal
+          );
       if (!response?.answer?.trim()) {
         throw new Error('智能体未返回可显示内容');
       }
       session.id = response.sessionId || session.id;
       activeSessionId.value = session.id;
-      session.messages.push(toAssistantMessage(response, llmProviderLabel));
-      clearSelectedAttachments();
+      session.messages.push(toAssistantMessage(response));
+      if (!continueFromMessageId) clearSelectedAttachments();
     } catch (error) {
       if (isCanceledRequest(error, requestController)) {
         messageApi.info('已停止回答');
@@ -1153,11 +1374,44 @@
         activeRequestController = null;
         activeRequestId = null;
         loading.value = false;
+        streamText.value = '';
+        streamReasoning.value = {};
       }
     }
   }
 
+  function runResultAction(message: MessageItem, action: AiAgentChatParams['action']) {
+    const labels: Record<string, string> = {
+      ANALYSIS: '分析查询结果',
+      PREDICT: '预测查询数据',
+      REGENERATE: '重新生成',
+    };
+    const title = labels[action || 'REGENERATE'] || '重新生成';
+    return askQuestion(title, undefined, {
+      action,
+      referenceMessageId: String(message.id),
+      datasourceId: message.datasourceId,
+    });
+  }
+  async function exportResult(message: MessageItem) {
+    try {
+      const blob = await exportAiAgentResult(currentSession.value.id, String(message.id), message.datasourceId);
+      if (!blob.type.includes('spreadsheetml')) throw new Error('导出失败');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = '查询结果.xlsx';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      messageApi.error('导出失败，请检查权限或重新查询');
+    }
+  }
+
   function createNewChat() {
+    if (loading.value) return;
+    mobileMenuOpen.value = false;
+    activeFeature.value = null;
     clearSelectedAttachments();
     const id = `chat-${Date.now()}`;
     sessions.value.unshift({
@@ -1172,6 +1426,39 @@
     });
     activeSessionId.value = id;
     questionInput.value = '';
+  }
+
+  async function loadDatasources() {
+    datasourcesLoading.value = true;
+    datasourceError.value = '';
+    try {
+      const previous = datasources.value.find((s) => s.id === selectedDatasourceId.value);
+      const loaded = await getAiAgentDatasources();
+      if (!Array.isArray(loaded)) throw new Error('数据源接口未返回列表');
+      datasources.value = loaded;
+      const current = datasources.value.find((s) => s.id === selectedDatasourceId.value);
+      if (
+        selectedDatasourceId.value &&
+        (!current?.selectedTables.length || (previous && previous.revision !== current.revision))
+      ) {
+        selectedDatasourceId.value = current?.selectedTables.length ? current.id : '';
+        const feature = activeFeature.value;
+        createNewChat();
+        activeFeature.value = feature;
+      }
+    } catch {
+      datasourceError.value = '请检查后端服务和数据源接口是否已更新。';
+    } finally {
+      datasourcesLoading.value = false;
+    }
+  }
+  function selectDatasource(id: string) {
+    if (loading.value) return;
+    if (id !== selectedDatasourceId.value) {
+      selectedDatasourceId.value = id;
+      createNewChat();
+    }
+    activeFeature.value = null;
   }
 
   async function deleteSession(sessionId: string) {
@@ -1202,21 +1489,26 @@
       if (!nextSession.messagesLoaded && !isLocalSession(nextSession.id)) {
         await loadMessages(nextSession.id);
       }
+      selectedDatasourceId.value =
+        [...nextSession.messages].reverse().find((m) => m.role === 'assistant')?.datasourceId || '';
     }
   }
 
-  function selectFeature(key: FeatureKey, question: string) {
+  function selectFeature(key: FeatureKey) {
+    if (loading.value) return;
+    mobileMenuOpen.value = false;
     activeFeature.value = key;
-    askQuestion(question);
   }
 
   onMounted(() => {
     loadSessions();
+    loadDatasources();
   });
 </script>
 
 <style lang="less" scoped>
   .crm-chat-shell {
+    position: relative;
     display: grid;
     overflow: hidden;
     height: 100%;
@@ -1230,6 +1522,10 @@
     flex-direction: column;
     border-right: 1px solid var(--text-n8);
     background: var(--text-n10);
+  }
+  .mobile-menu-button,
+  .mobile-sidebar-mask {
+    display: none;
   }
   .sidebar-top {
     display: flex;
@@ -1451,6 +1747,19 @@
     flex: 0 0 auto;
     gap: 16px;
   }
+  .row-limit-control {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    font-size: 12px;
+    white-space: nowrap;
+    gap: 8px;
+  }
+  .datasource-picker {
+    width: 250px;
+    max-width: 45%;
+    flex-shrink: 0;
+  }
   .agent-picker {
     display: flex;
     align-items: center;
@@ -1458,14 +1767,6 @@
     font-weight: 600;
     color: var(--text-n1);
     gap: 4px;
-  }
-  .chat-header__tools {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .header-select {
-    width: 128px;
   }
   .chat-scroll {
     min-height: 0;
@@ -1549,6 +1850,7 @@
     min-width: 0;
   }
   .message-row--assistant .message-content {
+    flex: 1;
     max-width: calc(100% - 46px);
   }
   .message-row--user .message-content {
@@ -1563,14 +1865,70 @@
     color: var(--text-n3);
     line-height: 18px;
   }
+  .message-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 28px;
+    gap: 12px;
+  }
+  .message-sql-action {
+    display: inline-flex;
+    flex-shrink: 0;
+  }
+  .message-sql-button {
+    width: 32px;
+    height: 28px;
+  }
+  .sql-query-list {
+    overflow: auto;
+    max-height: min(65vh, 640px);
+  }
+  .sql-query + .sql-query {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--text-n8);
+  }
+  .sql-query-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: var(--text-n3);
+  }
+  .sql-query-code {
+    overflow: auto;
+    margin: 0;
+    padding: 16px;
+    min-height: 160px;
+    font-size: 13px;
+    font-family: Consolas, 'Courier New', monospace;
+    border: 1px solid var(--text-n8);
+    border-radius: 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-n1);
+    background: var(--text-n9);
+    line-height: 22px;
+  }
   .message-text,
   .message-points {
     font-size: 14px;
     color: var(--text-n1);
     line-height: 24px;
   }
+  .message-page-info {
+    margin-top: 8px;
+    color: var(--text-n2);
+    line-height: 24px;
+  }
   .message-text {
     margin-top: 4px;
+  }
+  .message-stream-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .message-row--user .message-text {
     margin-top: 0;
@@ -1628,14 +1986,30 @@
     width: min(100%, 980px);
     min-width: 0;
   }
+  .message-table-toggle {
+    display: block;
+    margin: 8px auto 0;
+    padding: 3px 12px;
+    border: 0;
+    border-radius: 4px;
+    color: var(--primary-8);
+    background: transparent;
+    cursor: pointer;
+  }
+  .message-table-toggle:hover {
+    text-decoration: underline;
+  }
   .message-table-scroll {
     overflow-x: auto;
+    overflow-y: auto;
     width: 100%;
+    max-height: min(520px, 60vh);
     border: 1px solid var(--text-n8);
     border-radius: 8px;
     background: var(--text-n10);
   }
   .message-table-scroll::-webkit-scrollbar {
+    width: 8px;
     height: 8px;
   }
   .message-table-scroll::-webkit-scrollbar-thumb {
@@ -1674,8 +2048,13 @@
     background: var(--text-n10);
   }
   .message-detail-table th:first-child {
-    z-index: 2;
+    z-index: 3;
     background: var(--text-n9);
+  }
+  .message-detail-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
   .message-detail-table tr:last-child td {
     border-bottom: 0;
@@ -1811,6 +2190,73 @@
     }
     .empty-prompts {
       grid-template-columns: 1fr;
+    }
+  }
+  @media (max-width: 768px) {
+    .crm-chat-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .chat-sidebar {
+      display: none;
+    }
+    .mobile-menu-button {
+      display: inline-flex;
+    }
+    .mobile-sidebar-mask {
+      position: fixed;
+      z-index: 1000;
+      display: block;
+      border: 0;
+      background: rgb(0 0 0 / 25%);
+      inset: 0;
+    }
+    .chat-sidebar--mobile-open {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 1001;
+      display: flex;
+      width: min(292px, 85%);
+    }
+    .chat-header {
+      display: grid;
+      padding: 10px 16px;
+      height: auto;
+      grid-template-columns: 32px minmax(0, 1fr);
+      gap: 8px;
+    }
+    .agent-picker {
+      font-size: 16px;
+    }
+    .datasource-picker {
+      grid-column: 1 / -1;
+      width: 100%;
+      max-width: 100%;
+    }
+    .row-limit-control {
+      justify-content: space-between;
+      margin-left: 0;
+      grid-column: 1 / -1;
+    }
+    .chat-space {
+      padding: 16px;
+    }
+    .composer-wrap {
+      padding: 12px 16px 16px;
+    }
+    .composer-input {
+      min-width: 0;
+    }
+    .empty-title {
+      font-size: 22px;
+      line-height: 32px;
+    }
+    .crm-chat-shell--config {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .crm-chat-shell--config .chat-sidebar {
+      display: none;
     }
   }
 </style>

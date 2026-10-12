@@ -281,7 +281,7 @@
   import { operatorOptionsMap, scopeOptions } from '../index';
   import type { FilterForm, FilterFormItem } from '../type';
   import { getDefaultOperator } from '../utils';
-  import { SelectMixedOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectMixedOption } from 'naive-ui/es/select/src/interface';
 
   const { t } = useI18n();
 

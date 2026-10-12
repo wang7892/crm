@@ -1,1619 +1,189 @@
 package cn.cordys.crm.aiagent.service;
 
 import cn.cordys.common.constants.InternalUserView;
+import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.dto.DeptDataPermissionDTO;
+import cn.cordys.common.service.DataScopeService;
+import cn.cordys.common.util.JSON;
 import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.aiagent.config.AiAgentLlmProperties;
 import cn.cordys.crm.aiagent.domain.AiAgentMessage;
 import cn.cordys.crm.aiagent.domain.AiAgentSession;
-import cn.cordys.crm.aiagent.dto.AiAgentContext;
-import cn.cordys.crm.aiagent.dto.AiAgentTimeWindow;
-import cn.cordys.crm.aiagent.dto.ParsedAiAgentQuestion;
-import cn.cordys.crm.aiagent.dto.internal.AiAgentCommunicationRow;
-import cn.cordys.crm.aiagent.dto.internal.AiAgentCustomerRow;
-import cn.cordys.crm.aiagent.dto.internal.AiAgentFollowRecordRow;
-import cn.cordys.crm.aiagent.dto.internal.AiAgentUnansweredQuestionRow;
-import cn.cordys.crm.aiagent.dto.internal.ExternalOrderQueryResult;
-import cn.cordys.crm.aiagent.dto.internal.ExternalOrderRow;
-import cn.cordys.crm.aiagent.dto.query.AiAgentQueryFilter;
-import cn.cordys.crm.aiagent.dto.query.AiAgentQueryMetric;
-import cn.cordys.crm.aiagent.dto.query.AiAgentQueryOrder;
-import cn.cordys.crm.aiagent.dto.query.AiAgentQueryPlan;
-import cn.cordys.crm.aiagent.dto.query.AiAgentQueryResult;
+import cn.cordys.crm.aiagent.dto.*;
 import cn.cordys.crm.aiagent.dto.request.AiAgentChatRequest;
-import cn.cordys.crm.aiagent.dto.response.AiAgentChatResponse;
-import cn.cordys.crm.aiagent.dto.response.AiAgentCitationDTO;
-import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
-import cn.cordys.crm.aiagent.dto.response.AiAgentToolCallDTO;
-import cn.cordys.crm.aiagent.mapper.AiAgentInternalMapper;
-import cn.cordys.crm.aiagent.tool.CommunicationTools;
-import cn.cordys.crm.aiagent.tool.CustomerTools;
-import cn.cordys.crm.aiagent.tool.ExternalOrderTools;
+import cn.cordys.crm.aiagent.dto.response.*;
 import cn.cordys.security.SessionUtils;
 import jakarta.annotation.Resource;
 import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.math.BigDecimal;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.*;
+import java.util.regex.*;
 
+/** No database transaction spans model calls; audit writes use short separate transactions. */
 @Service
-@Transactional(rollbackFor = Exception.class, noRollbackFor = AiAgentRequestCancelledException.class)
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
 public class AiAgentChatService {
-
-    private static final Logger log = LoggerFactory.getLogger(AiAgentChatService.class);
     private static final ZoneId AGENT_ZONE = ZoneId.of("Asia/Shanghai");
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-    private static final Pattern EXPLICIT_YEAR_MONTH_PATTERN = Pattern.compile(
-            "(20\\d{2})\\s*年\\s*(1[0-2]|0?[1-9]|十一|十二|十|[一二三四五六七八九])\\s*月(?:份)?");
+    private static final Pattern EXPLICIT_YEAR_MONTH_PATTERN = Pattern.compile("(20\\d{2})\\s*年\\s*(1[0-2]|0?[1-9]|十一|十二|十|[一二三四五六七八九])\\s*月(?:份)?");
     private static final Pattern EXPLICIT_YEAR_PATTERN = Pattern.compile("(20\\d{2})\\s*年");
-    private static final Pattern RECENT_MONTHS_PATTERN = Pattern.compile(
-            "(?:最近|近)\\s*(\\d{1,2}|十一|十二|十|[一二三四五六七八九])\\s*个?月");
-    private static final int STALE_FOLLOW_DAYS = 30;
-    private static final int LOW_COMMUNICATION_COUNT = 2;
-    private static final Map<String, String> CONTRACT_FIELD_LABELS = Map.ofEntries(
-            Map.entry("id", "合同ID"),
-            Map.entry("order_no", "订单号"),
-            Map.entry("product_name", "产品名称"),
-            Map.entry("manager", "负责人"),
-            Map.entry("customer", "客户名称"),
-            Map.entry("order_status", "订单状态"),
-            Map.entry("composition", "成分"),
-            Map.entry("width", "门幅"),
-            Map.entry("weight", "克重"),
-            Map.entry("total_quantity", "总数量"),
-            Map.entry("unit", "单位"),
-            Map.entry("quality_requirement", "品质要求"),
-            Map.entry("process_technology", "工艺要求"),
-            Map.entry("packaging_requirement", "包装要求"),
-            Map.entry("remark", "备注"),
-            Map.entry("hot_stamping_requirement", "烫金要求"),
-            Map.entry("shipping_mark", "唛头"),
-            Map.entry("shipping_sample_remark", "船样备注"),
-            Map.entry("creator", "创建人"),
-            Map.entry("create_time", "创建时间"),
-            Map.entry("settlement_method", "结算方式"),
-            Map.entry("delivery_method", "交货方式"),
-            Map.entry("overload_percent", "溢装比例"),
-            Map.entry("shortage_percent", "短装比例"),
-            Map.entry("amount", "金额"),
-            Map.entry("currency", "币种"),
-            Map.entry("release_date", "下达日期"),
-            Map.entry("updater", "更新人"),
-            Map.entry("update_time", "更新时间"),
-            Map.entry("process_order_no", "生产单号"),
-            Map.entry("exchange_rate", "汇率"),
-            Map.entry("work_instruction", "工作指示"),
-            Map.entry("approval_status", "审批状态"),
-            Map.entry("length_coefficient", "长度系数"),
-            Map.entry("inventory_enabled", "是否启用库存"),
-            Map.entry("delivery_date", "交期")
-    );
+    private static final Pattern RECENT_MONTHS_PATTERN = Pattern.compile("(?:最近|近)\\s*(\\d{1,2}|十一|十二|十|[一二三四五六七八九])\\s*个?月");
+    private static final Pattern RECENT_DAYS_PATTERN = Pattern.compile("(?:最近|近)\\s*(\\d{1,3})\\s*天");
 
-    @Resource
-    private AiAgentAuditService aiAgentAuditService;
-    @Resource
-    private AiAgentInternalMapper aiAgentInternalMapper;
-    @Resource
-    private CustomerTools customerTools;
-    @Resource
-    private CommunicationTools communicationTools;
-    @Resource
-    private ExternalOrderTools externalOrderTools;
-    @Resource
-    private LlmAiAgentQuestionParser llmAiAgentQuestionParser;
-    @Resource
-    private AiAgentLlmProperties aiAgentLlmProperties;
-    @Resource
-    private AiAgentSqlQueryService aiAgentSqlQueryService;
-    @Resource
-    private AiAgentMessageBodyAccessService aiAgentMessageBodyAccessService;
-    @Resource
-    private AiAgentDatabaseQueryService aiAgentDatabaseQueryService;
-    @Resource
-    private AiAgentKnowledgeService aiAgentKnowledgeService;
-    @Resource
-    private AiAgentSemanticRuleRetrievalService semanticRuleRetrievalService;
-    @Resource
-    private AiAgentSemanticPlanGuard semanticPlanGuard;
-    @Resource
-    private AiAgentAttachmentService aiAgentAttachmentService;
-    @Resource
-    private AiAgentRequestCancellationService aiAgentRequestCancellationService;
+    @Resource private AiAgentAuditService aiAgentAuditService;
+    @Resource private LlmAiAgentQuestionParser llmAiAgentQuestionParser;
+    @Resource private AiAgentLlmProperties aiAgentLlmProperties;
+    @Resource private AiAgentSqlQueryService aiAgentSqlQueryService;
+    @Resource private AiAgentAttachmentService aiAgentAttachmentService;
+    @Resource private AiAgentRequestCancellationService aiAgentRequestCancellationService;
+    @Resource private DataScopeService dataScopeService;
+    @Resource private AiAgentConversationService conversationService;
+    @Resource private AiAgentDatasourceService datasourceService;
+    @Resource private AiAgentSqlBotResultService sqlBotResults;
 
     public AiAgentChatResponse chat(AiAgentChatRequest request) {
-        String userId = SessionUtils.getUserId();
-        String orgId = OrganizationContext.getOrganizationId();
-
-        AiAgentSession session = aiAgentAuditService.ensureSession(request.getSessionId(), request.getQuestion(), userId, orgId);
-        AiAgentMessage userMessage = aiAgentAuditService.saveMessage(
-                session.getId(), "user", request.getQuestion(), null, null, userId);
-        aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
-
-        AiAgentContext context = createContext(userId, orgId, request);
-
-        AiAgentChatResponse response = route(request.getQuestion(), context);
-        aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
-        recordQuestionBankUsage(request.getQuestion(), response, context, session, userMessage);
-        addKnowledgeSearchTrace(response, context.getKnowledgeSearch());
-        addSemanticRuleTrace(response, context);
-        addLlmAttemptTrace(response, context);
-        AiAgentMessage assistantMessage = aiAgentAuditService.saveMessage(
-                session.getId(),
-                "assistant",
-                response.getAnswer(),
-                response.getIntent(),
-                aiAgentAuditService.responseEvidenceSnapshot(response),
-                userId
-        );
-        response.setSessionId(session.getId());
-        response.setMessageId(assistantMessage.getId());
-        aiAgentAuditService.saveToolLogs(assistantMessage.getId(), response.getTools(), userId);
-        aiAgentAuditService.touch(session.getId(), userId);
-        return response;
-    }
-
-    private void recordQuestionBankUsage(String question, AiAgentChatResponse response, AiAgentContext context,
-                                         AiAgentSession session, AiAgentMessage userMessage) {
-        if (response == null || StringUtils.isBlank(response.getIntent())) {
-            aiAgentAuditService.recordUnansweredQuestion(
-                    context.getOrganizationId(), context.getUserId(), session.getId(), userMessage.getId(), question, "ERROR");
-            return;
-        }
-        if (isUnansweredFallback(question, response)) {
-            aiAgentAuditService.recordUnansweredQuestion(
-                    context.getOrganizationId(), context.getUserId(), session.getId(), userMessage.getId(), question, "NO_MATCH");
-            return;
-        }
-        aiAgentAuditService.recordAnswerableQuestionHit(
-                context.getOrganizationId(),
-                response.getIntent(),
-                question,
-                response.getAnswer(),
-                response.getTools().isEmpty() ? null : response.getTools().get(0).getName(),
-                response.getEvidence(),
-                context.getUserId());
-    }
-
-    private boolean isUnansweredFallback(String question, AiAgentChatResponse response) {
-        return (StringUtils.equals(response.getIntent(), "HELP")
-                || StringUtils.equals(response.getIntent(), "CRM_DATABASE_QUERY_REJECTED")
-                || StringUtils.equals(response.getIntent(), "QUESTION_CLARIFICATION_REQUIRED"))
-                && !isHelpQuestion(question);
-    }
-
-    private AiAgentChatResponse route(String rawQuestion, AiAgentContext context) {
-        String question = StringUtils.defaultString(rawQuestion).trim();
-        if (aiAgentMessageBodyAccessService.isMessageBodyQuestion(question)) {
-            return aiAgentMessageBodyAccessService.explainAccessPolicy();
-        }
-        if (isSensitiveOrUnauthorizedProbe(question)) {
-            return refusal(question);
-        }
-        if (containsAny(question, "最近用户问了哪些没答上", "未回答问题", "没答上的问题", "不能回答的问题")) {
-            return pendingUnansweredQuestions(context);
-        }
-        if (containsAny(question, "加入可回答问题库", "把这个问题加入", "转入可回答")) {
-            return questionBankPromotionGuide();
-        }
-        if (containsAny(question, "数据来源", "来自哪个表", "企微数据来自哪里", "邮件数据来自哪里",
-                "支持哪些数据源", "这些订单来自哪个表")) {
-            return dataSourceGuide(question);
-        }
-        if (containsAny(question, "为什么订单数据为空", "订单数据为空", "外部订单数据源没配置")) {
-            return externalOrderConfigGuide();
-        }
-        if (containsAny(question, "数据范围", "全公司、我的团队、仅本人", "全公司 我的团队 仅本人")) {
-            return dataScopeGuide();
-        }
-        AiAgentSemanticRuleRetrievalService.RetrievalResult semanticRetrieval =
-                retrieveSemanticKnowledge(question, context.getOrganizationId());
-        context.setSemanticRuleConflict(semanticRetrieval.conflict());
-        context.setSemanticRuleFallbackReason(semanticRetrieval.fallbackReason());
-        context.setSemanticRuleMatches(semanticRetrieval.conflict() ? List.of() : semanticRetrieval.matches());
-
-        context.setKnowledgeSearch(retrieveDocumentKnowledge(question, context.getOrganizationId()));
-        if (!semanticRuleRetrievalService.isEnabled() || context.getSemanticRuleMatches().isEmpty()) {
-            AiAgentChatResponse knowledgeGuidedResponse = routeKnowledgeGuidedQuestion(question, context);
-            if (knowledgeGuidedResponse != null) {
-                return knowledgeGuidedResponse;
-            }
-        }
-        ParsedAiAgentQuestion parsedQuestion = llmAiAgentQuestionParser.parse(
-                question, context.getLlmProvider(), context);
-        boolean semanticRepairAttempted = false;
-        if (parsedQuestion == null && semanticPlanGuard.isEnforced(context)) {
-            parsedQuestion = repairSemanticPlan(
-                    question, context, "大模型第一次未返回合法 JSON 查询计划");
-            semanticRepairAttempted = true;
-        }
-        context.setLlmParseAttempted(true);
-        context.setLlmParsedQuestion(parsedQuestion);
-        logLlmParsedQuestion(question, parsedQuestion);
-        AiAgentChatResponse llmResponse = routeParsedQuestion(parsedQuestion, context, !semanticRepairAttempted);
-        if (llmResponse != null) {
-            return llmResponse;
-        }
-        AiAgentChatResponse stableRuleResponse = routeStableRuleQuestion(question, context);
-        if (stableRuleResponse != null) {
-            markDeterministicFallback(stableRuleResponse, parsedQuestion);
-            return stableRuleResponse;
-        }
-        if (isCustomerNameKeywordQuestion(question)) {
-            return customerSearchByKeyword(question, context);
-        }
-        if (containsAny(question, "最近新增了哪些客户", "新增了哪些客户", "最近新增客户", "新客户")) {
-            return recentCustomers(question, context);
-        }
-        if (containsAny(question, "我名下有哪些客户", "我的客户有哪些", "我有哪些客户", "我的团队有哪些客户", "全公司有哪些客户")
-                && !containsAny(question, "需要跟进", "优先拜访", "值得关注")) {
-            return visibleCustomerList(question, context);
-        }
-        if (containsAny(question, "是谁负责", "属于哪个销售", "哪个销售负责", "负责人是谁")) {
-            return customerFieldLookup(question, context, "CUSTOMER_OWNER_LOOKUP", "customer_owner_lookup", "负责人");
-        }
-        if (containsAny(question, "联系方式", "联系电话", "电话邮箱", "电话", "邮箱")) {
-            return customerFieldLookup(question, context, "CUSTOMER_CONTACT_LOOKUP", "customer_contact_lookup", "联系方式");
-        }
-        if (containsAny(question, "最近一次跟进", "上次跟进是什么时候")) {
-            return customerFieldLookup(question, context, "CUSTOMER_LAST_FOLLOW_LOOKUP", "customer_last_follow_lookup", "最近跟进时间");
-        }
-        if (containsAny(question, "备注里写了什么", "客户备注", "备注是什么")) {
-            return customerFieldLookup(question, context, "CUSTOMER_REMARK_LOOKUP", "customer_remark_lookup", "备注");
-        }
-        if (containsAny(question, "在哪个地区", "客户地区", "地区是什么")) {
-            return customerFieldLookup(question, context, "CUSTOMER_REGION_LOOKUP", "customer_region_lookup", "地区");
-        }
-        if (containsAny(question, "external_userid", "企微 external", "企微ID", "企微id")) {
-            return customerFieldLookup(question, context, "CUSTOMER_WECOM_ID_LOOKUP", "customer_wecom_id_lookup", "企微ID");
-        }
-        if (containsAny(question, "roomid", "微信群", "关联微信群")) {
-            return customerFieldLookup(question, context, "CUSTOMER_ROOMID_LOOKUP", "customer_roomid_lookup", "微信群 roomid");
-        }
-        if (containsAny(question, "有哪些跟进记录", "最近跟进记录")) {
-            return customerFollowRecords(question, context);
-        }
-        if (containsAny(question, "上次是谁跟进", "最近是谁跟进")) {
-            return customerLastFollower(question, context);
-        }
-        if (containsAny(question, "超过 30 天没跟进", "超过30天没跟进", "长期没跟进", "很久没跟进", "多久没跟进", "没跟进")) {
-            return question.contains("张三") || containsAny(question, "销售", "联系专员")
-                    ? specialistStaleFollowCustomers(question, context)
-                    : staleFollowCustomers(context);
-        }
-        if (containsAny(question, "本周哪些客户还没有跟进", "本周还没有跟进")) {
-            return notFollowedThisWeek(context);
-        }
-        if (containsAny(question, "跟进最少", "没有任何跟进记录")) {
-            return leastFollowCustomers(question, context);
-        }
-        if (containsAny(question, "某客户最近沟通", "客户最近沟通", "多少企微消息", "多少邮件",
-                "邮件往来", "企微沟通")) {
-            return customerCommunication(question, context);
-        }
-        if (containsAny(question, "沟通最多", "沟通排行", "完全没沟通", "邮件很多但企微很少", "企微很多但没有跟进")) {
-            return communicationInsight(question, context);
-        }
-        if (containsAny(question, "订单总金额", "订单金额是多少", "最大的一笔订单", "订单金额最高",
-                "新订单金额最高", "订单总数")) {
-            return orderAmountInsight(question, context);
-        }
-        if (containsAny(question, "快到交期", "已经逾期", "交期是什么时候")) {
-            return deliveryInsight(question, context);
-        }
-        if (containsAny(question, "订单号", "某订单号")) {
-            return orderStatusByNo(question, context);
-        }
-        if (containsAny(question, "某产品", "产品最近有哪些订单")) {
-            return productOrders(question, context);
-        }
-        if (containsAny(question, "有订单但最近没有沟通", "新订单但没有跟进", "订单金额高但长期没跟进",
-                "客户最值得关注", "流失风险", "主管介入", "互动下降", "突然没有互动", "优先拜访", "需要跟进")) {
-            return attentionSignals(question, context);
-        }
-        if (containsAny(question, "正在操作", "还没有结束", "未结束", "进行中订单", "操作中的订单")) {
-            return question.contains("负责的客户")
-                    ? salesActiveOrders(question, context)
-                    : customerOrders(question, context, true);
-        }
-        if (containsAny(question, "新订单", "新的订单", "新合同", "新单")) {
-            return question.contains("负责的客户")
-                    ? salesNewOrders(question, context)
-                    : customerNewOrders(question, context);
-        }
-        if (containsAny(question, "沟通少", "订单金额高", "高金额")) {
-            return lowCommunicationHighOrderValue(context);
-        }
-        if (containsAny(question, "最近有哪些订单", "最近订单", "最近有订单", "订单有哪些")) {
-            return recentOrdersByQuestion(question, context);
-        }
-        if (containsAny(question, "沟通", "微信", "企微", "邮件", "邮箱")) {
-            return salesCommunication(question, context);
-        }
-        if (containsAny(question, "负责哪些客户", "负责的客户", "联系专员", "销售负责哪些客户", "销售负责的客户")) {
-            return salesCustomerList(question, context);
-        }
-        if (containsAny(question, "很久没跟进", "多久没跟进", "长期没跟进", "没跟进")) {
-            return staleFollowCustomers(context);
-        }
-        if (containsAny(question, "合同", "合同状态", "合同有哪些", "状态分别是什么")) {
-            return customerOrders(question, context, false);
-        }
-        if (containsAny(question, "客户", "基础信息", "汇总", "总结")) {
-            return customerSummary(question, context);
-        }
-        return fallback(context);
-    }
-
-    private AiAgentSemanticRuleRetrievalService.RetrievalResult retrieveSemanticKnowledge(
-            String question, String organizationId) {
-        try {
-            return semanticRuleRetrievalService.retrieve(question, organizationId);
-        } catch (RuntimeException e) {
-            log.warn("AI agent semantic knowledge retrieval failed, continuing without semantic knowledge: "
-                    + "organizationId={}, error={}", organizationId, e.toString());
-            log.debug("AI agent semantic knowledge retrieval failure detail", e);
-            return new AiAgentSemanticRuleRetrievalService.RetrievalResult(
-                    List.of(), false, "RETRIEVAL_FAILED");
-        }
-    }
-
-    private AiKnowledgeSearchTestResponse retrieveDocumentKnowledge(String question, String organizationId) {
-        try {
-            return aiAgentKnowledgeService.searchTest(question, 5, organizationId);
-        } catch (RuntimeException e) {
-            log.warn("AI agent document knowledge retrieval failed, continuing with the original answer flow: "
-                    + "organizationId={}, error={}", organizationId, e.toString());
-            log.debug("AI agent document knowledge retrieval failure detail", e);
-            AiKnowledgeSearchTestResponse response = new AiKnowledgeSearchTestResponse();
-            response.setQuestion(question);
-            response.setRewriteQuestion(question);
-            response.setMatches(List.of());
-            response.setMatchedRules(List.of());
-            response.setRetrievalMode("FAILED_OPEN");
-            response.setFallbackReason("DOCUMENT_RETRIEVAL_FAILED");
-            return response;
-        }
-    }
-
-    private AiAgentChatResponse routeStableRuleQuestion(String question, AiAgentContext context) {
-        if (isCustomerOrderContractYearGapQuestion(question)) {
-            return customerOrderContractYearGap(question, context);
-        }
-        if (isCustomerWithoutOrderYearQuestion(question)) {
-            return customersWithoutOrderYear(question, context);
-        }
-        if (isCustomerWithoutMaterialOrderQuestion(question)) {
-            return customersWithoutMaterialOrder(question, context);
-        }
-        if (isOrderMaterialSummaryQuestion(question)) {
-            return salesOrderMaterialSummary(question, context);
-        }
-        if (isCustomerSourceListQuestion(question)) {
-            return customerSourceList(question, context);
-        }
-        if (isVisibleCustomerListQuestion(question)) {
-            return visibleCustomerList(question, context);
-        }
-        if (isCrmOrderQuestion(question)) {
-            return salesOrderDatabaseQuery(question, context);
-        }
-        if (isSpecialistNoFollowQuestion(question)) {
-            String specialistName = extractSpecialistName(question);
-            if (StringUtils.isNotBlank(specialistName)) {
-                return specialistNoFollowDatabaseQuery(specialistName, context);
-            }
-        }
-        if (isSpecialistCustomerListQuestion(question)) {
-            return salesCustomerList(question, context);
-        }
-        if (isSpecialistCommunicationQuestion(question)) {
-            return salesCommunication(question, context);
-        }
-        if (containsAny(question, "正在操作", "还没有结束", "未结束", "进行中订单", "操作中的订单")
-                && containsAny(question, "负责的客户", "负责客户", "联系专员", "销售")) {
-            return salesActiveOrders(question, context);
-        }
-        if (containsAny(question, "新订单", "新的订单", "新合同", "新单")
-                && containsAny(question, "负责的客户", "负责客户", "联系专员", "销售")) {
-            return salesNewOrders(question, context);
-        }
-        if (containsAny(question, "最近有哪些订单", "最近订单", "最近有订单", "订单有哪些")
-                && containsAny(question, "负责的客户", "负责客户", "联系专员", "销售")) {
-            return recentOrdersByQuestion(question, context);
-        }
-        if (containsAny(question, "负责哪些客户", "负责的客户", "联系专员", "销售负责哪些客户", "销售负责的客户")) {
-            return salesCustomerList(question, context);
-        }
-        return null;
-    }
-
-    private boolean isVisibleCustomerListQuestion(String question) {
-        return containsAny(question, "我名下有哪些客户", "我的客户有哪些", "我有哪些客户", "我的团队有哪些客户", "全公司有哪些客户")
-                && !containsAny(question, "需要跟进", "优先拜访", "值得关注");
-    }
-
-    private boolean isSpecialistCustomerListQuestion(String question) {
-        if (isCustomerNameKeywordQuestion(question)) {
-            return false;
-        }
-        if (containsAny(question, "负责哪些客户", "负责的客户", "联系专员", "销售负责哪些客户", "销售负责的客户",
-                "名下客户有哪些", "名下有哪些客户")) {
-            return StringUtils.isNotBlank(extractSpecialistName(question));
-        }
-        if (!containsAny(question, "的客户有哪些", "有哪些客户", "客户有哪些")) {
-            return false;
-        }
-        String specialistName = extractSpecialistName(question);
-        return StringUtils.isNotBlank(specialistName)
-                && specialistName.length() <= 12
-                && !containsAny(specialistName, "客户", "来源", "渠道", "展会", "展销", "新增", "最近", "全部", "所有",
-                "团队", "公司", "名字", "名称", "全称", "包含", "带有", "关键词", "关键字", "有关", "相关");
-    }
-
-    private boolean isCustomerSourceListQuestion(String question) {
-        return containsAny(question, "客户来源", "来源是", "来源为", "展会客户")
-                && containsAny(question, "客户", "有哪些", "名单", "列表");
-    }
-
-    private boolean isCustomerNameKeywordQuestion(String question) {
-        if (containsAny(question, "客户名称包含", "客户名字包含", "名称里包含", "名字里包含",
-                "名称中包含", "名字中包含", "名称包含", "名字包含",
-                "客户名称中带有", "客户名字中带有", "名称中带有", "名字中带有",
-                "客户名称带有", "客户名字带有", "名称带有", "名字带有",
-                "客户名称中有", "客户名字中有", "名称中有", "名字中有")) {
-            return true;
-        }
-        if (containsAny(question, "客户名", "客户名称", "客户名字", "客户全称", "名称", "名字")
-                && containsAny(question, "包含", "带有", "中有", "里有", "关键词", "关键字")) {
-            return true;
-        }
-        return containsAny(question, "客户")
-                && containsAny(question, "有关", "相关")
-                && !containsAny(question, "订单", "合同", "跟进", "沟通", "邮件", "企微", "微信");
-    }
-
-    private AiAgentChatResponse customerSourceList(String question, AiAgentContext context) {
-        String source = extractCustomerSource(question);
-        if (StringUtils.isBlank(source)) {
-            return null;
-        }
-
-        AiAgentQueryFilter sourceFilter = new AiAgentQueryFilter();
-        sourceFilter.setField("customer_source");
-        sourceFilter.setOperator("eq");
-        sourceFilter.setValue(source);
-
-        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
-        queryPlan.setIntent("CRM_DATABASE_QUERY");
-        queryPlan.setQueryType("LIST");
-        queryPlan.setEntity("customer");
-        queryPlan.setSelectFields(List.of("id", "name", "full_name", "customer_source", "owner_name", "region"));
-        queryPlan.setFilters(List.of(sourceFilter));
-        queryPlan.setLimit(20);
-        return aiAgentDatabaseQueryService.answer(queryPlan, context);
-    }
-
-    private String extractCustomerSource(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("客户来源是", "客户来源为", "来源是", "来源为")) {
-            int index = text.indexOf(marker);
-            if (index >= 0) {
-                return cleanupCustomerSource(text.substring(index + marker.length()));
-            }
-        }
-        if (text.contains("展会客户")) {
-            return "展会客户";
-        }
-        if (text.contains("展会")) {
-            return "展会客户";
-        }
-        return "";
-    }
-
-    private String cleanupCustomerSource(String text) {
-        String result = cleanupName(text)
-                .replace("的客户有哪些", "")
-                .replace("客户有哪些", "")
-                .replace("有哪些客户", "")
-                .replace("客户列表", "")
-                .replace("客户名单", "")
-                .replace("的客户", "")
-                .trim();
-        return StringUtils.isBlank(result) ? null : StringUtils.abbreviate(result, 32);
-    }
-
-    private String cleanupCustomerKeyword(String text) {
-        String result = cleanupName(text)
-                .replace("的客户有哪些", "")
-                .replace("客户有哪些", "")
-                .replace("有哪些客户", "")
-                .replace("客户列表", "")
-                .replace("客户名单", "")
-                .replace("的客户", "")
-                .replace("客户", "")
-                .replace("有关", "")
-                .replace("相关", "")
-                .replace("帮我列一下", "")
-                .replace("列一下", "")
-                .replace("查一下", "")
-                .replace("看看", "")
-                .trim();
-        result = StringUtils.removeStart(result, "和").trim();
-        result = StringUtils.removeStart(result, "与").trim();
-        result = StringUtils.removeStart(result, "跟").trim();
-        return StringUtils.isBlank(result) ? null : StringUtils.abbreviate(result, 64);
-    }
-
-    private boolean isSpecialistCommunicationQuestion(String question) {
-        return containsAny(question, "和客户沟通", "与客户沟通", "跟客户沟通")
-                || (containsAny(question, "客户沟通情况", "客户沟通统计", "客户沟通的情况")
-                && !containsAny(question, "某客户", "客户最近沟通"));
-    }
-
-    private AiAgentChatResponse routeKnowledgeGuidedQuestion(String question, AiAgentContext context) {
-        if (isCustomerOrderContractYearGapQuestion(question)
-                || knowledgeSuggestsCustomerOrderContractYearGap(question, context)) {
-            return customerOrderContractYearGap(question, context);
-        }
-        return null;
-    }
-
-    private boolean isCrmOrderQuestion(String question) {
-        if (StringUtils.isBlank(question) || !containsAny(question, "订单", "订单号", "加工单号", "生产单号")) {
-            return false;
-        }
-        if (containsAny(question, "外部订单", "外部合同", "contract_info")) {
-            return false;
-        }
-        return containsAny(question,
-                "订单", "订单号", "加工单号", "生产单号", "原料", "成分", "加工商", "跟单员", "联系专员",
-                "订单状态", "下单时间", "颜色", "色号", "加工工艺", "数量", "单价", "金额", "币种",
-                "负责的订单", "订单有哪些", "有哪些订单", "最近订单", "订单总数", "订单总金额");
-    }
-
-    private boolean isCustomerOrderContractYearGapQuestion(String question) {
-        return isCustomerDimensionGapLikeQuestion(question)
-                && (extractYears(question).size() >= 2
-                || containsAny(question, "去年", "上年", "上一年", "今年", "本年", "当前年"));
-    }
-
-    private boolean knowledgeSuggestsCustomerOrderContractYearGap(String question, AiAgentContext context) {
-        AiKnowledgeSearchTestResponse knowledgeSearch = context.getKnowledgeSearch();
-        if (!isCustomerDimensionGapLikeQuestion(question)
-                || knowledgeSearch == null
-                || knowledgeSearch.getMatches() == null
-                || knowledgeSearch.getMatches().isEmpty()) {
-            return false;
-        }
-        return knowledgeSearch.getMatches().stream()
-                .map(match -> StringUtils.defaultString(match.getContent()))
-                .anyMatch(content -> containsAny(content, "客户维度查询", "不是订单明细查询", "回答相应的客户", "回答主体必须是客户"));
-    }
-
-    private boolean isCustomerDimensionGapLikeQuestion(String question) {
-        return containsAny(question, "客户")
-                && containsAny(question, "有", "下过", "成交", "签订", "订单", "合同")
-                && containsAny(question, "没有", "没签", "未签", "未订", "没订", "没有签订", "没有订", "没有下", "没有成交")
-                && containsAny(question, "订单", "合同", "成交", "下单");
-    }
-
-    private AiAgentChatResponse customerOrderContractYearGap(String question, AiAgentContext context) {
-        List<Integer> years = extractYears(question);
-        int sourceYear = years.isEmpty() ? extractYearBefore(question, "有", "下过") : years.get(0);
-        int missingYear = years.size() >= 2 ? years.get(1) : extractYearBefore(question, "没有", "没签", "未签", "未订", "没订");
-        int currentYear = Year.now(AGENT_ZONE).getValue();
-        boolean asksOrder = containsAny(question, "订单", "下单", "订过", "没订", "未订");
-        boolean asksContract = containsAny(question, "合同");
-        boolean includeOrders = asksOrder || !asksContract;
-        boolean includeContracts = asksContract || !asksOrder;
-        if (sourceYear <= 0 && containsAny(question, "去年", "上年", "上一年")) {
-            sourceYear = currentYear - 1;
-        }
-        if (missingYear <= 0 && containsAny(question, "今年", "本年", "当前年")) {
-            missingYear = currentYear;
-        }
-        if (sourceYear <= 0) {
-            sourceYear = currentYear - 1;
-        }
-        if (missingYear <= 0 || missingYear == sourceYear) {
-            missingYear = currentYear;
-        }
-
-        AiAgentQueryResult sourceOrders = queryYearRecords("sales_order", sourceYear,
-                List.of("customer_name", "owner_name", "order_no", "order_time"), "order_time", context, includeOrders ? 1000 : 0);
-        AiAgentQueryResult sourceContracts = queryYearRecords("contract", sourceYear,
-                List.of("customer_name", "owner_name", "number", "start_time"), "start_time", context, includeContracts ? 1000 : 0);
-        AiAgentQueryResult missingOrders = queryYearRecords("sales_order", missingYear,
-                List.of("customer_name"), "order_time", context, includeOrders ? 1000 : 0);
-        AiAgentQueryResult missingContracts = queryYearRecords("contract", missingYear,
-                List.of("customer_name"), "start_time", context, includeContracts ? 1000 : 0);
-
-        ExternalOrderQueryResult externalSourceOrders = externalOrdersForVisibleCustomersInYear(context, sourceYear);
-        ExternalOrderQueryResult externalMissingOrders = externalOrdersForVisibleCustomersInYear(context, missingYear);
-
-        Map<String, YearCustomerActivity> sourceCustomers = new LinkedHashMap<>();
-        if (includeOrders) {
-            collectActivity(sourceCustomers, sourceOrders, "CRM订单", "customer_name", "owner_name", "order_no");
-        }
-        if (includeContracts) {
-            collectActivity(sourceCustomers, sourceContracts, "CRM合同", "customer_name", "owner_name", "number");
-        }
-        collectExternalActivity(sourceCustomers, externalSourceOrders, "外部合同/订单");
-
-        Set<String> missingYearCustomers = new HashSet<>();
-        if (includeOrders) {
-            collectCustomerNames(missingYearCustomers, missingOrders, "customer_name");
-        }
-        if (includeContracts) {
-            collectCustomerNames(missingYearCustomers, missingContracts, "customer_name");
-        }
-        collectExternalCustomerNames(missingYearCustomers, externalMissingOrders);
-
-        List<YearCustomerActivity> allMatched = sourceCustomers.values().stream()
-                .filter(activity -> !missingYearCustomers.contains(normalizeCustomerKey(activity.customerName)))
-                .toList();
-        List<YearCustomerActivity> matched = allMatched.stream().limit(20).toList();
-
-        AiAgentChatResponse response = base("CUSTOMER_ORDER_CONTRACT_YEAR_GAP");
-        response.getEvidence().add("sales_order");
-        response.getEvidence().add("contract");
-        response.getEvidence().add("mls_agent_data.contract_info");
-        String sourceLabel = orderContractScopeLabel(includeOrders, includeContracts);
-        response.getTools().add(tool("customer_order_contract_year_gap", "SUCCESS",
-                "对比 " + sourceYear + " 年和 " + missingYear + " 年 " + sourceLabel + "、外部合同/订单", 0L));
-        addQueryWarnings(response, sourceOrders, sourceContracts, missingOrders, missingContracts);
-        response.getWarnings().addAll(externalSourceOrders.getWarnings());
-        response.getWarnings().addAll(externalMissingOrders.getWarnings());
-
-        if (sourceCustomers.isEmpty()) {
-            response.setAnswer("当前权限范围内，未找到 " + sourceYear + " 年有" + sourceLabel + "的客户。");
-            return response;
-        }
-        if (allMatched.isEmpty()) {
-            response.setAnswer("当前权限范围内，未找到“" + sourceYear + " 年有" + sourceLabel + "、"
-                    + missingYear + " 年没有" + sourceLabel + "”的客户。");
-            response.getPoints().add(sourceYear + " 年有" + sourceLabel + "的客户数：" + sourceCustomers.size()
-                    + "；其中 " + missingYear + " 年也有" + sourceLabel + "记录的客户数：" + missingYearCustomers.size() + "。");
-            return response;
-        }
-
-        response.setAnswer("当前权限范围内，找到 " + allMatched.size() + " 个客户在 " + sourceYear
-                + " 年有" + sourceLabel + "，但在 " + missingYear + " 年未查到" + sourceLabel + "；以下展示前 "
-                + matched.size() + " 个。");
-        for (YearCustomerActivity activity : matched) {
-            response.getPoints().add("第 " + (response.getPoints().size() + 1) + " 条"
-                    + "\n客户名称：" + activity.customerName
-                    + "\n负责人：" + StringUtils.defaultIfBlank(activity.ownerName, "未填写")
-                    + "\n" + sourceYear + " 年命中：" + activity.totalCount() + " 条"
-                    + "\n数据来源：" + String.join("、", activity.sourceSummaries())
-                    + "\n" + missingYear + " 年" + sourceLabel + "：未查到");
-        }
-        response.getWarnings().add("判断口径：按客户名称归并，" + missingYear + " 年只要"
-                + sourceLabel + "或外部合同/订单任一数据源命中，就不计入结果。");
-        return response;
-    }
-
-    private String orderContractScopeLabel(boolean includeOrders, boolean includeContracts) {
-        if (includeOrders && includeContracts) {
-            return "订单和合同";
-        }
-        return includeOrders ? "订单" : "合同";
-    }
-
-    private boolean isCustomerWithoutOrderYearQuestion(String question) {
-        return containsAny(question, "客户")
-                && !containsAny(question, "原料")
-                && containsAny(question, "订单", "下单", "订过", "签订")
-                && containsAny(question, "没有", "没签", "未签", "没订", "未订", "没有签订", "没有订", "没有下")
-                && !containsAny(question, "合同")
-                && !extractYears(question).isEmpty();
-    }
-
-    private AiAgentChatResponse customersWithoutOrderYear(String question, AiAgentContext context) {
-        List<Integer> years = extractYears(question);
-        int year = years.isEmpty() ? Year.now(AGENT_ZONE).getValue() : years.get(0);
-        String customerKeyword = cleanupYearCustomerKeyword(extractCustomerQualifier(question));
-
-        List<AiAgentCustomerRow> allCustomers = customerTools.searchCustomers(context, customerKeyword, 1000);
-        AiAgentQueryResult orderResult = queryYearRecords("sales_order", year,
-                List.of("customer_name", "order_no", "order_time"), "order_time", context, 1000);
-
-        Set<String> orderedCustomerKeys = new HashSet<>();
-        collectCustomerNames(orderedCustomerKeys, orderResult, "customer_name");
-        List<AiAgentCustomerRow> matched = allCustomers.stream()
-                .filter(customer -> !orderedCustomerKeys.contains(normalizeCustomerKey(customer.getName())))
-                .limit(20)
-                .toList();
-
-        AiAgentChatResponse response = base("CUSTOMER_WITHOUT_ORDER_YEAR_LIST");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("sales_order");
-        response.getTools().add(tool("customer_without_order_year_list",
-                orderResult.getWarnings().isEmpty() ? "SUCCESS" : "SKIPPED",
-                "按客户主表排除 " + year + " 年 CRM订单记录", orderResult.getDurationMs()));
-        response.getWarnings().addAll(orderResult.getWarnings());
-        if (!orderResult.getWarnings().isEmpty() && orderResult.getRows().isEmpty()) {
-            response.setAnswer("这个问题需要先查可见客户，再排除 " + year + " 年有订单的客户，但当前订单查询未能执行。");
-            return response;
-        }
-        if (allCustomers.isEmpty()) {
-            response.setAnswer(StringUtils.isBlank(customerKeyword)
-                    ? "当前权限范围内没有可见客户。"
-                    : "当前权限范围内未找到名称匹配“" + customerKeyword + "”的客户。");
-            return response;
-        }
-        if (matched.isEmpty()) {
-            response.setAnswer("当前权限范围内，未找到 " + year + " 年没有签订过订单的客户。");
-            response.getPoints().add(year + " 年有订单记录的客户数：" + orderedCustomerKeys.size()
-                    + "；当前筛选客户数：" + allCustomers.size() + "。");
-            return response;
-        }
-        response.setAnswer("当前权限范围内，找到 " + matched.size() + " 个客户在 " + year
-                + " 年未查到订单；以下展示前 " + matched.size() + " 个。");
-        for (AiAgentCustomerRow customer : matched) {
-            response.getPoints().add("第 " + (response.getPoints().size() + 1) + " 条"
-                    + "\n客户名称：" + StringUtils.defaultIfBlank(customer.getName(), "未填写")
-                    + "\n负责人：" + StringUtils.defaultIfBlank(customer.getOwnerName(), "未设置")
-                    + "\n地区：" + StringUtils.defaultIfBlank(customer.getRegion(), "未填写")
-                    + "\n" + year + " 年订单：未查到");
-        }
-        response.getWarnings().add("判断口径：先读取当前权限范围内可见客户，再按客户名称排除 sales_order.order_time 落在 "
-                + year + " 年的订单客户。");
-        return response;
-    }
-
-    private String cleanupYearCustomerKeyword(String value) {
-        String cleaned = StringUtils.defaultString(value).trim();
-        if (StringUtils.isBlank(cleaned) || containsAny(cleaned, "20", "签订", "订单", "合同", "没有", "未", "没")) {
-            return "";
-        }
-        return cleaned;
-    }
-
-    private boolean isOrderMaterialSummaryQuestion(String question) {
-        return containsAny(question, "原料")
-                && containsAny(question, "有哪些", "都有哪些", "是什么", "都是什么", "总结")
-                && containsAny(question, "订单", "订的", "订过", "客户");
-    }
-
-    private AiAgentChatResponse salesOrderMaterialSummary(String question, AiAgentContext context) {
-        MaterialCustomerQualifier qualifier = extractMaterialCustomerQualifier(question);
-        List<AiAgentQueryFilter> filters = new ArrayList<>();
-        if (StringUtils.isNotBlank(qualifier.keyword())) {
-            filters.add(filter(qualifier.region() ? "customer_region" : "customer_name", "like", qualifier.keyword()));
-        }
-        filters.add(filter("material_name", "not_null", null));
-
-        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
-        queryPlan.setIntent("CRM_DATABASE_QUERY");
-        queryPlan.setEntity("sales_order");
-        queryPlan.setQueryType("LIST");
-        queryPlan.setSelectFields(List.of("customer_name", "customer_region", "owner_name", "material_name", "material_type", "composition", "status", "order_no"));
-        queryPlan.setFilters(filters);
-        queryPlan.setLimit(100);
-        AiAgentQueryResult result = aiAgentDatabaseQueryService.query(queryPlan, context);
-
-        AiAgentChatResponse response = base("ORDER_MATERIAL_SUMMARY");
-        response.getEvidence().add("sales_order");
-        response.getTools().add(tool("order_material_summary", result.getWarnings().isEmpty() ? "SUCCESS" : "SKIPPED",
-                "汇总 CRM 订单原料名称、原料类型和成分", result.getDurationMs()));
-        response.getWarnings().addAll(result.getWarnings());
-        if (!result.getWarnings().isEmpty() && result.getRows().isEmpty()) {
-            response.setAnswer("这个问题需要查询 CRM 订单原料，但当前未能执行。");
-            return response;
-        }
-        if (result.getRows().isEmpty()) {
-            response.setAnswer(StringUtils.isBlank(qualifier.keyword())
-                    ? "当前权限范围内未找到包含原料信息的订单。"
-                    : "当前权限范围内未找到客户" + (qualifier.region() ? "地区" : "名称") + "匹配“"
-                    + qualifier.keyword() + "”且包含原料信息的订单。");
-            return response;
-        }
-
-        Map<String, MaterialSummary> summaries = new LinkedHashMap<>();
-        for (Map<String, Object> row : result.getRows()) {
-            String materialName = valueAsText(row.get("material_name"));
-            if (StringUtils.isBlank(materialName)) {
-                continue;
-            }
-            String key = materialName.toLowerCase(Locale.ROOT);
-            MaterialSummary summary = summaries.computeIfAbsent(key, ignored -> new MaterialSummary(materialName));
-            summary.orderCount++;
-            summary.materialTypes.add(valueAsText(row.get("material_type")));
-            summary.compositions.add(valueAsText(row.get("composition")));
-            summary.statuses.add(valueAsText(row.get("status")));
-            summary.customers.add(valueAsText(row.get("customer_name")));
-            summary.regions.add(valueAsText(row.get("customer_region")));
-        }
-
-        if (summaries.isEmpty()) {
-            response.setAnswer("当前权限范围内查到订单，但这些订单没有填写原料名称。");
-            return response;
-        }
-        response.setAnswer(materialSummaryScopeText(qualifier)
-                + "，共归纳出 " + summaries.size() + " 种原料，涉及 " + result.getRows().size() + " 条订单。");
-        summaries.values().stream().limit(12).forEach(summary -> response.getPoints().add(
-                summary.materialName + "：出现 " + summary.orderCount + " 条订单"
-                        + formatOptionalSet("，类型 ", summary.materialTypes)
-                        + formatOptionalSet("，成分 ", summary.compositions)
-                        + formatOptionalSet("，状态 ", summary.statuses)
-        ));
-        if (summaries.size() > 12) {
-            response.getWarnings().add("原料种类较多，当前只展示前 12 种摘要。");
-        }
-        return response;
-    }
-
-    private String materialSummaryScopeText(MaterialCustomerQualifier qualifier) {
-        if (StringUtils.isBlank(qualifier.keyword())) {
-            return "当前筛选条件下";
-        }
-        return "客户" + (qualifier.region() ? "地区" : "名称") + "匹配“" + qualifier.keyword() + "”的订单中";
-    }
-
-    private boolean isCustomerWithoutMaterialOrderQuestion(String question) {
-        return containsAny(question, "客户")
-                && containsAny(question, "没有订过", "没订过", "没有下过", "没下过", "没有订购", "未订过", "未下过",
-                "没有订", "没订", "未订", "没有下", "没下", "未下")
-                && containsAny(question, "原料");
-    }
-
-    private AiAgentChatResponse customersWithoutMaterialOrder(String question, AiAgentContext context) {
-        MaterialCustomerQualifier qualifier = extractMaterialCustomerQualifier(question);
-        String customerKeyword = qualifier.keyword();
-        String materialKeyword = extractMaterialKeyword(question);
-        if (StringUtils.isBlank(materialKeyword)) {
-            AiAgentChatResponse response = base("QUESTION_CLARIFICATION_REQUIRED");
-            response.setAnswer("请补充要排除的原料名称，例如“没有订过单面超柔染色的客户”。");
-            response.getTools().add(tool("material_keyword_clarification", "SUCCESS", "原料关键词为空", 0L));
-            return response;
-        }
-
-        List<AiAgentCustomerRow> customers = searchCustomersForMaterialExclusion(context, qualifier, 1000);
-        AiAgentQueryPlan orderedPlan = new AiAgentQueryPlan();
-        orderedPlan.setIntent("CRM_DATABASE_QUERY");
-        orderedPlan.setEntity("sales_order");
-        orderedPlan.setQueryType("LIST");
-        orderedPlan.setSelectFields(List.of("customer_name", "material_name", "composition", "order_no"));
-        orderedPlan.setFilters(List.of(filter("material_name", "like", materialKeyword)));
-        orderedPlan.setLimit(1000);
-        AiAgentQueryResult orderedResult = aiAgentDatabaseQueryService.query(orderedPlan, context);
-
-        Set<String> orderedCustomerKeys = new HashSet<>();
-        collectCustomerNames(orderedCustomerKeys, orderedResult, "customer_name");
-        List<AiAgentCustomerRow> allMatched = customers.stream()
-                .filter(customer -> !orderedCustomerKeys.contains(normalizeCustomerKey(customer.getName())))
-                .toList();
-        List<AiAgentCustomerRow> matched = allMatched.stream().limit(20).toList();
-
-        AiAgentChatResponse response = base("CUSTOMER_WITHOUT_MATERIAL_ORDER_LIST");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("sales_order");
-        response.getTools().add(tool("customer_without_material_order_list", orderedResult.getWarnings().isEmpty() ? "SUCCESS" : "SKIPPED",
-                "按客户名称和 CRM 订单原料做排除查询", orderedResult.getDurationMs()));
-        response.getWarnings().addAll(orderedResult.getWarnings());
-        if (!orderedResult.getWarnings().isEmpty() && orderedResult.getRows().isEmpty()) {
-            response.setAnswer("这个问题需要查询 CRM 客户和订单原料，但当前订单查询未能执行。");
-            return response;
-        }
-        if (customers.isEmpty()) {
-            response.setAnswer(StringUtils.isBlank(customerKeyword)
-                    ? "当前权限范围内没有可见客户。"
-                    : "当前权限范围内未找到客户" + (qualifier.region() ? "地区" : "名称") + "匹配“" + customerKeyword + "”的客户。");
-            return response;
-        }
-        if (matched.isEmpty()) {
-            response.setAnswer("当前权限范围内，未找到客户" + (qualifier.region() ? "地区" : "名称") + "匹配“"
-                    + StringUtils.defaultIfBlank(customerKeyword, "全部可见客户")
-                    + "”且没有订过“" + materialKeyword + "”的客户。");
-            return response;
-        }
-        response.setAnswer("当前权限范围内，找到 " + allMatched.size() + " 个客户没有订过原料“"
-                + materialKeyword + "”；以下展示前 " + matched.size() + " 个。");
-        for (AiAgentCustomerRow customer : matched) {
-            response.getPoints().add("第 " + (response.getPoints().size() + 1) + " 条"
-                    + "\n客户名称：" + StringUtils.defaultIfBlank(customer.getName(), "未填写")
-                    + "\n负责人：" + StringUtils.defaultIfBlank(customer.getOwnerName(), "未设置")
-                    + "\n地区：" + StringUtils.defaultIfBlank(customer.getRegion(), "未填写")
-                    + "\n排除原料：" + materialKeyword);
-        }
-        response.getWarnings().add("判断口径：先筛选可见客户"
-                + (qualifier.region() ? "地区" : "名称")
-                + "，再排除 CRM 订单中原料名称包含“" + materialKeyword + "”的客户。");
-        return response;
-    }
-
-    private List<AiAgentCustomerRow> searchCustomersForMaterialExclusion(AiAgentContext context,
-                                                                         MaterialCustomerQualifier qualifier,
-                                                                         int limit) {
-        if (!qualifier.region() || StringUtils.isBlank(qualifier.keyword())) {
-            return customerTools.searchCustomers(context, qualifier.keyword(), limit);
-        }
-        return customerTools.searchCustomers(context, "", limit).stream()
-                .filter(customer -> StringUtils.contains(customer.getRegion(), qualifier.keyword()))
-                .toList();
-    }
-
-    private AiAgentChatResponse salesOrderDatabaseQuery(String question, AiAgentContext context) {
-        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
-        queryPlan.setIntent("CRM_DATABASE_QUERY");
-        queryPlan.setEntity("sales_order");
-        queryPlan.setLimit(20);
-
-        List<AiAgentQueryFilter> filters = new ArrayList<>();
-        String ownerName = extractOrderOwnerName(question);
-        if (StringUtils.isNotBlank(ownerName)) {
-            filters.add(filter("owner_name", "like", ownerName));
-        }
-        String orderNo = extractOrderNo(question);
-        if (StringUtils.isNotBlank(orderNo)) {
-            filters.add(filter("order_no", "like", orderNo));
-        }
-        String processOrderNo = extractProcessOrderNo(question);
-        if (StringUtils.isNotBlank(processOrderNo)) {
-            filters.add(filter("process_order_no", "like", processOrderNo));
-        }
-        String customerName = extractOrderCustomerName(question);
-        if (StringUtils.isNotBlank(customerName)) {
-            filters.add(filter("customer_name", "like", customerName));
-        }
-        String status = extractOrderStatus(question);
-        if (StringUtils.isNotBlank(status)) {
-            filters.add(filter("status", "like", status));
-        }
-        if (containsAny(question, "最近", "本月", "这个月", "近7天", "最近7天", "近30天", "本季度", "今年")) {
-            filters.add(filter("order_time", "between", "CURRENT_TIME_WINDOW"));
-        }
-        queryPlan.setFilters(filters);
-
-        if (containsAny(question, "总数", "多少条", "多少个")) {
-            queryPlan.setQueryType("COUNT");
-            return aiAgentDatabaseQueryService.answer(queryPlan, context);
-        }
-        if (containsAny(question, "每个联系专员", "每个销售", "各联系专员", "各销售")) {
-            queryPlan.setQueryType("AGGREGATE");
-            queryPlan.setGroupBy(List.of("owner_name"));
-            AiAgentQueryMetric metric = new AiAgentQueryMetric();
-            metric.setFunction("count");
-            metric.setField("id");
-            metric.setAlias("count_value");
-            queryPlan.setMetrics(List.of(metric));
-            return aiAgentDatabaseQueryService.answer(queryPlan, context);
-        }
-        if (containsAny(question, "总金额", "金额合计", "合计金额")) {
-            queryPlan.setQueryType("AGGREGATE");
-            AiAgentQueryMetric metric = new AiAgentQueryMetric();
-            metric.setFunction("sum");
-            metric.setField("amount");
-            metric.setAlias("total_amount");
-            queryPlan.setMetrics(List.of(metric));
-            return aiAgentDatabaseQueryService.answer(queryPlan, context);
-        }
-
-        queryPlan.setQueryType("LIST");
-        queryPlan.setSelectFields(defaultSalesOrderSelectFields(question));
-        AiAgentQueryOrder order = new AiAgentQueryOrder();
-        order.setField(containsAny(question, "最近", "新订单", "下单") ? "order_time" : "create_time");
-        order.setDirection("desc");
-        queryPlan.setOrderBy(List.of(order));
-        return aiAgentDatabaseQueryService.answer(queryPlan, context);
-    }
-
-    private List<String> defaultSalesOrderSelectFields(String question) {
-        if (containsAny(question, "原料", "成分")) {
-            return List.of("order_no", "customer_name", "owner_name", "material_name", "material_type", "composition", "status");
-        }
-        if (containsAny(question, "加工单号", "生产单号", "加工商", "跟单员", "加工工艺")) {
-            return List.of("order_no", "process_order_no", "processor", "merchandiser", "process_technology", "owner_name", "status");
-        }
-        if (containsAny(question, "金额", "单价", "数量", "币种")) {
-            return List.of("order_no", "customer_name", "owner_name", "quantity", "unit", "unit_price", "amount", "currency", "status");
-        }
-        return List.of("order_no", "customer_name", "contract_name", "owner_name", "status", "material_name", "composition", "order_time", "amount");
-    }
-
-    private AiAgentQueryFilter filter(String field, String operator, Object value) {
-        AiAgentQueryFilter filter = new AiAgentQueryFilter();
-        filter.setField(field);
-        filter.setOperator(operator);
-        filter.setValue(value);
-        return filter;
-    }
-
-    private AiAgentQueryResult queryYearRecords(String entity, int year, List<String> selectFields,
-                                                String timeField, AiAgentContext context, int limit) {
-        if (limit <= 0) {
-            return new AiAgentQueryResult();
-        }
-        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
-        queryPlan.setIntent("CRM_DATABASE_QUERY");
-        queryPlan.setEntity(entity);
-        queryPlan.setQueryType("LIST");
-        queryPlan.setSelectFields(selectFields);
-        queryPlan.setFilters(List.of(filter(timeField, "between", List.of(year + "-01-01", year + "-12-31"))));
-        queryPlan.setLimit(limit);
-        return aiAgentDatabaseQueryService.query(queryPlan, context);
-    }
-
-    private ExternalOrderQueryResult externalOrdersForVisibleCustomersInYear(AiAgentContext context, int year) {
-        AiAgentTimeWindow originalWindow = context.getTimeWindow();
-        context.setTimeWindow(yearTimeWindow(year));
-        try {
-            return externalOrderTools.findRecentOrdersForVisibleCustomers(context, 1000);
-        } finally {
-            context.setTimeWindow(originalWindow);
-        }
-    }
-
-    private AiAgentTimeWindow yearTimeWindow(int year) {
-        LocalDate startDate = LocalDate.of(year, 1, 1);
-        LocalDate endDate = LocalDate.of(year + 1, 1, 1);
-        return new AiAgentTimeWindow(
-                startDate.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
-                endDate.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
-                year + "年"
-        );
-    }
-
-    private void collectActivity(Map<String, YearCustomerActivity> target, AiAgentQueryResult result,
-                                 String source, String customerField, String ownerField, String recordField) {
-        if (result == null || result.getRows() == null) {
-            return;
-        }
-        for (Map<String, Object> row : result.getRows()) {
-            String customerName = valueAsText(row.get(customerField));
-            if (StringUtils.isBlank(customerName)) {
-                continue;
-            }
-            YearCustomerActivity activity = target.computeIfAbsent(normalizeCustomerKey(customerName),
-                    ignored -> new YearCustomerActivity(customerName));
-            if (StringUtils.isBlank(activity.ownerName)) {
-                activity.ownerName = valueAsText(row.get(ownerField));
-            }
-            activity.increment(source);
-            String recordNo = valueAsText(row.get(recordField));
-            if (StringUtils.isNotBlank(recordNo) && activity.sampleRecords.size() < 3) {
-                activity.sampleRecords.add(recordNo);
-            }
-        }
-    }
-
-    private void collectExternalActivity(Map<String, YearCustomerActivity> target, ExternalOrderQueryResult result,
-                                         String source) {
-        if (result == null || result.getRows() == null) {
-            return;
-        }
-        for (ExternalOrderRow row : result.getRows()) {
-            String customerName = StringUtils.defaultIfBlank(row.getCustomer(), row.getFields().get("customer"));
-            if (StringUtils.isBlank(customerName)) {
-                continue;
-            }
-            YearCustomerActivity activity = target.computeIfAbsent(normalizeCustomerKey(customerName),
-                    ignored -> new YearCustomerActivity(customerName));
-            if (StringUtils.isBlank(activity.ownerName)) {
-                activity.ownerName = row.getManager();
-            }
-            activity.increment(source);
-            if (StringUtils.isNotBlank(row.getOrderNo()) && activity.sampleRecords.size() < 3) {
-                activity.sampleRecords.add(row.getOrderNo());
-            }
-        }
-    }
-
-    private void collectCustomerNames(Set<String> target, AiAgentQueryResult result, String customerField) {
-        if (result == null || result.getRows() == null) {
-            return;
-        }
-        for (Map<String, Object> row : result.getRows()) {
-            String customerName = valueAsText(row.get(customerField));
-            if (StringUtils.isNotBlank(customerName)) {
-                target.add(normalizeCustomerKey(customerName));
-            }
-        }
-    }
-
-    private void collectExternalCustomerNames(Set<String> target, ExternalOrderQueryResult result) {
-        if (result == null || result.getRows() == null) {
-            return;
-        }
-        for (ExternalOrderRow row : result.getRows()) {
-            String customerName = StringUtils.defaultIfBlank(row.getCustomer(), row.getFields().get("customer"));
-            if (StringUtils.isNotBlank(customerName)) {
-                target.add(normalizeCustomerKey(customerName));
-            }
-        }
-    }
-
-    private void addQueryWarnings(AiAgentChatResponse response, AiAgentQueryResult... results) {
-        for (AiAgentQueryResult result : results) {
-            if (result != null) {
-                response.getWarnings().addAll(result.getWarnings());
-            }
-        }
-    }
-
-    private String normalizeCustomerKey(String customerName) {
-        return StringUtils.defaultString(customerName)
-                .replaceAll("\\s+", "")
-                .toLowerCase(Locale.ROOT);
-    }
-
-    private int extractYearBefore(String question, String... markers) {
-        Matcher matcher = Pattern.compile("(20\\d{2})\\s*年?[^，。；;,.]*?(?:" + String.join("|", markers) + ")").matcher(question);
-        int year = 0;
-        while (matcher.find()) {
-            year = Integer.parseInt(matcher.group(1));
-        }
-        return year;
-    }
-
-    private List<Integer> extractYears(String question) {
-        List<Integer> years = new ArrayList<>();
-        Matcher matcher = Pattern.compile("20\\d{2}").matcher(question);
-        while (matcher.find()) {
-            int year = Integer.parseInt(matcher.group());
-            if (!years.contains(year)) {
-                years.add(year);
-            }
-        }
-        return years;
-    }
-
-    private String extractMaterialQuestionCustomerKeyword(String question) {
-        String value = extractCustomerQualifier(question);
-        if (StringUtils.isNotBlank(value)) {
-            return value;
-        }
-        String customerName = extractOrderCustomerName(question);
-        return StringUtils.defaultIfBlank(customerName, "");
-    }
-
-    private MaterialCustomerQualifier extractMaterialCustomerQualifier(String question) {
-        String keyword = StringUtils.defaultIfBlank(extractCustomerQualifier(question), extractRegionCustomerQualifier(question));
-        if (StringUtils.isBlank(keyword)) {
-            keyword = extractOrderCustomerName(question);
-        }
-        keyword = cleanupRegionCustomerKeyword(keyword);
-        boolean region = StringUtils.isNotBlank(keyword)
-                && (containsAny(question, "地区", "区域", "国家")
-                || question.contains(keyword + "的客户")
-                || question.contains(keyword + "哪些客户"));
-        return new MaterialCustomerQualifier(keyword, region);
-    }
-
-    private String extractRegionCustomerQualifier(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("哪些客户", "的客户")) {
-            int index = text.indexOf(marker);
-            if (index > 0) {
-                String value = cleanupName(text.substring(0, index));
-                if (StringUtils.isNotBlank(value) && !containsAny(value, "客户", "订单", "原料", "没有", "未", "没")) {
-                    return value;
-                }
-            }
-        }
-        return "";
-    }
-
-    private String cleanupRegionCustomerKeyword(String text) {
-        String value = cleanupQuestionToken(text)
-                .replace("客户地区", "")
-                .replace("地区客户", "")
-                .replace("地区", "")
-                .replace("区域", "")
-                .replace("国家", "")
-                .replace("的", "")
-                .trim();
-        return StringUtils.abbreviate(value, 64);
-    }
-
-    private String extractCustomerQualifier(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("客户订", "客户下", "客户没有", "客户没", "客户未", "客户的订单", "客户订单", "客户有哪些")) {
-            int index = text.indexOf(marker);
-            if (index > 0) {
-                String value = cleanupName(text.substring(0, index));
-                value = StringUtils.removeEnd(value, "及");
-                return cleanupQuestionToken(value);
-            }
-        }
-        return "";
-    }
-
-    private String extractMaterialKeyword(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("没有订过", "没订过", "没有下过", "没下过", "没有订购", "未订过", "未下过",
-                "没有订", "没订", "未订", "没有下", "没下", "未下")) {
-            int index = text.indexOf(marker);
-            if (index >= 0) {
-                return cleanupMaterialKeyword(text.substring(index + marker.length()));
-            }
-        }
-        return "";
-    }
-
-    private String cleanupMaterialKeyword(String text) {
-        String value = cleanupName(text)
-                .replace("这种原料", "")
-                .replace("这类原料", "")
-                .replace("这个原料", "")
-                .replace("原料", "")
-                .replace("的客户", "")
-                .replace("客户", "")
-                .replace("有哪些", "")
-                .replace("哪些", "")
-                .trim();
-        return StringUtils.abbreviate(value, 64);
-    }
-
-    private String cleanupQuestionToken(String text) {
-        String value = cleanupName(text)
-                .replace("有哪些", "")
-                .replace("哪些", "")
-                .replace("没有", "")
-                .replace("没", "")
-                .replace("未", "")
-                .replace("订过", "")
-                .replace("下过", "")
-                .replace("订单", "")
-                .replace("原料", "")
-                .trim();
-        return StringUtils.abbreviate(value, 64);
-    }
-
-    private String valueAsText(Object value) {
-        return value == null ? "" : StringUtils.defaultString(String.valueOf(value)).trim();
-    }
-
-    private String formatOptionalSet(String prefix, Set<String> values) {
-        List<String> cleaned = values.stream()
-                .filter(StringUtils::isNotBlank)
-                .filter(value -> !"未填写".equals(value))
-                .limit(3)
-                .toList();
-        return cleaned.isEmpty() ? "" : prefix + String.join("、", cleaned);
-    }
-
-    private String extractOrderOwnerName(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("负责的订单", "负责订单", "的订单有哪些", "有哪些订单", "订单有哪些",
-                "负责的客户订单", "名下订单", "联系专员", "销售")) {
-            int index = text.indexOf(marker);
-            if (index > 0) {
-                String value = cleanupName(text.substring(0, index));
-                if (StringUtils.isNotBlank(value) && !containsAny(value, "客户", "订单", "最近", "本月", "所有", "全部")) {
-                    return value;
-                }
-            }
-        }
-        return "";
-    }
-
-    private String extractOrderCustomerName(String question) {
-        if (!containsAny(question, "客户")) {
-            return "";
-        }
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("客户的订单", "这个客户", "的订单", "订单有哪些", "最近有哪些订单")) {
-            int index = text.indexOf(marker);
-            if (index > 0) {
-                String value = cleanupName(text.substring(0, index));
-                if (StringUtils.isNotBlank(value) && !containsAny(value, "销售", "联系专员", "负责")) {
-                    return value;
-                }
-            }
-        }
-        return "";
-    }
-
-    private String extractOrderNo(String question) {
-        Matcher matcher = Pattern.compile("(?i)(MLS[_\\-]?[A-Za-z0-9]+|[A-Z]{2,}[_\\-]?[0-9][A-Za-z0-9_\\-]*)").matcher(question);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        String value = extractAfterAny(question, "订单号");
-        if (StringUtils.isBlank(value) || containsAny(value, "状态", "是什么", "多少", "哪些", "有哪些", "订单")) {
-            return "";
-        }
-        return value;
-    }
-
-    private String extractProcessOrderNo(String question) {
-        if (!containsAny(question, "加工单号", "生产单号")) {
-            return "";
-        }
-        String value = extractAfterAny(question, "加工单号", "生产单号");
-        if (StringUtils.isBlank(value) || containsAny(value, "是什么", "多少", "哪些", "有哪些", "订单")) {
-            return "";
-        }
-        return value;
-    }
-
-    private String extractOrderStatus(String question) {
-        if (!containsAny(question, "状态为", "状态是", "订单状态为", "订单状态是")) {
-            return "";
-        }
-        return cleanupName(extractAfterAny(question, "订单状态为", "订单状态是", "状态为", "状态是"));
-    }
-
-    private void logLlmParsedQuestion(String question, ParsedAiAgentQuestion parsedQuestion) {
-        if (parsedQuestion == null) {
-            log.debug("AI agent LLM parse skipped or empty: question={}", abbreviateForLog(question));
-            return;
-        }
-        log.debug("AI agent LLM parse: question={}, intent={}, customerName={}, specialistName={}, keyword={}, timeRange={}, confidence={}, needClarification={}, sqlRequired={}, source={}",
-                abbreviateForLog(question),
-                parsedQuestion.getIntent(),
-                parsedQuestion.getCustomerName(),
-                parsedQuestion.getSpecialistName(),
-                parsedQuestion.getKeyword(),
-                parsedQuestion.getTimeRange(),
-                parsedQuestion.getConfidence(),
-                parsedQuestion.isNeedClarification(),
-                parsedQuestion.isSqlRequired(),
-                parsedQuestion.getSource());
-    }
-
-    private String abbreviateForLog(String value) {
-        return StringUtils.abbreviate(StringUtils.defaultString(value).replaceAll("\\s+", " ").trim(), 200);
-    }
-
-    private boolean hasRequiredLlmConfidence(ParsedAiAgentQuestion parsedQuestion) {
-        if (!StringUtils.equals(parsedQuestion.getSource(), "LLM")) {
-            return true;
-        }
-        double minConfidence = aiAgentLlmProperties.getMinConfidence();
-        if (minConfidence <= 0) {
-            return true;
-        }
-        boolean accepted = parsedQuestion.getConfidence() >= minConfidence;
-        if (!accepted) {
-            log.debug("AI agent LLM parse ignored because confidence is below threshold: intent={}, confidence={}, minConfidence={}",
-                    parsedQuestion.getIntent(), parsedQuestion.getConfidence(), minConfidence);
-        }
-        return accepted;
-    }
-
-    private void applyDeterministicParameterHints(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
-        normalizeQueryTimeFilters(parsedQuestion, context);
-        if (!isSpecialistIntent(parsedQuestion.getIntent())) {
-            return;
-        }
-        String specialistName = extractSpecialistName(parsedQuestion.getRawQuestion());
-        if (StringUtils.isBlank(specialistName)) {
-            return;
-        }
-        String currentSpecialistName = StringUtils.trimToNull(parsedQuestion.getSpecialistName());
-        if (StringUtils.equals(currentSpecialistName, specialistName)) {
-            return;
-        }
-        log.debug("AI agent specialist parameter adjusted by question text: intent={}, llmSpecialistName={}, questionSpecialistName={}",
-                parsedQuestion.getIntent(), currentSpecialistName, specialistName);
-        parsedQuestion.setSpecialistName(specialistName);
-    }
-
-    private void normalizeQueryTimeFilters(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
-        if (parsedQuestion.getQueryPlan() == null || parsedQuestion.getQueryPlan().getFilters() == null) {
-            return;
-        }
-        boolean normalized = false;
-        for (AiAgentQueryFilter filter : parsedQuestion.getQueryPlan().getFilters()) {
-            if (!StringUtils.equalsIgnoreCase(filter.getOperator(), "between")
-                    || isValidBetweenValue(filter.getValue())) {
-                continue;
-            }
-            filter.setValue("CURRENT_TIME_WINDOW");
-            normalized = true;
-        }
-        if (normalized && context != null) {
-            context.setTimeWindow(resolveTimeWindow(
-                    parsedQuestion.getRawQuestion(), parsedQuestion.getTimeRange()));
-        }
-    }
-
-    private boolean isValidBetweenValue(Object value) {
-        return StringUtils.equalsIgnoreCase(String.valueOf(value), "CURRENT_TIME_WINDOW")
-                || (value instanceof List<?> values && values.size() >= 2);
-    }
-
-    private boolean isSpecialistIntent(String intent) {
-        return switch (StringUtils.defaultString(intent)) {
-            case "SPECIALIST_CUSTOMER_LIST",
-                 "SPECIALIST_COMMUNICATION_SUMMARY",
-                 "SPECIALIST_STALE_FOLLOW_CUSTOMER_LIST",
-                 "SALES_CUSTOMER_NEW_ORDER_CHECK",
-                 "SALES_CUSTOMER_ACTIVE_ORDER_LIST",
-                 "SALES_RECENT_ORDER_LIST" -> true;
-            default -> false;
-        };
-    }
-
-    private ParsedAiAgentQuestion repairSemanticPlan(String question,
-                                                     AiAgentContext context,
-                                                     String rejectionReason) {
-        ParsedAiAgentQuestion repaired = llmAiAgentQuestionParser.repair(
-                question, context.getLlmProvider(), context, rejectionReason);
-        context.setLlmParsedQuestion(repaired);
-        logLlmParsedQuestion(question, repaired);
-        return repaired;
-    }
-
-    private AiAgentChatResponse routeParsedQuestion(ParsedAiAgentQuestion parsedQuestion,
-                                                     AiAgentContext context,
-                                                     boolean allowSemanticRepair) {
-        if (parsedQuestion == null) {
-            return null;
-        }
-        if (!hasRequiredLlmConfidence(parsedQuestion)) {
-            if (!semanticPlanGuard.isEnforced(context)) {
-                return null;
-            }
-            if (!allowSemanticRepair) {
-                return null;
-            }
-            ParsedAiAgentQuestion repaired = repairSemanticPlan(
-                    parsedQuestion.getRawQuestion(), context, "查询计划置信度不足");
-            if (repaired == null || !hasRequiredLlmConfidence(repaired)) {
-                return null;
-            }
-            parsedQuestion = repaired;
-            allowSemanticRepair = false;
-        }
-        applyDeterministicParameterHints(parsedQuestion, context);
-        rewriteCrmOrderQueryToSalesOrder(parsedQuestion, context);
-        AiAgentSemanticPlanGuard.GuardResult guardResult = validateSemanticPlan(parsedQuestion, context);
-        if (!guardResult.allowed() && semanticPlanGuard.isEnforced(context) && allowSemanticRepair) {
-            ParsedAiAgentQuestion repaired = repairSemanticPlan(
-                    parsedQuestion.getRawQuestion(), context, guardResult.reason());
-            if (repaired != null && hasRequiredLlmConfidence(repaired)) {
-                applyDeterministicParameterHints(repaired, context);
-                rewriteCrmOrderQueryToSalesOrder(repaired, context);
-                AiAgentSemanticPlanGuard.GuardResult repairedResult = validateSemanticPlan(repaired, context);
-                if (repairedResult.allowed()) {
-                    parsedQuestion = repaired;
+        try (AiAgentProgress progress = AiAgentProgress.captureIfAbsent(); AiAgentLlmUsage usage = AiAgentLlmUsage.begin()) {
+            if (AiAgentProgress.steps().isEmpty()) AiAgentProgress.stage("request", "开始处理问题");
+            String userId = SessionUtils.getUserId(), orgId = OrganizationContext.getOrganizationId();
+            AiAgentSession session = aiAgentAuditService.ensureSession(request.getSessionId(), request.getQuestion(), userId, orgId);
+            AiAgentContext context = createContext(userId, orgId, request);
+            String action = StringUtils.defaultIfBlank(request.getAction(), "QUERY");
+            conversationService.prepareSqlHistory(session.getId(), context,
+                    "REGENERATE".equals(action) ? request.getReferenceMessageId() : null);
+            aiAgentAuditService.saveMessage(session.getId(), "user", request.getQuestion(), null, null, userId);
+            aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
+            AiAgentQueryEvidence evidence = null;
+            AiAgentChatResponse response;
+            try {
+                if (!"QUERY".equals(action)) {
+                    if (StringUtils.isBlank(request.getReferenceMessageId())) throw new IllegalArgumentException("请指定要操作的查询结果。");
+                    var previous = aiAgentAuditService.loadQueryResponse(request.getReferenceMessageId(), session.getId(), context);
+                    context.setQueryQuestion(previous.getQueryQuestion());
+                    if ("REGENERATE".equals(action)) {
+                        context.setQueryError(previous.getQueryError());
+                        evidence = runQuery(context); response = evidence.getResponse();
+                    } else response = sqlBotResults.analyze(previous, context, "PREDICT".equals(action));
                 } else {
-                    context.setLlmParsedQuestion(parsedQuestion);
-                    log.warn("AI agent knowledge-assisted repair still conflicts with retrieved knowledge; "
-                            + "continuing with the original executable plan: reason={}", repairedResult.reason());
+                    if (StringUtils.isBlank(request.getContinueFromMessageId())
+                            && request.getQuestion().trim().matches("(?:继续查看|下一页|查看下一页|继续加载)[。！!]?"))
+                        request.setContinueFromMessageId(StringUtils.defaultIfBlank(aiAgentAuditService.latestContinuationMessage(session.getId(), context), "no_previous_page"));
+                    evidence = StringUtils.isBlank(request.getContinueFromMessageId()) ? runQuery(context)
+                            : continueQuery(request, session.getId(), context);
+                    response = evidence.getResponse();
                 }
-            } else {
-                context.setLlmParsedQuestion(parsedQuestion);
-                log.warn("AI agent knowledge-assisted repair did not produce an executable plan; "
-                        + "continuing with the original executable plan: reason={}", guardResult.reason());
-            }
-        }
-        String rawQuestion = StringUtils.defaultString(parsedQuestion.getRawQuestion());
-        if (!semanticPlanGuard.isEnforced(context)) {
-            if (isCustomerOrderContractYearGapQuestion(rawQuestion)) {
-                AiAgentChatResponse response = customerOrderContractYearGap(rawQuestion, context);
-                addLlmReasoningTrace(response, parsedQuestion);
-                return response;
-            }
-            if (isCustomerWithoutOrderYearQuestion(rawQuestion)) {
-                AiAgentChatResponse response = customersWithoutOrderYear(rawQuestion, context);
-                addLlmReasoningTrace(response, parsedQuestion);
-                return response;
-            }
-            if (isCustomerWithoutMaterialOrderQuestion(rawQuestion)) {
-                AiAgentChatResponse response = customersWithoutMaterialOrder(rawQuestion, context);
-                addLlmReasoningTrace(response, parsedQuestion);
-                return response;
-            }
-            if (isOrderMaterialSummaryQuestion(rawQuestion)) {
-                AiAgentChatResponse response = salesOrderMaterialSummary(rawQuestion, context);
-                addLlmReasoningTrace(response, parsedQuestion);
-                return response;
-            }
-        }
-        if (parsedQuestion.isNeedClarification()) {
-            AiAgentChatResponse response = clarification(parsedQuestion);
-            addLlmReasoningTrace(response, parsedQuestion);
+            } catch (AiAgentRequestCancelledException e) { throw e; }
+              catch (IllegalArgumentException e) { response = failure(e.getMessage(), context); }
+            response.setProcessSteps(AiAgentProgress.finish(StringUtils.isNotBlank(response.getQueryError()))); usage.applyTo(response);
+            aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
+            String mode = Set.of("ANALYSIS", "PREDICT").contains(action) ? action : "QUERY";
+            var outcome = conversationService.complete(request.getQuestion(), mode, context, response, evidence);
+            AiAgentMessage message = aiAgentAuditService.saveMessage(session.getId(), "assistant", response.getAnswer(),
+                    response.getIntent(), outcome.evidenceSnapshot(), userId);
+            response.setSessionId(session.getId()); response.setMessageId(message.getId());
+            aiAgentAuditService.saveToolLogs(message.getId(), response.getTools(), userId);
+            aiAgentAuditService.touch(session.getId(), userId);
             return response;
         }
-        if (parsedQuestion.isSqlRequired()) {
-            AiAgentChatResponse response = aiAgentSqlQueryService.explainCandidateSql(parsedQuestion.getCandidateSql());
-            addLlmReasoningTrace(response, parsedQuestion);
+    }
+
+    private AiAgentQueryEvidence runQuery(AiAgentContext context) {
+        var response = route(context.getQueryQuestion(), context);
+        var evidence = new AiAgentQueryEvidence(); evidence.setId(UUID.randomUUID().toString());
+        evidence.setQuestion(context.getQueryQuestion()); evidence.setQueriedAt(System.currentTimeMillis());
+        evidence.setResponse(response); evidence.setData(context.getAnalysisData());
+        evidence.setContinuation(context.getContinuation()); evidence.setTimeWindow(context.getTimeWindow());
+        return evidence;
+    }
+    private AiAgentChatResponse route(String question, AiAgentContext context) {
+        if (!aiAgentLlmProperties.isEnabled() || !aiAgentSqlQueryService.isTextToSqlEnabled())
+            return failure("大模型 SQL 查询未开启，请检查模型配置。", context);
+        context.setLlmParseAttempted(true);
+        ParsedAiAgentQuestion parsed = llmAiAgentQuestionParser.parse(question, context.getLlmProvider(), context);
+        context.setLlmParsedQuestion(parsed);
+        if (parsed == null) return failure("未能生成 SQL，可重新生成或检查模型配置。", context);
+        if (parsed.isNeedClarification() || StringUtils.isBlank(parsed.getCandidateSql()))
+            return failure(StringUtils.defaultIfBlank(parsed.getClarificationQuestion(), "当前表结构无法回答这个问题。"), context);
+        context.setRequestedChartType(parsed.getChartType());
+        try {
+            AiAgentChatResponse response = aiAgentSqlQueryService.answer(parsed.getCandidateSql(), context);
+            if (context.getTableSelectionSummary() != null) response.getTools().add(tool("table_selection", "SUCCESS", context.getTableSelectionSummary(), 0L));
             return response;
+        } catch (IllegalArgumentException e) {
+            // Preserve execution feedback for an explicit regenerate or subsequent question. No automatic repair loop.
+            AiAgentProgress.stage("query_failed", "SQL 校验或执行失败，可重新生成");
+            AiAgentChatResponse response = failure(e.getMessage(), context);
+            response.getSqlQueries().add(parsed.getCandidateSql()); return response;
         }
-        if (StringUtils.isBlank(parsedQuestion.getIntent())) {
-            return null;
-        }
-        if (isCrmOrderQuestion(parsedQuestion.getRawQuestion()) && shouldUseSalesOrderQuery(parsedQuestion.getIntent())) {
-            AiAgentChatResponse response = salesOrderDatabaseQuery(parsedQuestion.getRawQuestion(), context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
-        }
-        if (isSpecialistIntent(parsedQuestion.getIntent())
-                && isCustomerNameKeywordQuestion(parsedQuestion.getRawQuestion())) {
-            AiAgentChatResponse response = customerSearchByKeyword(parsedQuestion.getRawQuestion(), context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
-        }
-        String customerName = StringUtils.trimToNull(parsedQuestion.getCustomerName());
-        String specialistName = StringUtils.trimToNull(parsedQuestion.getSpecialistName());
-        if (isSpecialistNoFollowQuestion(parsedQuestion.getRawQuestion()) && StringUtils.isNotBlank(specialistName)) {
-            AiAgentChatResponse response = specialistNoFollowDatabaseQuery(specialistName, context);
-            addLlmReasoningTrace(response, parsedQuestion);
-            return response;
-        }
-        AiAgentChatResponse response = switch (parsedQuestion.getIntent()) {
-            case "CRM_DATABASE_QUERY" -> aiAgentDatabaseQueryService.answer(parsedQuestion.getQueryPlan(), context);
-            case "CUSTOMER_NAME_SEARCH" -> StringUtils.isBlank(parsedQuestion.getKeyword())
-                    ? null : customerSearchByKeywordValue(parsedQuestion.getKeyword(), context);
-            case "RECENT_CUSTOMER_LIST" -> recentCustomers(parsedQuestion.getRawQuestion(), context);
-            case "VISIBLE_CUSTOMER_LIST" -> visibleCustomerList(parsedQuestion.getRawQuestion(), context);
-            case "SPECIALIST_CUSTOMER_LIST" -> StringUtils.isBlank(specialistName)
-                    ? null : salesCustomerListBySpecialist(specialistName, context);
-            case "CUSTOMER_OWNER_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_OWNER_LOOKUP", "customer_owner_lookup", "负责人");
-            case "CUSTOMER_CONTACT_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_CONTACT_LOOKUP", "customer_contact_lookup", "联系方式");
-            case "CUSTOMER_LAST_FOLLOW_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_LAST_FOLLOW_LOOKUP", "customer_last_follow_lookup", "最近跟进时间");
-            case "CUSTOMER_REMARK_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_REMARK_LOOKUP", "customer_remark_lookup", "备注");
-            case "CUSTOMER_REGION_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_REGION_LOOKUP", "customer_region_lookup", "地区");
-            case "CUSTOMER_WECOM_ID_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_WECOM_ID_LOOKUP", "customer_wecom_id_lookup", "企微ID");
-            case "CUSTOMER_ROOMID_LOOKUP" -> customerName == null
-                    ? null : customerFieldLookupByName(customerName, context, "CUSTOMER_ROOMID_LOOKUP", "customer_roomid_lookup", "微信群 roomid");
-            case "CUSTOMER_FOLLOW_RECORD_LIST" -> customerName == null ? null : customerFollowRecordsByName(customerName, context);
-            case "CUSTOMER_LAST_FOLLOWER_LOOKUP" -> customerName == null ? null : customerLastFollowerByName(customerName, context);
-            case "SPECIALIST_STALE_FOLLOW_CUSTOMER_LIST" -> StringUtils.isBlank(specialistName)
-                    ? null : specialistStaleFollowCustomersByName(specialistName, context);
-            case "STALE_FOLLOW_CUSTOMER_LIST" -> staleFollowCustomers(context);
-            case "CUSTOMER_COMMUNICATION_SUMMARY" -> customerName == null ? null : customerCommunicationByName(customerName, context);
-            case "SPECIALIST_COMMUNICATION_SUMMARY" -> StringUtils.isBlank(specialistName)
-                    ? null : salesCommunicationBySpecialist(specialistName, context);
-            case "COMMUNICATION_SIGNAL_LIST" -> communicationInsight(parsedQuestion.getRawQuestion(), context);
-            case "ORDER_AMOUNT_INSIGHT" -> orderAmountInsight(parsedQuestion.getRawQuestion(), context);
-            case "ORDER_DELIVERY_SIGNAL_LIST" -> deliveryInsight(parsedQuestion.getRawQuestion(), context);
-            case "ORDER_STATUS_BY_NO" -> orderStatusByNo(parsedQuestion.getRawQuestion(), context);
-            case "PRODUCT_ORDER_LIST" -> productOrders(parsedQuestion.getRawQuestion(), context);
-            case "CUSTOMER_ATTENTION_SIGNAL_LIST" -> attentionSignals(parsedQuestion.getRawQuestion(), context);
-            case "LOW_COMMUNICATION_HIGH_VALUE_CUSTOMER" -> lowCommunicationHighOrderValue(context);
-            case "THIS_WEEK_NOT_FOLLOWED_CUSTOMER_LIST" -> notFollowedThisWeek(context);
-            case "LEAST_FOLLOW_CUSTOMER_LIST", "NO_FOLLOW_RECORD_CUSTOMER_LIST" ->
-                    leastFollowCustomers(parsedQuestion.getRawQuestion(), context);
-            case "SALES_CUSTOMER_NEW_ORDER_CHECK" -> StringUtils.isBlank(specialistName)
-                    ? null : salesNewOrdersBySpecialist(specialistName, context);
-            case "SALES_RECENT_ORDER_LIST" -> StringUtils.isBlank(specialistName)
-                    ? null : salesRecentOrders(context, specialistName);
-            case "SALES_CUSTOMER_ACTIVE_ORDER_LIST" -> StringUtils.isBlank(specialistName)
-                    ? null : salesActiveOrdersBySpecialist(specialistName, context);
-            case "CUSTOMER_NEW_ORDER_CHECK" -> customerName == null ? null : customerNewOrdersByName(customerName, context);
-            case "CUSTOMER_ACTIVE_ORDER_LIST" -> customerName == null ? null : customerOrdersByName(customerName, context, true);
-            case "CUSTOMER_CONTRACT_STATUS_LIST" -> customerName == null ? null : customerOrdersByName(customerName, context, false);
-            case "CUSTOMER_SUMMARY" -> customerName == null ? null : customerSummaryByName(customerName, context);
-            default -> null;
-        };
-        addLlmReasoningTrace(response, parsedQuestion);
+    }
+    private AiAgentQueryEvidence continueQuery(AiAgentChatRequest request, String sessionId, AiAgentContext context) {
+        var previous = aiAgentAuditService.loadContinuation(request.getContinueFromMessageId(), sessionId, context);
+        if (StringUtils.isBlank(previous.getGeneratedSql())) throw new IllegalArgumentException("此历史结果需要重新查询。");
+        context.setQueryQuestion(previous.getQuestion()); context.setTimeWindow(previous.getTimeWindow()); context.setContinuingQuery(true);
+        var response = aiAgentSqlQueryService.answer(previous.getGeneratedSql(), context, previous.getPageSize(), previous.getNextOffset());
+        var evidence = new AiAgentQueryEvidence(); evidence.setId(UUID.randomUUID().toString()); evidence.setQuestion(previous.getQuestion());
+        evidence.setQueriedAt(System.currentTimeMillis()); evidence.setResponse(response); evidence.setData(context.getAnalysisData());
+        evidence.setContinuation(context.getContinuation()); return evidence;
+    }
+    private AiAgentChatResponse failure(String reason, AiAgentContext context) {
+        var response = new AiAgentChatResponse(); response.setIntent("CRM_DATABASE_QUERY_REJECTED");
+        response.setQueryQuestion(context.getQueryQuestion());
+        response.setQueryError(StringUtils.defaultIfBlank(reason, "SQL 查询失败"));
+        response.setAnswer(response.getQueryError());
+        response.getTools().add(tool("text_to_sql_query", "REJECTED", response.getQueryError(), 0L));
         return response;
+    }
+
+    public byte[] exportResult(AiAgentChatRequest request) {
+        var context = createContext(SessionUtils.getUserId(), OrganizationContext.getOrganizationId(), request);
+        var response = aiAgentAuditService.loadQueryResponse(request.getReferenceMessageId(), request.getSessionId(), context);
+        try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook(); var output = new java.io.ByteArrayOutputStream()) {
+            if (response.getResultTable() != null) writeSheet(workbook, "查询结果", response.getResultTable());
+            if (response.getPredictionTable() != null) writeSheet(workbook, "预测数据", response.getPredictionTable());
+            if (workbook.getNumberOfSheets() == 0) throw new IllegalArgumentException("该记录没有可导出的数据。");
+            workbook.write(output); return output.toByteArray();
+        } catch (java.io.IOException e) { throw new IllegalStateException("导出失败", e); }
+    }
+    private void writeSheet(org.apache.poi.xssf.usermodel.XSSFWorkbook workbook, String name, AiAgentResultTable table) {
+        var sheet = workbook.createSheet(name); var header = sheet.createRow(0);
+        for (int i = 0; i < table.getColumns().size(); i++) header.createCell(i).setCellValue(table.getColumns().get(i).label());
+        for (int i = 0; i < table.getRows().size(); i++) {
+            var row = sheet.createRow(i + 1);
+            for (int j = 0; j < table.getColumns().size(); j++) {
+                Object value = table.getRows().get(i).get(table.getColumns().get(j).key());
+                var cell = row.createCell(j);
+                if (value instanceof Number n && Double.isFinite(n.doubleValue()) && n.toString().replaceAll("[^0-9]", "").length() <= 15) cell.setCellValue(n.doubleValue());
+                else if (value instanceof Boolean b) cell.setCellValue(b);
+                else if (value != null) cell.setCellValue(String.valueOf(value));
+            }
+        }
+        sheet.createFreezePane(0, 1);
+    }
+    private AiAgentToolCallDTO tool(String name, String status, String summary, Long durationMs) {
+        var tool = new AiAgentToolCallDTO(); tool.setName(name); tool.setStatus(status); tool.setSummary(summary);
+        tool.setDurationMs(durationMs); tool.setEvidenceId("ev_" + name); return tool;
+    }
+    private boolean containsAny(String text, String... words) {
+        return Arrays.stream(words).anyMatch(word -> StringUtils.defaultString(text).contains(word));
     }
 
     public AiAgentChatResponse chatWithAttachments(AiAgentChatRequest request, List<MultipartFile> files) {
+        try (AiAgentProgress progress = AiAgentProgress.captureIfAbsent(); AiAgentLlmUsage usage = AiAgentLlmUsage.begin()) {
+            AiAgentProgress.stage("attachment", "解析附件并生成回答");
+            return chatWithAttachments(request, files, usage);
+        }
+    }
+
+    private AiAgentChatResponse chatWithAttachments(AiAgentChatRequest request, List<MultipartFile> files,
+                                                    AiAgentLlmUsage usage) {
         String userId = SessionUtils.getUserId();
         String orgId = OrganizationContext.getOrganizationId();
         aiAgentAttachmentService.validate(files);
         AiAgentAttachmentService.AttachmentMode mode = aiAgentAttachmentService.resolveMode(request.getQuestion());
+        AiAgentContext datasourceContext = StringUtils.isNotBlank(request.getDatasourceId())
+                ? createContext(userId, orgId, request) : null;
 
         AiAgentSession session = aiAgentAuditService.ensureSession(
                 request.getSessionId(), request.getQuestion(), userId, orgId);
@@ -1629,6 +199,13 @@ public class AiAgentChatService {
 
         AiAgentChatResponse response = aiAgentAttachmentService.handle(
                 request.getQuestion(), request.getLlmProvider(), files, orgId, userId, mode);
+        if (datasourceContext != null) {
+            response.setDatasourceId(datasourceContext.getDatasourceId());
+            response.setDatasourceName(datasourceContext.getDatasourceName());
+            response.setDatasourceType(datasourceContext.getDatasourceType());
+        }
+        response.setProcessSteps(AiAgentProgress.finish(StringUtils.isNotBlank(response.getQueryError())));
+        usage.applyTo(response);
         aiAgentRequestCancellationService.throwIfCancellationRequested(request.getRequestId());
         AiAgentMessage assistantMessage = aiAgentAuditService.saveMessage(
                 session.getId(),
@@ -1644,1352 +221,9 @@ public class AiAgentChatService {
         aiAgentAuditService.touch(session.getId(), userId);
         return response;
     }
-
-    private AiAgentSemanticPlanGuard.GuardResult validateSemanticPlan(
-            ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
-        try {
-            return semanticPlanGuard.validate(parsedQuestion, context);
-        } catch (RuntimeException e) {
-            log.warn("AI agent semantic plan validation failed, continuing with the original executable plan: error={}",
-                    e.toString());
-            log.debug("AI agent semantic plan validation failure detail", e);
-            return AiAgentSemanticPlanGuard.GuardResult.pass();
-        }
-    }
-
-    private void rewriteCrmOrderQueryToSalesOrder(ParsedAiAgentQuestion parsedQuestion, AiAgentContext context) {
-        if (!StringUtils.equals(parsedQuestion.getIntent(), "CRM_DATABASE_QUERY")
-                || parsedQuestion.getQueryPlan() == null
-                || !isCrmOrderQuestion(parsedQuestion.getRawQuestion())
-                || semanticPlanGuard.targetsEntity(context, "contract_info")) {
-            return;
-        }
-        AiAgentQueryPlan plan = parsedQuestion.getQueryPlan();
-        if (!StringUtils.equalsAny(plan.getEntity(), "contract_info", "contract")) {
-            return;
-        }
-        plan.setEntity("sales_order");
-        if (plan.getSelectFields() == null || plan.getSelectFields().isEmpty()
-                || plan.getSelectFields().contains("product_name")
-                || plan.getSelectFields().contains("manager")
-                || plan.getSelectFields().contains("order_status")) {
-            plan.setSelectFields(defaultSalesOrderSelectFields(parsedQuestion.getRawQuestion()));
-        } else {
-            plan.setSelectFields(plan.getSelectFields().stream()
-                    .map(this::mapOrderFieldToSalesOrderField)
-                    .distinct()
-                    .toList());
-        }
-        if (plan.getFilters() != null) {
-            for (AiAgentQueryFilter filter : plan.getFilters()) {
-                filter.setField(mapOrderFieldToSalesOrderField(filter.getField()));
-            }
-        }
-        if (plan.getGroupBy() != null) {
-            plan.setGroupBy(plan.getGroupBy().stream()
-                    .map(this::mapOrderFieldToSalesOrderField)
-                    .distinct()
-                    .toList());
-        }
-        if (plan.getOrderBy() != null) {
-            for (AiAgentQueryOrder order : plan.getOrderBy()) {
-                order.setField(mapOrderFieldToSalesOrderField(order.getField()));
-            }
-        }
-        if (plan.getMetrics() != null) {
-            for (AiAgentQueryMetric metric : plan.getMetrics()) {
-                metric.setField(mapOrderFieldToSalesOrderField(metric.getField()));
-            }
-        }
-    }
-
-    private String mapOrderFieldToSalesOrderField(String field) {
-        return switch (StringUtils.defaultString(field)) {
-            case "manager" -> "owner_name";
-            case "order_status", "approval_status" -> "status";
-            case "product_name" -> "material_name";
-            case "customer" -> "customer_name";
-            case "number" -> "order_no";
-            default -> field;
-        };
-    }
-
-    private boolean shouldUseSalesOrderQuery(String intent) {
-        return switch (StringUtils.defaultString(intent)) {
-            case "ORDER_AMOUNT_INSIGHT",
-                 "ORDER_DELIVERY_SIGNAL_LIST",
-                 "ORDER_STATUS_BY_NO",
-                 "PRODUCT_ORDER_LIST",
-                 "SALES_CUSTOMER_NEW_ORDER_CHECK",
-                 "SALES_CUSTOMER_ACTIVE_ORDER_LIST",
-                 "SALES_RECENT_ORDER_LIST",
-                 "CUSTOMER_NEW_ORDER_CHECK",
-                 "CUSTOMER_ACTIVE_ORDER_LIST",
-                 "CUSTOMER_CONTRACT_STATUS_LIST" -> true;
-            default -> false;
-        };
-    }
-
-    private AiAgentChatResponse clarification(ParsedAiAgentQuestion parsedQuestion) {
-        AiAgentChatResponse response = base("QUESTION_CLARIFICATION_REQUIRED");
-        response.setAnswer(StringUtils.defaultIfBlank(parsedQuestion.getClarificationQuestion(),
-                "这个问题还缺少关键条件，请补充客户名、销售名、时间范围或要查询的数据类型。"));
-        response.getTools().add(tool("question_clarification", "SUCCESS",
-                "大模型解析后判断需要用户补充问题参数", 0L));
-        return response;
-    }
-
-    private void addLlmAttemptTrace(AiAgentChatResponse response, AiAgentContext context) {
-        if (response == null || !context.isLlmParseAttempted()) {
-            return;
-        }
-        ParsedAiAgentQuestion parsedQuestion = context.getLlmParsedQuestion();
-        if (parsedQuestion == null) {
-            addToolFirst(response, tool("llm_question_parser", "SKIPPED",
-                    "大模型增强解析未返回可执行 JSON，已继续使用原有回答流程", 0L));
-            addWarningOnce(response, "知识库和大模型增强解析失败时已自动回退，不会阻断原本能够回答的问题。");
-            return;
-        }
-        addLlmReasoningTrace(response, parsedQuestion);
-    }
-
-    private void addKnowledgeSearchTrace(AiAgentChatResponse response, AiKnowledgeSearchTestResponse knowledgeSearch) {
-        if (response == null || knowledgeSearch == null || knowledgeSearch.getMatches() == null || knowledgeSearch.getMatches().isEmpty()) {
-            return;
-        }
-        String summary = "公司知识库命中 " + knowledgeSearch.getMatches().size() + " 个文档片段";
-        String documentName = knowledgeSearch.getMatches().get(0).getDocumentName();
-        if (StringUtils.isNotBlank(documentName)) {
-            summary += "，最高相关来源=" + StringUtils.abbreviate(documentName, 80);
-        }
-        addToolFirst(response, tool("company_knowledge_retrieval", "SUCCESS", summary, 0L));
-    }
-
-    private void addSemanticRuleTrace(AiAgentChatResponse response, AiAgentContext context) {
-        if (response == null || context == null) {
-            return;
-        }
-        if (context.isSemanticRuleConflict()) {
-            addToolFirst(response, tool("semantic_rule_retrieval", "SKIPPED",
-                    StringUtils.defaultIfBlank(context.getSemanticRuleFallbackReason(), "业务知识存在冲突，已忽略冲突知识并继续原有回答流程"), 0L));
-            return;
-        }
-        if (context.getSemanticRuleMatches() == null || context.getSemanticRuleMatches().isEmpty()) {
-            return;
-        }
-        String ruleIds = context.getSemanticRuleMatches().stream()
-                .map(match -> match.getRuleId() + ":v" + match.getVersion())
-                .collect(java.util.stream.Collectors.joining(","));
-        String status = semanticRuleRetrievalService.isEnabled() ? "SUCCESS" : "SHADOW";
-        addToolFirst(response, tool("semantic_rule_retrieval", status,
-                "精确命中 " + context.getSemanticRuleMatches().size() + " 条已生效业务知识规则："
-                        + StringUtils.abbreviate(ruleIds, 200), 0L));
-    }
-
-    private void addLlmReasoningTrace(AiAgentChatResponse response, ParsedAiAgentQuestion parsedQuestion) {
-        if (response == null || parsedQuestion == null) {
-            return;
-        }
-        if (StringUtils.startsWith(parsedQuestion.getSource(), "SKILL:")) {
-            addToolFirst(response, tool("ai_agent_skill_match", "SUCCESS", skillTraceSummary(parsedQuestion), 0L));
-            addWarningOnce(response, "已命中已审核 Skill，再由后端按白名单生成受控查询。");
-            return;
-        }
-        addToolFirst(response, tool("llm_question_parser", "SUCCESS", llmTraceSummary(parsedQuestion), 0L));
-        addWarningOnce(response, "已先经过大模型解析，再由后端按白名单生成受控查询或调用受控工具。");
-    }
-
-    private String skillTraceSummary(ParsedAiAgentQuestion parsedQuestion) {
-        StringBuilder summary = new StringBuilder("Skill 已纠正问题理解");
-        summary.append("，source=").append(StringUtils.defaultIfBlank(parsedQuestion.getSource(), "SKILL"));
-        summary.append("，confidence=").append(parsedQuestion.getConfidence());
-        if (parsedQuestion.getQueryPlan() != null) {
-            AiAgentQueryPlan plan = parsedQuestion.getQueryPlan();
-            summary.append("，queryPlan=")
-                    .append(StringUtils.defaultIfBlank(plan.getEntity(), "未指定实体"))
-                    .append("/")
-                    .append(StringUtils.defaultIfBlank(plan.getQueryType(), "未指定类型"));
-            if (plan.getFilters() != null && !plan.getFilters().isEmpty()) {
-                summary.append("，filters=").append(plan.getFilters().size());
-            }
-        }
-        return summary.toString();
-    }
-
-    private void markDeterministicFallback(AiAgentChatResponse response, ParsedAiAgentQuestion parsedQuestion) {
-        if (response == null) {
-            return;
-        }
-        String reason = parsedQuestion == null
-                ? "模型未返回可执行解析结果"
-                : "模型解析结果未命中可执行处理器，intent=" + StringUtils.defaultIfBlank(parsedQuestion.getIntent(), "未识别");
-        response.getTools().add(tool("deterministic_fallback", "SUCCESS",
-                reason + "，已使用后端兜底规则", 0L));
-        addWarningOnce(response, reason + "，本次使用后端兜底规则。");
-    }
-
-    private String llmTraceSummary(ParsedAiAgentQuestion parsedQuestion) {
-        StringBuilder summary = new StringBuilder("大模型已解析问题");
-        summary.append("，intent=").append(StringUtils.defaultIfBlank(parsedQuestion.getIntent(), "未识别"));
-        summary.append("，confidence=").append(parsedQuestion.getConfidence());
-        if (parsedQuestion.getQueryPlan() != null) {
-            AiAgentQueryPlan plan = parsedQuestion.getQueryPlan();
-            summary.append("，queryPlan=")
-                    .append(StringUtils.defaultIfBlank(plan.getEntity(), "未指定实体"))
-                    .append("/")
-                    .append(StringUtils.defaultIfBlank(plan.getQueryType(), "未指定类型"));
-            if (plan.getFilters() != null && !plan.getFilters().isEmpty()) {
-                summary.append("，filters=").append(plan.getFilters().size());
-            }
-        }
-        return summary.toString();
-    }
-
-    private void addToolFirst(AiAgentChatResponse response, AiAgentToolCallDTO toolCall) {
-        boolean exists = response.getTools().stream()
-                .anyMatch(existing -> StringUtils.equals(existing.getName(), toolCall.getName()));
-        if (!exists) {
-            response.getTools().add(0, toolCall);
-        }
-    }
-
-    private void addWarningOnce(AiAgentChatResponse response, String warning) {
-        if (response.getWarnings().stream().noneMatch(existing -> StringUtils.equals(existing, warning))) {
-            response.getWarnings().add(warning);
-        }
-    }
-
-    private AiAgentChatResponse pendingUnansweredQuestions(AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        List<AiAgentUnansweredQuestionRow> rows = aiAgentInternalMapper.listPendingUnansweredQuestions(
-                context.getOrganizationId(), 20);
-        AiAgentChatResponse response = base("PENDING_UNANSWERED_QUESTION_LIST");
-        response.getEvidence().add("ai_agent_unanswered_question");
-        response.getTools().add(tool("pending_unanswered_question_list", "SUCCESS",
-                "读取待处理的 AI Agent 未回答问题池", System.currentTimeMillis() - start));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前组织暂无待处理的未回答问题。");
-            return response;
-        }
-        response.setAnswer("当前待处理未回答问题共展示前 " + rows.size() + " 条，已按出现次数和最后提问时间排序。");
-        rows.forEach(row -> response.getPoints().add(
-                row.getQuestion() + "：出现 " + safeLong(row.getOccurCount()) + " 次，原因 "
-                        + StringUtils.defaultIfBlank(row.getMissReason(), "NO_MATCH")
-                        + "，最后提问 " + formatTimestamp(row.getLastAskTime())));
-        return response;
-    }
-
-    private AiAgentChatResponse questionBankPromotionGuide() {
-        AiAgentChatResponse response = base("QUESTION_BANK_PROMOTION_GUIDE");
-        response.setAnswer("可以加入，但建议先进入未回答问题池，由管理员确认答案口径后再转入可回答问题库。现在系统会自动记录未命中问题，并统计出现次数。");
-        response.getEvidence().add("ai_agent_answerable_question");
-        response.getEvidence().add("ai_agent_unanswered_question");
-        response.getTools().add(tool("question_bank_promotion_guide", "SUCCESS",
-                "返回问题库转正流程说明", 0L));
-        response.getPoints().add("已支持的问题会自动更新 ai_agent_answerable_question 的命中次数和别名。");
-        response.getPoints().add("未支持的问题会进入 ai_agent_unanswered_question，状态为 PENDING。");
-        return response;
-    }
-
-    private AiAgentChatResponse dataSourceGuide(String question) {
-        AiAgentChatResponse response = base("AI_AGENT_DATA_SOURCE_GUIDE");
-        response.setAnswer("当前智能体主要使用 CRM 客户、订单、合同、跟进、企微和邮件数据回答问题。");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("sales_order");
-        response.getEvidence().add("contract");
-        response.getEvidence().add("follow_up_record");
-        response.getEvidence().add("wecom_ingestion_message");
-        response.getEvidence().add("email_webhook_event");
-        response.getEvidence().add("mls_agent_data.contract_info");
-        response.getTools().add(tool("data_source_guide", "SUCCESS", "返回 AI Agent 数据来源说明", 0L));
-        response.getPoints().add("客户基础信息来自 customer。");
-        response.getPoints().add("订单信息优先来自 CRM 主订单表 sales_order，包含订单号、客户、合同、联系专员、状态、原料、成分、下单时间、金额等字段。");
-        response.getPoints().add("合同信息来自 contract。");
-        response.getPoints().add("跟进记录来自 follow_up_record。");
-        response.getPoints().add("企微统计来自 wecom_ingestion_message，只返回统计，不返回聊天正文。");
-        response.getPoints().add("邮件统计来自 email_webhook_event，只返回统计，不返回邮件正文。");
-        response.getPoints().add("外部 mls_agent_data.contract_info 仅作为历史外部合同/订单明细数据源，不再作为普通订单问题的默认来源。");
-        if (question.contains("聊天正文")) {
-            response.getWarnings().add("聊天正文、邮件正文和敏感字段默认不返回。");
-        }
-        return response;
-    }
-
-    private AiAgentChatResponse externalOrderConfigGuide() {
-        AiAgentChatResponse response = base("EXTERNAL_ORDER_CONFIG_GUIDE");
-        response.setAnswer("订单数据为空通常有两类原因：外部订单数据源未配置或未启用，或者 CRM 客户名称没有匹配到外部订单表 customer 字段。");
-        response.getEvidence().add("mls_agent_data.contract_info");
-        response.getTools().add(tool("external_order_config_guide", "SUCCESS", "返回外部订单数据源排查说明", 0L));
-        response.getPoints().add("配置项：crm.ai-agent.external-order.enabled/url/username/password。");
-        response.getPoints().add("匹配口径：CRM customer.name 与外部 contract_info.customer 做模糊匹配。");
-        response.getPoints().add("数据口径：已开通智能体的账号可以查询已配置外部数据源中的合同数据。");
-        return response;
-    }
-
-    private AiAgentChatResponse dataScopeGuide() {
-        AiAgentChatResponse response = base("DATA_SCOPE_GUIDE");
-        response.setAnswer("当前阶段只要开通智能体功能，就默认查询当前组织内的全量客户、合同和订单数据。");
-        response.getTools().add(tool("data_scope_guide", "SUCCESS", "返回 AI Agent 当前全量数据策略", 0L));
-        response.getPoints().add("准入条件：当前账号拥有 AGENT_READ 权限。");
-        response.getPoints().add("数据范围：当前组织内全量数据，暂不区分全公司、团队或本人。");
-        response.getPoints().add("外部数据：仅查询与当前组织绑定的外部数据源。");
-        response.getWarnings().add("客户、合同和订单的细粒度数据权限将在后续阶段实现。");
-        return response;
-    }
-
-    private AiAgentChatResponse customerSearchByKeyword(String question, AiAgentContext context) {
-        String keyword = extractAfterAny(question,
-                "客户名称中带有", "客户名字中带有", "名称中带有", "名字中带有",
-                "客户名称带有", "客户名字带有", "名称带有", "名字带有",
-                "客户名称中包含", "客户名字中包含", "名称中包含", "名字中包含",
-                "客户名称包含", "客户名字包含", "名称里包含", "名字里包含",
-                "名称包含", "名字包含", "客户名称中有", "客户名字中有",
-                "名称中有", "名字中有", "包含", "带有", "和");
-        return customerSearchByKeywordValue(keyword, context);
-    }
-
-    private AiAgentChatResponse customerSearchByKeywordValue(String keyword, AiAgentContext context) {
-        String cleanedKeyword = cleanupCustomerKeyword(keyword);
-        if (StringUtils.isBlank(cleanedKeyword)) {
-            AiAgentChatResponse response = base("QUESTION_CLARIFICATION_REQUIRED");
-            response.setAnswer("请补充要在客户名称里搜索的关键词。");
-            response.getTools().add(tool("customer_name_keyword_clarification", "SUCCESS",
-                    "客户名称关键词为空", 0L));
-            return response;
-        }
-
-        AiAgentQueryFilter keywordFilter = new AiAgentQueryFilter();
-        keywordFilter.setField("name_keyword");
-        keywordFilter.setOperator("like");
-        keywordFilter.setValue(cleanedKeyword);
-
-        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
-        queryPlan.setIntent("CRM_DATABASE_QUERY");
-        queryPlan.setQueryType("LIST");
-        queryPlan.setEntity("customer");
-        queryPlan.setSelectFields(List.of("id", "name", "full_name", "owner_name", "region", "follow_time"));
-        queryPlan.setFilters(List.of(keywordFilter));
-        queryPlan.setLimit(20);
-        return aiAgentDatabaseQueryService.answer(queryPlan, context);
-    }
-
-    private boolean isSpecialistNoFollowQuestion(String question) {
-        return containsAny(question, "客户")
-                && containsAny(question, "没有跟进", "没跟进", "未跟进", "没有跟进记录", "未记录跟进", "从未跟进", "还没跟进")
-                && !containsAny(question, "超过", "长期", "很久", "多久", "30天", "30 天", "本周", "这个月", "本月");
-    }
-
-    private AiAgentChatResponse specialistNoFollowDatabaseQuery(String specialistName, AiAgentContext context) {
-        AiAgentQueryFilter ownerFilter = new AiAgentQueryFilter();
-        ownerFilter.setField("owner_name");
-        ownerFilter.setOperator("like");
-        ownerFilter.setValue(specialistName);
-
-        AiAgentQueryFilter noFollowFilter = new AiAgentQueryFilter();
-        noFollowFilter.setField("follow_time");
-        noFollowFilter.setOperator("is_null");
-
-        AiAgentQueryOrder order = new AiAgentQueryOrder();
-        order.setField("create_time");
-        order.setDirection("desc");
-
-        AiAgentQueryPlan queryPlan = new AiAgentQueryPlan();
-        queryPlan.setIntent("CRM_DATABASE_QUERY");
-        queryPlan.setQueryType("LIST");
-        queryPlan.setEntity("customer");
-        queryPlan.setSelectFields(List.of("id", "name", "full_name", "owner_name", "region", "follow_time"));
-        queryPlan.setFilters(List.of(ownerFilter, noFollowFilter));
-        queryPlan.setOrderBy(List.of(order));
-        queryPlan.setLimit(20);
-        return aiAgentDatabaseQueryService.answer(queryPlan, context);
-    }
-
-    private AiAgentChatResponse recentCustomers(String question, AiAgentContext context) {
-        List<AiAgentCustomerRow> rows = customerTools.searchCustomers(context, "", 200)
-                .stream()
-                .sorted(Comparator.comparing((AiAgentCustomerRow row) -> row.getCreateTime() == null ? 0L : row.getCreateTime()).reversed())
-                .limit(10)
-                .toList();
-        AiAgentChatResponse response = base("RECENT_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("recent_customer_list", "SUCCESS", "按 customer.create_time 查看最近新增客户", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内暂无可见客户。");
-            return response;
-        }
-        response.setAnswer("当前权限范围内最近新增的客户如下，按创建时间倒序展示。");
-        fillCustomerPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse visibleCustomerList(String question, AiAgentContext context) {
-        List<AiAgentCustomerRow> rows = customerTools.searchCustomers(context, "", 50);
-        AiAgentChatResponse response = base("VISIBLE_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("visible_customer_list", "SUCCESS", "读取当前数据范围内的可见客户", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前数据范围内暂无可见客户。");
-            return response;
-        }
-        response.setAnswer("当前数据范围内可见客户共展示前 " + Math.min(rows.size(), 10) + " 个。");
-        fillCustomerPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse customerFieldLookup(String question, AiAgentContext context, String intent,
-                                                    String toolName, String fieldName) {
-        String customerName = extractCustomerName(question);
-        return customerFieldLookupByName(customerName, context, intent, toolName, fieldName);
-    }
-
-    private AiAgentChatResponse customerFieldLookupByName(String customerName, AiAgentContext context, String intent,
-                                                          String toolName, String fieldName) {
-        List<AiAgentCustomerRow> rows = customerTools.searchCustomers(context, customerName, 1);
-        AiAgentChatResponse response = base(intent);
-        response.getEvidence().add("customer");
-        response.getTools().add(tool(toolName, "SUCCESS", "读取 customer 主表中的" + fieldName, 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("在你当前权限范围内，未找到名称匹配“" + customerName + "”的客户。");
-            return response;
-        }
-        AiAgentCustomerRow customer = rows.get(0);
-        response.setAnswer("客户“" + customer.getName() + "”的" + fieldName + "如下。");
-        switch (fieldName) {
-            case "负责人" -> response.getPoints().add("负责人：" + StringUtils.defaultIfBlank(customer.getOwnerName(), "未设置"));
-            case "联系方式" -> {
-                response.getPoints().add("邮箱：" + maskEmail(customer.getEmail()));
-                response.getPoints().add("电话：" + maskPhone(customer.getPhone()));
-                response.getPoints().add("地址：" + StringUtils.defaultIfBlank(customer.getAddress(), "未填写"));
-            }
-            case "最近跟进时间" -> response.getPoints().add("最近跟进时间：" + formatTimestamp(customer.getFollowTime()));
-            case "备注" -> response.getPoints().add("备注：" + StringUtils.defaultIfBlank(customer.getRemark(), "未填写"));
-            case "地区" -> response.getPoints().add("地区：" + StringUtils.defaultIfBlank(customer.getRegion(), "未填写"));
-            case "企微ID" -> response.getPoints().add("企微 external_userid：" + StringUtils.defaultIfBlank(customer.getWecomExternalId(), "未填写"));
-            case "微信群 roomid" -> response.getPoints().add("roomid：" + StringUtils.defaultIfBlank(customer.getRoomid(), "未填写"));
-            default -> fillCustomerPoints(response, rows);
-        }
-        response.getCitations().add(citation("crm_customer", "customer", customer.getName(), List.of(customer.getId())));
-        return response;
-    }
-
-    private AiAgentChatResponse specialistStaleFollowCustomers(String question, AiAgentContext context) {
-        String specialistName = StringUtils.defaultIfBlank(extractSpecialistName(question),
-                aiAgentInternalMapper.findUserNameById(context.getUserId()));
-        return specialistStaleFollowCustomersByName(specialistName, context);
-    }
-
-    private AiAgentChatResponse specialistStaleFollowCustomersByName(String specialistName, AiAgentContext context) {
-        long threshold = Instant.now().minus(Duration.ofDays(STALE_FOLLOW_DAYS)).toEpochMilli();
-        List<AiAgentCustomerRow> rows = customerTools.findCustomersBySpecialist(context, specialistName, 300)
-                .stream()
-                .filter(row -> row.getFollowTime() == null || row.getFollowTime() < threshold)
-                .sorted(Comparator.comparing(row -> row.getFollowTime() == null ? Long.MIN_VALUE : row.getFollowTime()))
-                .limit(10)
-                .toList();
-        AiAgentChatResponse response = base("SPECIALIST_STALE_FOLLOW_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("specialist_stale_follow_customer_list", "SUCCESS",
-                "按销售专员筛选超过 30 天未跟进客户", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内未发现“" + specialistName + "”负责客户中超过 " + STALE_FOLLOW_DAYS + " 天未跟进的客户。");
-            return response;
-        }
-        response.setAnswer("“" + specialistName + "”负责客户中，超过 " + STALE_FOLLOW_DAYS + " 天未跟进或未记录跟进时间的客户如下。");
-        fillCustomerPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse notFollowedThisWeek(AiAgentContext context) {
-        LocalDate today = LocalDate.now(AGENT_ZONE);
-        long weekStart = today.minusDays(today.getDayOfWeek().getValue() - 1L)
-                .atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
-        List<AiAgentCustomerRow> rows = customerTools.searchCustomers(context, "", 500)
-                .stream()
-                .filter(row -> row.getFollowTime() == null || row.getFollowTime() < weekStart)
-                .limit(10)
-                .toList();
-        AiAgentChatResponse response = base("THIS_WEEK_NOT_FOLLOWED_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("this_week_not_followed_customer_list", "SUCCESS",
-                "筛选本周尚未跟进的可见客户", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内暂未发现本周未跟进的客户。");
-            return response;
-        }
-        response.setAnswer("当前权限范围内，本周尚未跟进的客户如下。");
-        fillCustomerPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse leastFollowCustomers(String question, AiAgentContext context) {
-        List<AiAgentCommunicationRow> rows = communicationTools.visibleCustomerCommunicationSummary(context, 200)
-                .stream()
-                .filter(row -> !question.contains("没有任何跟进记录") || safeLong(row.getFollowRecordCount()) == 0)
-                .sorted(Comparator.comparingLong(row -> safeLong(row.getFollowRecordCount())))
-                .limit(10)
-                .toList();
-        AiAgentChatResponse response = base(question.contains("没有任何跟进记录")
-                ? "NO_FOLLOW_RECORD_CUSTOMER_LIST" : "LEAST_FOLLOW_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("follow_up_record");
-        response.getTools().add(tool("least_follow_customer_list", "SUCCESS", "统计可见客户跟进记录数量", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前时间范围内暂未找到符合条件的客户。");
-            return response;
-        }
-        response.setAnswer("当前时间范围内，跟进较少的客户如下。");
-        rows.forEach(row -> response.getPoints().add(row.getCustomerName() + "：跟进 "
-                + safeLong(row.getFollowRecordCount()) + " 条，负责人 "
-                + StringUtils.defaultIfBlank(row.getOwnerName(), "未设置")));
-        return response;
-    }
-
-    private AiAgentChatResponse customerFollowRecords(String question, AiAgentContext context) {
-        String customerName = extractCustomerName(question);
-        return customerFollowRecordsByName(customerName, context);
-    }
-
-    private AiAgentChatResponse customerFollowRecordsByName(String customerName, AiAgentContext context) {
-        List<AiAgentFollowRecordRow> rows = aiAgentInternalMapper.listCustomerFollowRecords(
-                context.getOrganizationId(), context.getUserId(), customerName, context.getDataPermission(), 10);
-        AiAgentChatResponse response = base("CUSTOMER_FOLLOW_RECORD_LIST");
-        response.getEvidence().add("follow_up_record");
-        response.getTools().add(tool("customer_follow_record_list", "SUCCESS", "读取客户最近跟进记录", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内未查到“" + customerName + "”的跟进记录。");
-            return response;
-        }
-        response.setAnswer("客户“" + rows.get(0).getCustomerName() + "”最近跟进记录如下，最多展示 10 条。");
-        rows.forEach(row -> response.getPoints().add(formatTimestamp(row.getFollowTime()) + "："
-                + StringUtils.defaultIfBlank(row.getOwnerName(), "未设置") + " 通过 "
-                + StringUtils.defaultIfBlank(row.getFollowMethod(), "未填写方式") + " 跟进，内容："
-                + StringUtils.abbreviate(StringUtils.defaultIfBlank(row.getContent(), "未填写"), 120)));
-        return response;
-    }
-
-    private AiAgentChatResponse customerLastFollower(String question, AiAgentContext context) {
-        String customerName = extractCustomerName(question);
-        return customerLastFollowerByName(customerName, context);
-    }
-
-    private AiAgentChatResponse customerLastFollowerByName(String customerName, AiAgentContext context) {
-        List<AiAgentFollowRecordRow> rows = aiAgentInternalMapper.listCustomerFollowRecords(
-                context.getOrganizationId(), context.getUserId(), customerName, context.getDataPermission(), 1);
-        AiAgentChatResponse response = base("CUSTOMER_LAST_FOLLOWER_LOOKUP");
-        response.getEvidence().add("follow_up_record");
-        response.getTools().add(tool("customer_last_follower_lookup", "SUCCESS", "读取客户最近一条跟进记录", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内未查到“" + customerName + "”的跟进记录。");
-            return response;
-        }
-        AiAgentFollowRecordRow row = rows.get(0);
-        response.setAnswer("客户“" + row.getCustomerName() + "”最近一次由“"
-                + StringUtils.defaultIfBlank(row.getOwnerName(), "未设置") + "”跟进。");
-        response.getPoints().add("跟进时间：" + formatTimestamp(row.getFollowTime()));
-        response.getPoints().add("跟进方式：" + StringUtils.defaultIfBlank(row.getFollowMethod(), "未填写"));
-        return response;
-    }
-
-    private AiAgentChatResponse customerCommunication(String question, AiAgentContext context) {
-        String customerName = extractCustomerName(question);
-        return customerCommunicationByName(customerName, context);
-    }
-
-    private AiAgentChatResponse customerCommunicationByName(String customerName, AiAgentContext context) {
-        List<AiAgentCommunicationRow> rows = communicationTools.customerCommunicationSummary(context, customerName, 10);
-        AiAgentChatResponse response = base("CUSTOMER_COMMUNICATION_SUMMARY");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("wecom_ingestion_message");
-        response.getEvidence().add("email_webhook_event");
-        response.getEvidence().add("follow_up_record");
-        response.getTools().add(tool("customer_communication_summary", "SUCCESS",
-                "统计客户企微、邮件和跟进数量", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内未查到“" + customerName + "”在" + context.getTimeWindow().label() + "的沟通统计。");
-            return response;
-        }
-        AiAgentCommunicationRow row = rows.get(0);
-        response.setAnswer("客户“" + row.getCustomerName() + "”在" + context.getTimeWindow().label()
-                + "的沟通统计如下。");
-        response.getPoints().add("企微消息：" + safeLong(row.getWecomMessageCount()) + " 条");
-        response.getPoints().add("邮件：" + safeLong(row.getEmailCount()) + " 封");
-        response.getPoints().add("跟进记录：" + safeLong(row.getFollowRecordCount()) + " 条");
-        response.getPoints().add("最近沟通时间：" + formatTimestamp(row.getLastCommunicationTime()));
-        response.getWarnings().add("仅返回统计，不返回聊天正文或邮件正文。");
-        return response;
-    }
-
-    private AiAgentChatResponse communicationInsight(String question, AiAgentContext context) {
-        List<AiAgentCommunicationRow> rows = containsAny(question, "张三", "销售", "联系专员")
-                ? communicationTools.salesCommunicationSummary(context,
-                StringUtils.defaultIfBlank(extractSpecialistName(question), aiAgentInternalMapper.findUserNameById(context.getUserId())), 200)
-                : communicationTools.visibleCustomerCommunicationSummary(context, 200);
-        if (question.contains("完全没沟通")) {
-            rows = rows.stream().filter(row -> communicationCount(row) == 0).toList();
-        } else if (question.contains("邮件很多但企微很少")) {
-            rows = rows.stream().filter(row -> safeLong(row.getEmailCount()) > safeLong(row.getWecomMessageCount())
-                    && safeLong(row.getEmailCount()) > 0).toList();
-        } else if (question.contains("企微很多但没有跟进")) {
-            rows = rows.stream().filter(row -> safeLong(row.getWecomMessageCount()) > 0
-                    && safeLong(row.getFollowRecordCount()) == 0).toList();
-        } else {
-            rows = rows.stream().sorted(Comparator.comparingLong(this::communicationCount).reversed()).toList();
-        }
-        AiAgentChatResponse response = base("COMMUNICATION_SIGNAL_LIST");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("wecom_ingestion_message");
-        response.getEvidence().add("email_webhook_event");
-        response.getEvidence().add("follow_up_record");
-        response.getTools().add(tool("communication_signal_list", "SUCCESS", "分析客户沟通统计信号", 0L));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前时间范围内暂未找到符合条件的沟通信号。");
-            return response;
-        }
-        response.setAnswer("当前时间范围内匹配到 " + rows.size() + " 个沟通信号，展示前 10 个。");
-        rows.stream().limit(10).forEach(row -> response.getPoints().add(row.getCustomerName()
-                + "：企微 " + safeLong(row.getWecomMessageCount()) + " 条，邮件 "
-                + safeLong(row.getEmailCount()) + " 封，跟进 " + safeLong(row.getFollowRecordCount())
-                + " 条，最近沟通 " + formatTimestamp(row.getLastCommunicationTime())));
-        return response;
-    }
-
-    private AiAgentChatResponse orderAmountInsight(String question, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = resolveOrderScope(question, context, question.contains("新订单") || question.contains("新单"), 1000);
-        AiAgentChatResponse response = orderResponseBase("ORDER_AMOUNT_INSIGHT", orderResult,
-                System.currentTimeMillis() - start, "order_amount_insight");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        List<ExternalOrderRow> rows = orderResult.getRows();
-        if (rows.isEmpty()) {
-            response.setAnswer("当前权限范围内未匹配到可用于统计金额的订单/合同记录。");
-            return response;
-        }
-        if (question.contains("总数")) {
-            response.setIntent("ORDER_COUNT_SUMMARY");
-            response.setAnswer("当前匹配到订单/合同记录 " + rows.size() + " 条。");
-            fillOrderPoints(response, rows);
-            return response;
-        }
-        List<CustomerValueSignal> signals = aggregateOrderValues(rows);
-        if (question.contains("最大的一笔")) {
-            response.setIntent("LARGEST_ORDER_LOOKUP");
-            rows.stream()
-                    .max(Comparator.comparing(row -> parseAmount(row.getFields().get("amount"))))
-                    .ifPresent(row -> {
-                        response.setAnswer("当前匹配到的最大一笔订单/合同如下。");
-                        response.getPoints().add(formatOrderPoint(row, 1));
-                    });
-            return response;
-        }
-        if (containsAny(question, "金额最高", "高价值")) {
-            response.setIntent(question.contains("新订单") ? "TOP_NEW_ORDER_VALUE_CUSTOMER_LIST" : "TOP_ORDER_VALUE_CUSTOMER_LIST");
-            response.setAnswer("当前匹配到的订单金额较高客户如下，按金额倒序展示。");
-            signals.stream().limit(10).forEach(signal -> response.getPoints().add(formatCustomerValueSignalPoint(signal,
-                    response.getPoints().size() + 1)));
-            return response;
-        }
-        BigDecimal total = rows.stream()
-                .map(row -> parseAmount(row.getFields().get("amount")))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        response.setIntent("ORDER_AMOUNT_SUMMARY");
-        response.setAnswer("当前匹配到订单/合同记录 " + rows.size() + " 条，合计金额约 " + formatAmount(total) + "。");
-        fillOrderPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse deliveryInsight(String question, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = question.contains("客户")
-                ? externalOrderTools.findOrdersForCustomer(context, extractCustomerName(question), false, 100)
-                : externalOrderTools.findOrdersForVisibleCustomers(context, true, 500);
-        AiAgentChatResponse response = orderResponseBase("ORDER_DELIVERY_SIGNAL_LIST", orderResult,
-                System.currentTimeMillis() - start, "order_delivery_signal_list");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        long todayStart = LocalDate.now(AGENT_ZONE).atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
-        long sevenDaysLater = LocalDate.now(AGENT_ZONE).plusDays(7).atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
-        List<ExternalOrderRow> rows = orderResult.getRows().stream()
-                .filter(row -> {
-                    long delivery = parseDateMillis(row.getFields().get("delivery_date"));
-                    if (delivery <= 0) {
-                        return question.contains("交期是什么时候");
-                    }
-                    return question.contains("逾期") ? delivery < todayStart : delivery <= sevenDaysLater;
-                })
-                .limit(10)
-                .toList();
-        if (rows.isEmpty()) {
-            response.setAnswer("当前匹配订单中暂未找到符合交期条件的记录。");
-            return response;
-        }
-        response.setAnswer("当前匹配到 " + rows.size() + " 条交期相关订单/合同记录。");
-        fillOrderPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse orderStatusByNo(String question, AiAgentContext context) {
-        String orderNo = cleanupName(extractAfterAny(question, "订单号", "某订单号"));
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findOrdersByOrderNo(context, orderNo, 10);
-        AiAgentChatResponse response = orderResponseBase("ORDER_STATUS_BY_NO", orderResult,
-                System.currentTimeMillis() - start, "order_status_by_no");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        if (orderResult.getRows().isEmpty()) {
-            response.setAnswer("当前权限范围内未匹配到订单号包含“" + orderNo + "”的记录。");
-            return response;
-        }
-        response.setAnswer("订单号匹配“" + orderNo + "”的记录如下。");
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse productOrders(String question, AiAgentContext context) {
-        String productName = cleanupName(extractAfterAny(question, "某产品", "产品", "产品名称"));
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findOrdersByProduct(context, productName, 20);
-        AiAgentChatResponse response = orderResponseBase("PRODUCT_ORDER_LIST", orderResult,
-                System.currentTimeMillis() - start, "product_order_list");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        if (orderResult.getRows().isEmpty()) {
-            response.setAnswer("当前权限范围内未匹配到产品名称包含“" + productName + "”的订单/合同记录。");
-            return response;
-        }
-        response.setAnswer("产品名称匹配“" + productName + "”的订单/合同记录如下。");
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse attentionSignals(String question, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findOrdersForVisibleCustomers(context, true, 1000);
-        List<AiAgentCommunicationRow> communicationRows = communicationTools.visibleCustomerCommunicationSummary(context, 500);
-        Map<String, AiAgentCommunicationRow> communicationByCustomer = new LinkedHashMap<>();
-        for (AiAgentCommunicationRow row : communicationRows) {
-            communicationByCustomer.put(row.getCustomerName(), row);
-        }
-        List<CustomerValueSignal> signals = aggregateOrderValues(orderResult.getRows())
-                .stream()
-                .peek(signal -> {
-                    AiAgentCommunicationRow communication = communicationByCustomer.get(signal.customerName);
-                    if (communication != null) {
-                        signal.ownerName = communication.getOwnerName();
-                        signal.wecomMessageCount = safeLong(communication.getWecomMessageCount());
-                        signal.emailCount = safeLong(communication.getEmailCount());
-                        signal.followRecordCount = safeLong(communication.getFollowRecordCount());
-                        signal.lastCommunicationTime = communication.getLastCommunicationTime();
-                    }
-                })
-                .filter(signal -> {
-                    if (question.contains("没有沟通") || question.contains("互动下降") || question.contains("突然没有互动")) {
-                        return signal.communicationCount() == 0;
-                    }
-                    if (question.contains("没有跟进") || question.contains("长期没跟进")) {
-                        return signal.followRecordCount == 0;
-                    }
-                    return signal.communicationCount() <= LOW_COMMUNICATION_COUNT;
-                })
-                .limit(10)
-                .toList();
-        AiAgentChatResponse response = base("CUSTOMER_ATTENTION_SIGNAL_LIST");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("follow_up_record");
-        response.getEvidence().add("wecom_ingestion_message");
-        response.getEvidence().add("email_webhook_event");
-        response.getEvidence().add("mls_agent_data.contract_info");
-        response.getTools().add(tool("customer_attention_signal_list",
-                orderResult.isConfigured() ? "SUCCESS" : "SKIPPED",
-                "结合进行中订单金额、沟通和跟进统计筛选关注信号", System.currentTimeMillis() - start));
-        response.getWarnings().addAll(orderResult.getWarnings());
-        if (!orderResult.isConfigured()) {
-            response.setAnswer("外部订单/合同数据源未配置，暂时不能生成客户关注信号。");
-            return response;
-        }
-        if (signals.isEmpty()) {
-            response.setAnswer("当前权限范围内暂未发现符合条件的客户关注信号。");
-            return response;
-        }
-        response.setAnswer("按当前规则，值得优先关注的客户如下：有进行中订单，且最近沟通/跟进偏少。");
-        for (int index = 0; index < signals.size(); index++) {
-            response.getPoints().add(formatCustomerValueSignalPoint(signals.get(index), index + 1));
-        }
-        response.getWarnings().add("这是规则型提示，不代表系统已判断客户一定流失。");
-        return response;
-    }
-
-
-    private AiAgentChatResponse salesCommunication(String question, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        String specialistName = extractSpecialistName(question);
-        if (StringUtils.isBlank(specialistName)) {
-            specialistName = aiAgentInternalMapper.findUserNameById(context.getUserId());
-        }
-        return salesCommunicationBySpecialist(specialistName, context, start);
-    }
-
-    private AiAgentChatResponse salesCommunicationBySpecialist(String specialistName, AiAgentContext context) {
-        return salesCommunicationBySpecialist(specialistName, context, System.currentTimeMillis());
-    }
-
-    private AiAgentChatResponse salesCommunicationBySpecialist(String specialistName, AiAgentContext context, long start) {
-        List<AiAgentCommunicationRow> rows = communicationTools.salesCommunicationSummary(context, specialistName, 30);
-        long duration = System.currentTimeMillis() - start;
-        log.debug("AI agent sales communication query: specialistName={}, timeWindow={}, start={}, end={}, dataScope={}, rowCount={}",
-                specialistName,
-                context.getTimeWindow().label(),
-                context.getTimeWindow().startTime(),
-                context.getTimeWindow().endTime(),
-                context.getDataScope(),
-                rows.size());
-
-        AiAgentChatResponse response = base("SPECIALIST_COMMUNICATION_SUMMARY");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("wecom_ingestion_message");
-        response.getEvidence().add("email_webhook_event");
-        response.getEvidence().add("follow_up_record");
-        response.getTools().add(tool("sales_communication_summary", "SUCCESS", "统计销售专员可见客户的企微、邮件和跟进数量", duration));
-        response.getCitations().add(citation("crm_communication", "customer", "客户沟通统计",
-                rows.stream().map(AiAgentCommunicationRow::getCustomerId).toList()));
-
-        long wecomCount = rows.stream().mapToLong(row -> safeLong(row.getWecomMessageCount())).sum();
-        long emailCount = rows.stream().mapToLong(row -> safeLong(row.getEmailCount())).sum();
-        long followCount = rows.stream().mapToLong(row -> safeLong(row.getFollowRecordCount())).sum();
-        if (rows.isEmpty()) {
-            response.setAnswer("在当前组织内，未查到“" + specialistName + "”在" + context.getTimeWindow().label()
-                    + "与客户发生的企微、邮件或跟进记录。");
-            response.getWarnings().add("统计当前组织内客户，不展示聊天内容和邮件正文。");
-            return response;
-        }
-
-        response.setAnswer("“" + specialistName + "”在" + context.getTimeWindow().label() + "与 "
-                + rows.size() + " 个可见客户有沟通记录：企微消息 " + wecomCount + " 条，邮件 " + emailCount
-                + " 封，跟进记录 " + followCount + " 条。");
-        rows.stream().limit(10).forEach(row -> response.getPoints().add(
-                row.getCustomerName() + "：企微 " + safeLong(row.getWecomMessageCount()) + " 条，邮件 "
-                        + safeLong(row.getEmailCount()) + " 封，跟进 " + safeLong(row.getFollowRecordCount()) + " 条"
-        ));
-        response.getWarnings().add("按要求未返回聊天内容、邮件正文，只返回客户名单和统计信息。");
-        return response;
-    }
-
-    private AiAgentChatResponse salesCustomerList(String question, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        String specialistName = StringUtils.defaultIfBlank(extractSpecialistName(question),
-                aiAgentInternalMapper.findUserNameById(context.getUserId()));
-        return salesCustomerListBySpecialist(specialistName, context, start);
-    }
-
-    private AiAgentChatResponse salesCustomerListBySpecialist(String specialistName, AiAgentContext context) {
-        return salesCustomerListBySpecialist(specialistName, context, System.currentTimeMillis());
-    }
-
-    private AiAgentChatResponse salesCustomerListBySpecialist(String specialistName, AiAgentContext context, long start) {
-        List<AiAgentCustomerRow> rows = customerTools.findCustomersBySpecialist(context, specialistName, 30);
-        long duration = System.currentTimeMillis() - start;
-
-        AiAgentChatResponse response = base("SPECIALIST_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("specialist_customer_list", "SUCCESS",
-                "读取 customer 主表中销售/联系专员负责的可见客户", duration));
-        if (rows.isEmpty()) {
-            response.setAnswer("在你当前权限范围内，未找到“" + specialistName + "”负责的客户。");
-            response.getWarnings().add("请确认销售/联系专员姓名是否正确，或当前账号是否有查看这些客户的权限。");
-            return response;
-        }
-        response.setAnswer("“" + specialistName + "”负责的可见客户共 " + rows.size() + " 个。");
-        fillCustomerPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse staleFollowCustomers(AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        long threshold = Instant.now().minus(Duration.ofDays(STALE_FOLLOW_DAYS)).toEpochMilli();
-        List<AiAgentCustomerRow> rows = customerTools.searchCustomers(context, "", 500)
-                .stream()
-                .filter(row -> row.getFollowTime() == null || row.getFollowTime() < threshold)
-                .sorted(Comparator.comparing(row -> row.getFollowTime() == null ? Long.MIN_VALUE : row.getFollowTime()))
-                .limit(10)
-                .toList();
-        long duration = System.currentTimeMillis() - start;
-
-        AiAgentChatResponse response = base("STALE_FOLLOW_CUSTOMER_LIST");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("stale_follow_customer_list", "SUCCESS",
-                "按 customer.follow_time 查找长期未跟进客户", duration));
-        if (rows.isEmpty()) {
-            response.setAnswer("当前可见客户中，暂未发现超过 " + STALE_FOLLOW_DAYS + " 天未跟进的客户。");
-            return response;
-        }
-        response.setAnswer("当前可见客户中，超过 " + STALE_FOLLOW_DAYS + " 天未跟进或未记录跟进时间的客户有 "
-                + rows.size() + " 个。");
-        fillCustomerPoints(response, rows);
-        response.getWarnings().add("“很久没跟进”当前默认按超过 " + STALE_FOLLOW_DAYS + " 天未跟进计算。");
-        return response;
-    }
-
-    private AiAgentChatResponse lowCommunicationHighOrderValue(AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findOrdersForVisibleCustomers(context, false, 1000);
-        List<AiAgentCommunicationRow> communicationRows = communicationTools.visibleCustomerCommunicationSummary(context, 500);
-        long duration = System.currentTimeMillis() - start;
-
-        AiAgentChatResponse response = base("LOW_COMMUNICATION_HIGH_VALUE_CUSTOMER");
-        response.getEvidence().add("customer");
-        response.getEvidence().add("wecom_ingestion_message");
-        response.getEvidence().add("email_webhook_event");
-        response.getEvidence().add("follow_up_record");
-        response.getEvidence().add("mls_agent_data.contract_info");
-        response.getTools().add(tool("low_communication_high_value_customer",
-                orderResult.isConfigured() ? "SUCCESS" : "SKIPPED",
-                "汇总可见客户最近沟通次数与外部订单金额", duration));
-        response.getWarnings().addAll(orderResult.getWarnings());
-        if (!orderResult.isConfigured()) {
-            response.setAnswer("外部订单/合同数据源还没有配置，所以暂时不能判断“订单金额高”的客户。");
-            return response;
-        }
-
-        Map<String, AiAgentCommunicationRow> communicationByCustomer = new LinkedHashMap<>();
-        for (AiAgentCommunicationRow row : communicationRows) {
-            communicationByCustomer.put(row.getCustomerName(), row);
-        }
-        Map<String, CustomerValueSignal> signals = new LinkedHashMap<>();
-        for (ExternalOrderRow order : orderResult.getRows()) {
-            String customerName = StringUtils.defaultIfBlank(order.getCustomer(), order.getFields().get("customer"));
-            if (StringUtils.isBlank(customerName)) {
-                continue;
-            }
-            String currency = StringUtils.defaultIfBlank(order.getFields().get("currency"), "未填写");
-            String key = customerName + "\u0001" + currency;
-            CustomerValueSignal signal = signals.computeIfAbsent(key, ignored -> {
-                CustomerValueSignal created = new CustomerValueSignal();
-                created.customerName = customerName;
-                created.currency = currency;
-                return created;
-            });
-            signal.orderCount++;
-            signal.totalAmount = signal.totalAmount.add(parseAmount(order.getFields().get("amount")));
-            if (StringUtils.isBlank(signal.latestOrderNo)) {
-                signal.latestOrderNo = order.getOrderNo();
-                signal.latestOrderStatus = order.getOrderStatus();
-            }
-            AiAgentCommunicationRow communication = communicationByCustomer.get(customerName);
-            if (communication != null) {
-                signal.ownerName = communication.getOwnerName();
-                signal.wecomMessageCount = safeLong(communication.getWecomMessageCount());
-                signal.emailCount = safeLong(communication.getEmailCount());
-                signal.followRecordCount = safeLong(communication.getFollowRecordCount());
-                signal.lastCommunicationTime = communication.getLastCommunicationTime();
-            }
-        }
-
-        List<CustomerValueSignal> candidates = signals.values()
-                .stream()
-                .filter(signal -> signal.communicationCount() <= LOW_COMMUNICATION_COUNT)
-                .filter(signal -> signal.totalAmount.compareTo(BigDecimal.ZERO) > 0)
-                .sorted(Comparator.comparing((CustomerValueSignal signal) -> signal.totalAmount).reversed())
-                .limit(10)
-                .toList();
-        if (candidates.isEmpty()) {
-            response.setAnswer("当前可见客户中，暂未匹配到“沟通较少且订单金额较高”的客户。");
-            response.getWarnings().add("当前默认口径：最近 " + context.getTimeWindow().label()
-                    + "沟通次数不超过 " + LOW_COMMUNICATION_COUNT + " 次，且外部订单金额大于 0。");
-            return response;
-        }
-        response.setAnswer("当前可见客户中，沟通较少但订单金额较高的客户有 " + candidates.size()
-                + " 个，已按订单金额从高到低排序。");
-        for (int index = 0; index < candidates.size(); index++) {
-            response.getPoints().add(formatCustomerValueSignalPoint(candidates.get(index), index + 1));
-        }
-        response.getWarnings().add("当前默认口径：最近 " + context.getTimeWindow().label()
-                + "沟通次数不超过 " + LOW_COMMUNICATION_COUNT + " 次；订单金额按 contract_info.amount 原值汇总，并保留币种。");
-        return response;
-    }
-
-    private AiAgentChatResponse salesNewOrders(String question, AiAgentContext context) {
-        String specialistName = StringUtils.defaultIfBlank(extractSpecialistName(question),
-                aiAgentInternalMapper.findUserNameById(context.getUserId()));
-        return salesNewOrdersBySpecialist(specialistName, context);
-    }
-
-    private AiAgentChatResponse salesNewOrdersBySpecialist(String specialistName, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findRecentOrdersForSales(context, specialistName, 30);
-        long duration = System.currentTimeMillis() - start;
-        AiAgentChatResponse response = orderResponseBase("SALES_CUSTOMER_NEW_ORDER_CHECK", orderResult, duration,
-                "sales_customer_new_order_check");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        List<ExternalOrderRow> rows = orderResult.getRows();
-        response.setAnswer("“" + specialistName + "”负责的可见客户在外部订单表中匹配到 "
-                + rows.size() + " 条订单记录。");
-        if (!orderResult.isDateFilterAvailable()) {
-            response.getWarnings().add("外部表 contract_info 当前未配置可用订单日期字段，因此不能严格判断“本月新增”。");
-        }
-        fillOrderPoints(response, rows);
-        return response;
-    }
-
-    private AiAgentChatResponse recentOrdersByQuestion(String question, AiAgentContext context) {
-        if (containsAny(question, "负责的客户", "负责客户", "联系专员", "销售")) {
-            String specialistName = StringUtils.defaultIfBlank(extractSpecialistName(question),
-                    aiAgentInternalMapper.findUserNameById(context.getUserId()));
-            return salesRecentOrders(context, specialistName);
-        }
-        String customerName = extractCustomerName(question);
-        if (StringUtils.isNotBlank(customerName) && !containsAny(customerName, "最近", "订单", "合同")) {
-            return customerNewOrders(question, context);
-        }
-        return recentVisibleOrders(context);
-    }
-
-    private AiAgentChatResponse salesRecentOrders(AiAgentContext context, String specialistName) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findRecentOrdersForSales(context, specialistName, 30);
-        long duration = System.currentTimeMillis() - start;
-        AiAgentChatResponse response = orderResponseBase("SALES_RECENT_ORDER_LIST", orderResult, duration,
-                "sales_recent_order_list");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        response.setAnswer("“" + specialistName + "”负责的可见客户最近匹配到 "
-                + orderResult.getRows().size() + " 条订单/合同记录。");
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse recentVisibleOrders(AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findRecentOrdersForVisibleCustomers(context, 30);
-        long duration = System.currentTimeMillis() - start;
-        AiAgentChatResponse response = orderResponseBase("VISIBLE_RECENT_ORDER_LIST", orderResult, duration,
-                "visible_recent_order_list");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        response.setAnswer("当前可见客户最近匹配到 " + orderResult.getRows().size() + " 条订单/合同记录。");
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse salesActiveOrders(String question, AiAgentContext context) {
-        String specialistName = StringUtils.defaultIfBlank(extractSpecialistName(question),
-                aiAgentInternalMapper.findUserNameById(context.getUserId()));
-        return salesActiveOrdersBySpecialist(specialistName, context);
-    }
-
-    private AiAgentChatResponse salesActiveOrdersBySpecialist(String specialistName, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findOrdersForSales(context, specialistName, true, 30);
-        long duration = System.currentTimeMillis() - start;
-        AiAgentChatResponse response = orderResponseBase("SALES_CUSTOMER_ACTIVE_ORDER_LIST", orderResult, duration,
-                "sales_customer_active_order_list");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        response.setAnswer("“" + specialistName + "”负责的可见客户中，外部订单表匹配到 "
-                + orderResult.getRows().size() + " 条尚未结束的订单记录。");
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse customerNewOrders(String question, AiAgentContext context) {
-        String customerName = extractCustomerName(question);
-        return customerNewOrdersByName(customerName, context);
-    }
-
-    private AiAgentChatResponse customerNewOrdersByName(String customerName, AiAgentContext context) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findRecentOrdersForCustomer(context, customerName, 30);
-        long duration = System.currentTimeMillis() - start;
-        AiAgentChatResponse response = orderResponseBase("CUSTOMER_NEW_ORDER_CHECK", orderResult, duration,
-                "customer_new_order_check");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        if (orderResult.getSearchedCustomers().isEmpty()) {
-            response.setAnswer("在你当前权限范围内，未找到名称匹配“" + customerName + "”的客户，因此不能查询该客户新订单。");
-            response.getWarnings().add("可能是客户不存在，或当前账号没有查看该客户的权限。");
-            return response;
-        }
-        response.setAnswer("客户“" + orderResult.getSearchedCustomers().get(0) + "”在"
-                + context.getTimeWindow().label() + "内匹配到 " + orderResult.getRows().size() + " 条新订单/合同记录。");
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse customerOrders(String question, AiAgentContext context, boolean activeOnly) {
-        String customerName = extractCustomerName(question);
-        return customerOrdersByName(customerName, context, activeOnly);
-    }
-
-    private AiAgentChatResponse customerOrdersByName(String customerName, AiAgentContext context, boolean activeOnly) {
-        long start = System.currentTimeMillis();
-        ExternalOrderQueryResult orderResult = externalOrderTools.findOrdersForCustomer(context, customerName, activeOnly, 30);
-        long duration = System.currentTimeMillis() - start;
-        AiAgentChatResponse response = orderResponseBase(activeOnly ? "CUSTOMER_ACTIVE_ORDER_LIST" : "CUSTOMER_CONTRACT_STATUS_LIST",
-                orderResult, duration, activeOnly ? "customer_active_order_list" : "customer_contract_status_list");
-        if (!orderResult.isConfigured()) {
-            return response;
-        }
-        if (orderResult.getSearchedCustomers().isEmpty()) {
-            response.setAnswer("在你当前权限范围内，未找到名称匹配“" + customerName + "”的客户，因此不能查询该客户订单。");
-            response.getWarnings().add("可能是客户不存在，或当前账号没有查看该客户的权限。");
-            return response;
-        }
-        response.setAnswer("客户“" + orderResult.getSearchedCustomers().get(0) + "”在外部 contract_info 表中匹配到 "
-                + orderResult.getRows().size() + " 条" + (activeOnly ? "尚未结束的订单/合同记录。" : "合同/订单记录，下面会展示每条记录的全部字段和状态。"));
-        fillOrderPoints(response, orderResult.getRows());
-        return response;
-    }
-
-    private AiAgentChatResponse customerSummary(String question, AiAgentContext context) {
-        String customerName = extractCustomerName(question);
-        return customerSummaryByName(customerName, context);
-    }
-
-    private AiAgentChatResponse customerSummaryByName(String customerName, AiAgentContext context) {
-        List<AiAgentCustomerRow> customers = customerTools.searchCustomers(context, customerName, 1);
-        AiAgentChatResponse response = base("CUSTOMER_SUMMARY");
-        response.getEvidence().add("customer");
-        response.getTools().add(tool("customer_summary", "SUCCESS", "读取 customer 主表中的客户基础信息", 0L));
-        if (customers.isEmpty()) {
-            response.setAnswer("在你当前权限范围内，未找到名称匹配“" + customerName + "”的客户。");
-            response.getWarnings().add("客户字段优先来自 customer 主表；未命中时不会绕过权限去查扩展表。");
-            return response;
-        }
-        AiAgentCustomerRow customer = customers.get(0);
-        response.setAnswer("客户“" + customer.getName() + "”的基础信息已从 customer 主表读取。负责人："
-                + StringUtils.defaultIfBlank(customer.getOwnerName(), "未设置") + "。");
-        response.getPoints().add("客户全称：" + StringUtils.defaultIfBlank(customer.getFullName(), "未填写"));
-        response.getPoints().add("地区：" + StringUtils.defaultIfBlank(customer.getRegion(), "未填写"));
-        response.getPoints().add("邮箱：" + maskEmail(customer.getEmail()));
-        response.getPoints().add("电话：" + maskPhone(customer.getPhone()));
-        response.getPoints().add("地址：" + StringUtils.defaultIfBlank(customer.getAddress(), "未填写"));
-        response.getPoints().add("备注：" + StringUtils.defaultIfBlank(customer.getRemark(), "未填写"));
-        response.getCitations().add(citation("crm_customer", "customer", customer.getName(), List.of(customer.getId())));
-        return response;
-    }
-
-    private AiAgentChatResponse orderResponseBase(String intent, ExternalOrderQueryResult result,
-                                                  long duration, String toolName) {
-        AiAgentChatResponse response = base(intent);
-        response.getEvidence().add("mls_agent_data.contract_info");
-        response.getTools().add(tool(toolName, result.isConfigured() ? "SUCCESS" : "SKIPPED",
-                result.isConfigured() ? "只读查询外部 contract_info 订单表" : "外部订单数据源未配置", duration));
-        response.getWarnings().addAll(result.getWarnings());
-        if (!result.isConfigured()) {
-            response.setAnswer("外部订单/合同数据源还没有配置，所以暂时不能查询 contract_info。");
-        }
-        return response;
-    }
-
-    private AiAgentChatResponse refusal(String question) {
-        AiAgentChatResponse response = base("SECURITY_REFUSAL");
-        response.setAnswer("这个问题涉及敏感字段或消息正文，我不能直接返回明细，可以返回脱敏后的聚合统计。");
-        response.getWarnings().add("默认拒绝返回聊天正文、邮件正文、密码、token 和授权码等敏感信息。");
-        response.getTools().add(tool("permission_guard", "SUCCESS", "命中越权/敏感内容保护规则", 0L));
-        return response;
-    }
-
-    private AiAgentChatResponse fallback(AiAgentContext context) {
-        AiAgentChatResponse response = base("HELP");
-        response.setAnswer("我现在支持优先回答销售专员与客户沟通统计、客户新订单、客户进行中订单、客户基础信息汇总这几类问题。");
-        response.getPoints().add("例如：张三这个月和客户沟通的情况怎么样？");
-        response.getPoints().add("例如：张三负责的客户这个月有没有新的订单？");
-        response.getPoints().add("例如：某客户最近有没有新订单？");
-        response.getWarnings().add("所有结果基于当前组织内全量数据和已配置的数据源。");
-        return response;
-    }
-
-    private AiAgentChatResponse base(String intent) {
-        AiAgentChatResponse response = new AiAgentChatResponse();
-        response.setIntent(intent);
-        return response;
-    }
-
-    private AiAgentToolCallDTO tool(String name, String status, String summary, Long durationMs) {
-        AiAgentToolCallDTO tool = new AiAgentToolCallDTO();
-        tool.setName(name);
-        tool.setStatus(status);
-        tool.setSummary(summary);
-        tool.setDurationMs(durationMs);
-        tool.setEvidenceId("ev_" + name);
-        return tool;
-    }
-
-    private AiAgentCitationDTO citation(String type, String module, String title, List<String> recordIds) {
-        AiAgentCitationDTO citation = new AiAgentCitationDTO();
-        citation.setType(type);
-        citation.setModule(module);
-        citation.setTitle(title);
-        citation.setRecordIds(new ArrayList<>(recordIds));
-        citation.setUpdatedAt(Instant.now().toString());
-        return citation;
-    }
-
-    private void fillCustomerPoints(AiAgentChatResponse response, List<AiAgentCustomerRow> rows) {
-        int rowCount = Math.min(rows.size(), 10);
-        for (int index = 0; index < rowCount; index++) {
-            response.getPoints().add(formatCustomerPoint(rows.get(index), index + 1));
-        }
-        if (rows.size() > rowCount) {
-            response.getWarnings().add("当前最多展示前 " + rowCount + " 个客户。");
-        }
-    }
-
-    private String formatCustomerPoint(AiAgentCustomerRow row, int index) {
-        return "第 " + index + " 个客户"
-                + "\n客户名称：" + StringUtils.defaultIfBlank(row.getName(), "未填写")
-                + "\n客户全称：" + StringUtils.defaultIfBlank(row.getFullName(), "未填写")
-                + "\n负责人：" + StringUtils.defaultIfBlank(row.getOwnerName(), "未设置")
-                + "\n地区：" + StringUtils.defaultIfBlank(row.getRegion(), "未填写")
-                + "\n最近跟进时间：" + formatTimestamp(row.getFollowTime());
-    }
-
-    private String formatCustomerValueSignalPoint(CustomerValueSignal signal, int index) {
-        return "第 " + index + " 个客户"
-                + "\n客户名称：" + StringUtils.defaultIfBlank(signal.customerName, "未填写")
-                + "\n负责人：" + StringUtils.defaultIfBlank(signal.ownerName, "未设置")
-                + "\n订单总金额：" + formatAmount(signal.totalAmount) + " " + StringUtils.defaultIfBlank(signal.currency, "未填写")
-                + "\n订单数量：" + signal.orderCount
-                + "\n最近订单号：" + StringUtils.defaultIfBlank(signal.latestOrderNo, "未填写")
-                + "\n最近订单状态：" + StringUtils.defaultIfBlank(signal.latestOrderStatus, "未填写")
-                + "\n沟通总次数：" + signal.communicationCount()
-                + "\n企微消息数：" + signal.wecomMessageCount
-                + "\n邮件数：" + signal.emailCount
-                + "\n跟进记录数：" + signal.followRecordCount
-                + "\n最近沟通时间：" + formatTimestamp(signal.lastCommunicationTime);
-    }
-
-    private void fillOrderPoints(AiAgentChatResponse response, List<ExternalOrderRow> rows) {
-        int rowCount = Math.min(rows.size(), 10);
-        for (int index = 0; index < rowCount; index++) {
-            response.getPoints().add(formatOrderPoint(rows.get(index), index + 1));
-        }
-        if (rows.size() > rowCount) {
-            response.getWarnings().add("当前最多展示前 " + rowCount + " 条订单/合同明细。");
-        }
-    }
-
-    private String formatOrderPoint(ExternalOrderRow row, int index) {
-        StringBuilder builder = new StringBuilder("第 " + index + " 条订单/合同");
-        if (row.getFields().isEmpty()) {
-            builder.append("\n订单号：").append(StringUtils.defaultIfBlank(row.getOrderNo(), "未填写"));
-            builder.append("\n客户名称：").append(StringUtils.defaultIfBlank(row.getCustomer(), "未填写"));
-            builder.append("\n产品名称：").append(StringUtils.defaultIfBlank(row.getProductName(), "未填写"));
-            builder.append("\n负责人：").append(StringUtils.defaultIfBlank(row.getManager(), "未填写"));
-            builder.append("\n订单状态：").append(StringUtils.defaultIfBlank(row.getOrderStatus(), "未填写"));
-            return builder.toString();
-        }
-        row.getFields().forEach((field, value) -> builder
-                .append("\n")
-                .append(CONTRACT_FIELD_LABELS.getOrDefault(field, field))
-                .append("：")
-                .append(StringUtils.defaultIfBlank(value, "未填写")));
-        return builder.toString();
-    }
-
-    private ExternalOrderQueryResult resolveOrderScope(String question, AiAgentContext context, boolean recentOnly, int limit) {
-        if (containsAny(question, "负责的客户", "负责客户", "销售", "张三")) {
-            String specialistName = StringUtils.defaultIfBlank(extractSpecialistName(question),
-                    aiAgentInternalMapper.findUserNameById(context.getUserId()));
-            return recentOnly
-                    ? externalOrderTools.findRecentOrdersForSales(context, specialistName, limit)
-                    : externalOrderTools.findOrdersForSales(context, specialistName, false, limit);
-        }
-        String customerName = extractCustomerName(question);
-        if (StringUtils.isNotBlank(customerName) && !containsAny(customerName, "订单", "金额", "最高", "客户", "本月", "最近")) {
-            return recentOnly
-                    ? externalOrderTools.findRecentOrdersForCustomer(context, customerName, limit)
-                    : externalOrderTools.findOrdersForCustomer(context, customerName, false, limit);
-        }
-        return recentOnly
-                ? externalOrderTools.findRecentOrdersForVisibleCustomers(context, limit)
-                : externalOrderTools.findOrdersForVisibleCustomers(context, false, limit);
-    }
-
-    private List<CustomerValueSignal> aggregateOrderValues(List<ExternalOrderRow> rows) {
-        Map<String, CustomerValueSignal> signals = new LinkedHashMap<>();
-        for (ExternalOrderRow order : rows) {
-            String customerName = StringUtils.defaultIfBlank(order.getCustomer(), order.getFields().get("customer"));
-            if (StringUtils.isBlank(customerName)) {
-                customerName = "未填写客户";
-            }
-            String currency = StringUtils.defaultIfBlank(order.getFields().get("currency"), "未填写");
-            String key = customerName + "\u0001" + currency;
-            String finalCustomerName = customerName;
-            CustomerValueSignal signal = signals.computeIfAbsent(key, ignored -> {
-                CustomerValueSignal created = new CustomerValueSignal();
-                created.customerName = finalCustomerName;
-                created.currency = currency;
-                return created;
-            });
-            signal.orderCount++;
-            signal.totalAmount = signal.totalAmount.add(parseAmount(order.getFields().get("amount")));
-            if (StringUtils.isBlank(signal.latestOrderNo)) {
-                signal.latestOrderNo = order.getOrderNo();
-                signal.latestOrderStatus = order.getOrderStatus();
-                signal.ownerName = order.getManager();
-            }
-        }
-        return signals.values()
-                .stream()
-                .sorted(Comparator.comparing((CustomerValueSignal signal) -> signal.totalAmount).reversed())
-                .toList();
-    }
-
-    private long communicationCount(AiAgentCommunicationRow row) {
-        return safeLong(row.getWecomMessageCount()) + safeLong(row.getEmailCount()) + safeLong(row.getFollowRecordCount());
-    }
-
-    private long parseDateMillis(String value) {
-        String text = StringUtils.defaultString(value).trim();
-        if (StringUtils.isBlank(text)) {
-            return 0L;
-        }
-        try {
-            if (text.length() >= 10) {
-                return LocalDate.parse(text.substring(0, 10)).atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
-            }
-        } catch (Exception ignored) {
-            return 0L;
-        }
-        return 0L;
-    }
-
-    private BigDecimal parseAmount(String amount) {
-        String value = StringUtils.defaultString(amount).trim().replace(",", "");
-        if (StringUtils.isBlank(value)) {
-            return BigDecimal.ZERO;
-        }
-        try {
-            return new BigDecimal(value);
-        } catch (NumberFormatException e) {
-            return BigDecimal.ZERO;
-        }
-    }
-
-    private String formatAmount(BigDecimal amount) {
-        return amount == null ? "0" : amount.stripTrailingZeros().toPlainString();
-    }
-
-    private String formatTimestamp(Long value) {
-        if (value == null || value <= 0) {
-            return "未记录";
-        }
-        return LocalDateTime.ofInstant(Instant.ofEpochMilli(value), AGENT_ZONE).format(DATE_TIME_FORMATTER);
-    }
-
     private AiAgentTimeWindow resolveTimeWindow(String question, String requestedRange) {
         LocalDate today = LocalDate.now(AGENT_ZONE);
-        AiAgentTimeWindow questionWindow = resolveQuestionTimeWindow(question, requestedRange, today);
+        AiAgentTimeWindow questionWindow = resolveQuestionTimeWindow(question, today);
         if (questionWindow != null) {
             return questionWindow;
         }
@@ -3011,25 +245,20 @@ public class AiAgentChatService {
         } else if (StringUtils.equals(requestedRange, "30d")) {
             startDate = today.minusDays(30);
             label = "近 30 天";
-        } else if (containsAny(question, "这个月", "本月")) {
-            startDate = today.withDayOfMonth(1);
-            label = "本月";
-        } else if (containsAny(question, "近7天", "最近7天")) {
-            startDate = today.minusDays(7);
-            label = "近 7 天";
+        } else if (StringUtils.equalsAnyIgnoreCase(StringUtils.defaultString(requestedRange), "all", "全部")) {
+            return allTimeWindow();
         } else {
-            startDate = today.minusDays(30);
-            label = "近 30 天";
+            return allTimeWindow();
         }
         long start = startDate.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
         long end = today.plusDays(1).atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
         return new AiAgentTimeWindow(start, end, label);
     }
 
-    private AiAgentTimeWindow resolveQuestionTimeWindow(String question,
-                                                        String requestedRange,
-                                                        LocalDate today) {
-        String text = StringUtils.defaultString(question) + " " + StringUtils.defaultString(requestedRange);
+    private AiAgentTimeWindow resolveQuestionTimeWindow(String question, LocalDate today) {
+        String text = StringUtils.defaultString(question);
+        AiAgentTimeWindow explicitRange = AiAgentDateRangeParser.resolve(text, today);
+        if (explicitRange != null) return explicitRange;
         Matcher monthMatcher = EXPLICIT_YEAR_MONTH_PATTERN.matcher(text);
         if (monthMatcher.find()) {
             int year = Integer.parseInt(monthMatcher.group(1));
@@ -3038,6 +267,53 @@ public class AiAgentChatService {
                 LocalDate start = LocalDate.of(year, month, 1);
                 return timeWindow(start, start.plusMonths(1), year + "年" + month + "月");
             }
+        }
+
+        if (containsAny(text, "这个月", "本月")) {
+            return timeWindow(today.withDayOfMonth(1), today.plusMonths(1).withDayOfMonth(1), "本月");
+        }
+        if (containsAny(text, "上个月", "上月")) {
+            return timeWindow(today.minusMonths(1).withDayOfMonth(1), today.withDayOfMonth(1), "上月");
+        }
+        if (containsAny(text, "去年", "上一年")) {
+            return timeWindow(LocalDate.of(today.getYear() - 1, 1, 1), LocalDate.of(today.getYear(), 1, 1), "去年");
+        }
+        if (containsAny(text, "本周", "这周")) {
+            LocalDate start = today.with(java.time.temporal.TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+            return timeWindow(start, start.plusWeeks(1), "本周");
+        }
+        if (text.contains("今天")) {
+            return timeWindow(today, today.plusDays(1), "今天");
+        }
+        if (text.contains("昨天")) {
+            return timeWindow(today.minusDays(1), today, "昨天");
+        }
+
+        if (containsAny(text, "本季度", "这季度", "当前季度")) {
+            int firstMonth = ((today.getMonthValue() - 1) / 3) * 3 + 1;
+            LocalDate start = LocalDate.of(today.getYear(), firstMonth, 1);
+            return timeWindow(start, start.plusMonths(3), "本季度");
+        }
+
+        if (containsAny(text, "今年", "本年度", "当前年度")) {
+            LocalDate start = LocalDate.of(today.getYear(), 1, 1);
+            return timeWindow(start, start.plusYears(1), "本年度");
+        }
+
+        Matcher recentDaysMatcher = RECENT_DAYS_PATTERN.matcher(text);
+        if (recentDaysMatcher.find()) {
+            int days = Integer.parseInt(recentDaysMatcher.group(1));
+            if (days >= 1 && days <= 3660) {
+                return timeWindow(today.minusDays(days), today.plusDays(1), "近 " + days + " 天");
+            }
+        }
+
+        if (containsAny(text, "近7天", "近 7 天", "最近7天", "最近 7 天")) {
+            return timeWindow(today.minusDays(7), today.plusDays(1), "近 7 天");
+        }
+
+        if (containsAny(text, "近30天", "近 30 天", "最近30天", "最近 30 天")) {
+            return timeWindow(today.minusDays(30), today.plusDays(1), "近 30 天");
         }
 
         Matcher recentMonthsMatcher = RECENT_MONTHS_PATTERN.matcher(text);
@@ -3053,7 +329,14 @@ public class AiAgentChatService {
             int year = Integer.parseInt(yearMatcher.group(1));
             return timeWindow(LocalDate.of(year, 1, 1), LocalDate.of(year + 1, 1, 1), year + "年");
         }
+        if (text.contains("最近")) {
+            return timeWindow(today.minusDays(30), today.plusDays(1), "近 30 天");
+        }
         return null;
+    }
+
+    private AiAgentTimeWindow allTimeWindow() {
+        return new AiAgentTimeWindow(0L, Long.MAX_VALUE, "全部");
     }
 
     private int parseMonthNumber(String value) {
@@ -3084,7 +367,6 @@ public class AiAgentChatService {
                 end.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli(),
                 label);
     }
-
     DataPermissions unrestrictedDataPermissions() {
         DeptDataPermissionDTO permission = new DeptDataPermissionDTO();
         permission.setViewId(InternalUserView.ALL.name());
@@ -3095,201 +377,56 @@ public class AiAgentChatService {
     }
 
     AiAgentContext createContext(String userId, String orgId, AiAgentChatRequest request) {
-        DataPermissions dataPermissions = unrestrictedDataPermissions();
         AiAgentContext context = new AiAgentContext();
         context.setUserId(userId);
         context.setOrganizationId(orgId);
-        context.setDataScope("all");
-        context.setDataPermission(dataPermissions.customer());
-        context.setCustomerDataPermission(dataPermissions.customer());
-        context.setContractDataPermission(dataPermissions.contract());
-        context.setOrderDataPermission(dataPermissions.order());
+        if (StringUtils.isNotBlank(request.getDatasourceId())) {
+            datasourceService.populateContext(request.getDatasourceId(), context);
+            context.setDataScope("datasource_account");
+        } else {
+            DataPermissions dataPermissions = resolveDataPermissions(userId, orgId);
+            context.setDataScope(deriveDataScope(dataPermissions));
+            context.setDataPermission(dataPermissions.customer());
+            context.setCustomerDataPermission(dataPermissions.customer());
+            context.setContractDataPermission(dataPermissions.contract());
+            context.setOrderDataPermission(dataPermissions.order());
+        }
         context.setLlmProvider(request.getLlmProvider());
-        context.setTimeWindow(resolveTimeWindow(request.getQuestion(), request.getTimeRange()));
+        context.setQueryQuestion(request.getQuestion());
+        context.setLimitRows(!Boolean.FALSE.equals(request.getLimitRows()));
+        try {
+            context.setTimeWindow(resolveTimeWindow(request.getQuestion(), request.getTimeRange()));
+        } catch (java.time.DateTimeException | IllegalArgumentException e) {
+            context.setTimeRangeError("无法可靠解析日期范围，请明确有效的开始和结束日期。");
+        }
         return context;
+    }
+
+    private DataPermissions resolveDataPermissions(String userId, String orgId) {
+        DeptDataPermissionDTO customer = dataScopeService.getDeptDataPermission(
+                userId, orgId, InternalUserView.ALL.name(), PermissionConstants.CUSTOMER_MANAGEMENT_READ);
+        DeptDataPermissionDTO contract = dataScopeService.getDeptDataPermission(
+                userId, orgId, InternalUserView.ALL.name(), PermissionConstants.CONTRACT_READ);
+        DeptDataPermissionDTO order = dataScopeService.getDeptDataPermission(
+                userId, orgId, InternalUserView.ALL.name(), PermissionConstants.ORDER_READ);
+        return new DataPermissions(customer, contract, order);
+    }
+
+    private String deriveDataScope(DataPermissions permissions) {
+        if (Boolean.TRUE.equals(permissions.customer().getAll())
+                && Boolean.TRUE.equals(permissions.contract().getAll())
+                && Boolean.TRUE.equals(permissions.order().getAll())) {
+            return "all";
+        }
+        if (Boolean.TRUE.equals(permissions.customer().getSelf())
+                && Boolean.TRUE.equals(permissions.contract().getSelf())
+                && Boolean.TRUE.equals(permissions.order().getSelf())) {
+            return "self";
+        }
+        return "partial";
     }
 
     record DataPermissions(DeptDataPermissionDTO customer, DeptDataPermissionDTO contract,
                            DeptDataPermissionDTO order) {
-    }
-
-    private boolean isSensitiveOrUnauthorizedProbe(String question) {
-        return containsAny(question, "没有权限", "无权限", "越权", "全部客户手机号", "所有客户手机号",
-                "密码", "token", "授权码", "聊天内容", "聊天正文", "邮件正文");
-    }
-
-    private boolean isHelpQuestion(String question) {
-        return containsAny(question, "能问哪些", "问哪些问题", "可以问", "支持哪些", "能回答什么",
-                "推荐问题", "你会什么", "帮助");
-    }
-
-    private String extractSpecialistName(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("负责哪些客户", "负责的客户", "负责客户", "的客户有哪些", "有哪些客户",
-                "名下客户有哪些", "名下有哪些客户", "客户有哪些", "这个月和客户", "本月和客户", "和客户沟通", "与客户沟通")) {
-            int index = text.indexOf(marker);
-            if (index > 0) {
-                return cleanupName(text.substring(0, index));
-            }
-        }
-        return "";
-    }
-
-    private String extractCustomerName(String question) {
-        String text = cleanupLeadingWords(question);
-        for (String marker : List.of("最近有没有新订单", "有没有新订单", "最近有哪些订单", "的合同有哪些", "合同有哪些",
-                "合同状态", "状态分别是什么", "有哪些合同", "的订单状态", "的基础信息", "的情况", "汇总", "总结",
-                "是谁负责的", "是谁负责", "属于哪个销售", "哪个销售负责", "负责人是谁", "联系方式", "联系电话",
-                "电话邮箱", "最近一次跟进", "上次跟进是什么时候", "备注里写了什么", "客户备注", "备注是什么",
-                "在哪个地区", "客户地区", "地区是什么", "有没有企微", "有没有关联微信群", "最近沟通情况",
-                "这个月有多少企微消息", "这个月有多少邮件", "最近有没有邮件往来", "最近有没有企微沟通",
-                "最近有哪些跟进记录", "上次是谁跟进", "交期是什么时候", "订单金额是多少", "订单总金额是多少",
-                "最大的一笔订单是什么", "所有订单有哪些")) {
-            int index = text.indexOf(marker);
-            if (index > 0) {
-                return cleanupName(text.substring(0, index));
-            }
-        }
-        return cleanupName(text);
-    }
-
-    private String extractAfterAny(String text, String... markers) {
-        String value = cleanupLeadingWords(text);
-        for (String marker : markers) {
-            int index = value.indexOf(marker);
-            if (index >= 0) {
-                return cleanupName(value.substring(index + marker.length()));
-            }
-        }
-        return cleanupName(value);
-    }
-
-    private String cleanupLeadingWords(String question) {
-        return StringUtils.defaultString(question)
-                .replace("请问", "")
-                .replace("给我看看", "")
-                .replace("帮我看看", "")
-                .replace("帮我查一下", "")
-                .replace("查询", "")
-                .trim();
-    }
-
-    private String cleanupName(String text) {
-        String result = StringUtils.defaultString(text)
-                .replace("<", "")
-                .replace(">", "")
-                .replace("`", "")
-                .replace("“", "")
-                .replace("”", "")
-                .replace("？", "")
-                .replace("?", "")
-                .replace("销售", "")
-                .replace("联系专员", "")
-                .trim();
-        if (result.length() > 40) {
-            return result.substring(0, 40);
-        }
-        return result;
-    }
-
-    private boolean containsAny(String text, String... needles) {
-        for (String needle : needles) {
-            if (StringUtils.contains(text, needle)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private long safeLong(Long value) {
-        return value == null ? 0L : value;
-    }
-
-    private String maskEmail(String email) {
-        if (StringUtils.isBlank(email) || !email.contains("@")) {
-            return "未填写";
-        }
-        int at = email.indexOf('@');
-        String prefix = email.substring(0, at);
-        if (prefix.length() <= 2) {
-            return prefix.charAt(0) + "***" + email.substring(at);
-        }
-        return prefix.substring(0, 2) + "***" + email.substring(at);
-    }
-
-    private String maskPhone(String phone) {
-        if (StringUtils.isBlank(phone)) {
-            return "未填写";
-        }
-        if (phone.length() < 7) {
-            return "***";
-        }
-        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
-    }
-
-    private static class CustomerValueSignal {
-        private String customerName;
-        private String ownerName;
-        private String currency;
-        private String latestOrderNo;
-        private String latestOrderStatus;
-        private int orderCount;
-        private BigDecimal totalAmount = BigDecimal.ZERO;
-        private long wecomMessageCount;
-        private long emailCount;
-        private long followRecordCount;
-        private Long lastCommunicationTime;
-
-        private long communicationCount() {
-            return wecomMessageCount + emailCount + followRecordCount;
-        }
-    }
-
-    private static class YearCustomerActivity {
-        private final String customerName;
-        private String ownerName;
-        private final Map<String, Integer> countsBySource = new LinkedHashMap<>();
-        private final List<String> sampleRecords = new ArrayList<>();
-
-        private YearCustomerActivity(String customerName) {
-            this.customerName = customerName;
-        }
-
-        private void increment(String source) {
-            countsBySource.merge(source, 1, Integer::sum);
-        }
-
-        private int totalCount() {
-            return countsBySource.values().stream().mapToInt(Integer::intValue).sum();
-        }
-
-        private List<String> sourceSummaries() {
-            List<String> summaries = countsBySource.entrySet().stream()
-                    .map(entry -> entry.getKey() + " " + entry.getValue() + " 条")
-                    .toList();
-            if (sampleRecords.isEmpty()) {
-                return summaries;
-            }
-            List<String> result = new ArrayList<>(summaries);
-            result.add("示例编号 " + String.join("、", sampleRecords));
-            return result;
-        }
-    }
-
-    private static class MaterialSummary {
-        private final String materialName;
-        private int orderCount;
-        private final Set<String> materialTypes = new LinkedHashSet<>();
-        private final Set<String> compositions = new LinkedHashSet<>();
-        private final Set<String> statuses = new LinkedHashSet<>();
-        private final Set<String> customers = new LinkedHashSet<>();
-        private final Set<String> regions = new LinkedHashSet<>();
-
-        private MaterialSummary(String materialName) {
-            this.materialName = materialName;
-        }
-    }
-
-    private record MaterialCustomerQualifier(String keyword, boolean region) {
     }
 }

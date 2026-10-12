@@ -12,6 +12,8 @@ public class AiKnowledgeParseJob extends BaseModel {
     private String organizationId;
     @Schema(description = "文档 ID")
     private String documentId;
+    @Schema(description = "本次解析使用的知识正文版本 ID")
+    private String documentVersionId;
     @Schema(description = "任务状态")
     private String status;
     @Schema(description = "当前步骤")

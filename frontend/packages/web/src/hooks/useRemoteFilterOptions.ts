@@ -2,7 +2,7 @@ import { ref, watch } from 'vue';
 
 import { getProductOptions } from '@/api/modules';
 
-import { FilterOption } from 'naive-ui/es/data-table/src/interface';
+import type { FilterOption } from 'naive-ui/es/data-table/src/interface';
 
 export const remoteFilterApiMap: Record<string, () => Promise<any>> = {
   products: getProductOptions,

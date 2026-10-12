@@ -1,7 +1,22 @@
-$root = "E:\CordysCRM-1.6.0"
+param(
+    [string]$JarPath
+)
+
+$root = $PSScriptRoot
 $jar = Join-Path $root "backend\app\target\app-main.jar"
-$config = "file:///E:/CordysCRM-1.6.0/cordys-crm.properties"
-$logbackConfig = "file:///E:/CordysCRM-1.6.0/backend/app/src/main/resources/logback-spring.xml"
+if (-not [string]::IsNullOrWhiteSpace($JarPath)) {
+    $jar = if ([System.IO.Path]::IsPathRooted($JarPath)) {
+        $JarPath
+    } else {
+        Join-Path $root $JarPath
+    }
+    if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) {
+        throw "Backend JAR not found: $jar"
+    }
+    $jar = (Resolve-Path -LiteralPath $jar).ProviderPath
+}
+$config = ([System.Uri](Join-Path $root "cordys-crm.properties")).AbsoluteUri
+$logbackConfig = ([System.Uri](Join-Path $root "backend\app\src\main\resources\logback-spring.xml")).AbsoluteUri
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::InputEncoding = $utf8NoBom
@@ -15,6 +30,9 @@ $uploadTmpDir = Join-Path $tmpDir "upload"
 $logDir = Join-Path $runtimeDir "logs\cordys-crm"
 $logDirProperty = $logDir -replace '\\', '/'
 
+# Local Redis uses a URL without credentials to override legacy global passwords.
+$redisUrl = 'redis://127.0.0.1:6379'
+
 New-Item -ItemType Directory -Force -Path $tmpDir, $uploadTmpDir, $logDir | Out-Null
 
 & java `
@@ -26,4 +44,6 @@ New-Item -ItemType Directory -Force -Path $tmpDir, $uploadTmpDir, $logDir | Out-
     -jar $jar `
     "--spring.config.additional-location=$config" `
     "--logging.config=$logbackConfig" `
-    "--logging.file.path=$logDirProperty"
+    "--logging.file.path=$logDirProperty" `
+    "--spring.servlet.multipart.location=$uploadTmpDir" `
+    "--spring.data.redis.url=$redisUrl"

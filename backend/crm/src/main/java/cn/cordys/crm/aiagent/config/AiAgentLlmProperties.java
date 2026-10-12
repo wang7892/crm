@@ -13,6 +13,7 @@ public class AiAgentLlmProperties {
     private String baseUrl;
     private String apiKey;
     private String model;
+    private String apiType = "chat-completions";
     private int timeoutSeconds = 10;
     private double minConfidence = 0.75;
     private int maxInputLength = 1000;
@@ -28,6 +29,7 @@ public class AiAgentLlmProperties {
         private String apiKey;
         private boolean apiKeyRequired = false;
         private String model;
+        private String apiType = "chat-completions";
         private Integer timeoutSeconds;
         private Integer maxRetry;
     }

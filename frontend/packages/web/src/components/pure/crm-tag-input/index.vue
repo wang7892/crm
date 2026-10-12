@@ -26,7 +26,7 @@
 
   import { useI18n } from '@lib/shared/hooks/useI18n';
 
-  import { SelectBaseOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectBaseOption } from 'naive-ui/es/select/src/interface';
 
   const { t } = useI18n();
 

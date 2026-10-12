@@ -1,6 +1,17 @@
 #!/bin/sh
 . "$(dirname "$0")/_/husky.sh"
 
-cd frontend/packages/lib-shared && npm run type:check && npm run lint-staged
-cd ../mobile && npm run type:check && npm run lint-staged
-cd ../web && npm run type:check && npm run lint-staged
+set -e
+
+cd frontend/packages/lib-shared
+# Shared types are also checked by the Web and Mobile applications.
+npm run --if-present type:check
+npm run lint-staged
+
+cd ../mobile
+npm run type:check
+npm run lint-staged
+
+cd ../web
+npm run type:check
+npm run lint-staged

@@ -1,0 +1,48 @@
+name: cordys-crm-custom
+
+services:
+  crm:
+    image: cordys-crm-custom:1.6.0
+    container_name: cordys-crm-custom
+    restart: unless-stopped
+    mem_limit: 2304m
+    ports:
+      - 127.0.0.1:${CRM_WEB_PORT:-8081}:8081
+    environment:
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/opt/cordys/conf/cordys-crm.properties
+      SPRING_DATASOURCE_URL: ${CRM_DATABASE_URL:?Run start.ps1 first}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_PASSWORD: ${CRM_REDIS_PASSWORD:?Run start.ps1 first}
+      LOGGING_FILE_PATH: /opt/cordys/runtime/logs/cordys-crm
+      SPRING_SERVLET_MULTIPART_LOCATION: /opt/cordys/runtime/tmp/upload
+      CRM_TASK_ATTACHMENT_ROOT: /opt/cordys/runtime/task-attachments
+      CRM_AI_AGENT_EXTERNAL_ORDER_URL: ${CRM_EXTERNAL_ORDER_URL:-}
+      CRM_AI_AGENT_LLM_BASE_URL: ${CRM_LLM_BASE_URL:-}
+      CRM_AI_AGENT_LLM_PROVIDERS_0_BASE_URL: ${CRM_LLM_PROVIDER_0_BASE_URL:-}
+    volumes:
+      - ${CRM_CONFIG_FILE:-../../cordys-crm.properties}:/opt/cordys/conf/cordys-crm.properties:ro
+      - ../../runtime:/opt/cordys/runtime
+      - ${CRM_FILES_DIR:-../../runtime/docker/files}:/opt/cordys/data/files
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: cordys-crm-custom-redis
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      REDISCLI_AUTH: ${CRM_REDIS_PASSWORD:?Run start.ps1 first}
+    command: [sh, -c, 'exec redis-server --appendonly yes --maxmemory 192mb --maxmemory-policy noeviction --requirepass "$$REDISCLI_AUTH"']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  redis-data:

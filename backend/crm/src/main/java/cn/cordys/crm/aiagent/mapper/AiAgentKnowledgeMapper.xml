@@ -44,7 +44,6 @@
           AND d.organization_id = #{orgId}
           AND c.enabled = 1
           AND d.enabled = 1
-          AND d.parse_status = 'PARSED'
           AND (d.category IS NULL OR d.category != 'SEMANTIC_RULE')
           AND (
               c.content LIKE CONCAT('%', #{question}, '%')
@@ -82,6 +81,68 @@
           AND organization_id = #{orgId}
         FOR UPDATE
     </select>
+
+    <select id="listDocumentVersions" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion">
+        SELECT *
+        FROM ai_knowledge_document_version
+        WHERE organization_id = #{orgId}
+          AND document_id = #{request.documentId}
+        ORDER BY version DESC
+    </select>
+
+    <select id="getActiveDocumentVersion" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion">
+        SELECT v.*
+        FROM ai_knowledge_document_version v
+        INNER JOIN ai_knowledge_document d ON d.active_version_id = v.id
+        WHERE d.id = #{documentId}
+          AND d.organization_id = #{orgId}
+          AND v.organization_id = #{orgId}
+        LIMIT 1
+    </select>
+
+    <select id="getDocumentVersion" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion">
+        SELECT *
+        FROM ai_knowledge_document_version
+        WHERE id = #{versionId}
+          AND organization_id = #{orgId}
+        LIMIT 1
+    </select>
+
+    <select id="getDocumentVersionForUpdate" resultType="cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion">
+        SELECT *
+        FROM ai_knowledge_document_version
+        WHERE id = #{versionId}
+          AND organization_id = #{orgId}
+        FOR UPDATE
+    </select>
+
+    <select id="maxDocumentVersion" resultType="int">
+        SELECT COALESCE(MAX(version), 0)
+        FROM ai_knowledge_document_version
+        WHERE document_id = #{documentId}
+          AND organization_id = #{orgId}
+    </select>
+
+    <update id="updateDocumentVersionState">
+        UPDATE ai_knowledge_document_version
+        SET status = #{status},
+            error_message = #{errorMessage},
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE id = #{versionId}
+          AND organization_id = #{orgId}
+    </update>
+
+    <update id="archiveActiveDocumentVersions">
+        UPDATE ai_knowledge_document_version
+        SET status = 'ARCHIVED',
+            update_user = #{updateUser},
+            update_time = #{updateTime}
+        WHERE document_id = #{documentId}
+          AND organization_id = #{orgId}
+          AND status = 'ACTIVE'
+          AND id != #{exceptVersionId}
+    </update>
 
     <update id="claimParseJob">
         UPDATE ai_knowledge_parse_job
@@ -249,7 +310,6 @@
         WHERE c.organization_id = #{orgId}
           AND d.organization_id = #{orgId}
           AND d.category = 'SEMANTIC_RULE'
-          AND d.parse_status = 'PARSED'
           AND d.enabled = 1
           AND c.enabled = 1
         ORDER BY c.update_time DESC, c.chunk_index ASC
@@ -262,7 +322,6 @@
         WHERE c.organization_id = #{orgId}
           AND d.organization_id = #{orgId}
           AND d.category = 'SEMANTIC_RULE'
-          AND d.parse_status = 'PARSED'
           AND d.enabled = 1
           AND c.enabled = 1
           AND c.id IN
@@ -302,7 +361,6 @@
         WHERE c.organization_id = #{orgId}
           AND d.organization_id = #{orgId}
           AND d.category = 'SEMANTIC_RULE'
-          AND d.parse_status = 'PARSED'
           AND d.enabled = 1
           AND c.enabled = 1
           AND JSON_UNQUOTE(JSON_EXTRACT(c.content, '$.ruleId')) = #{ruleId}
@@ -334,6 +392,12 @@
 
     <delete id="deleteChunksByDocumentId">
         DELETE FROM ai_knowledge_chunk
+        WHERE organization_id = #{orgId}
+          AND document_id = #{documentId}
+    </delete>
+
+    <delete id="deleteDocumentVersions">
+        DELETE FROM ai_knowledge_document_version
         WHERE organization_id = #{orgId}
           AND document_id = #{documentId}
     </delete>

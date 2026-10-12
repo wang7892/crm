@@ -24,5 +24,9 @@
       "stylelint --fix --custom-syntax postcss-less",
       "prettier --write"
     ]
+  },
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "sql-formatter": "^15.9.0"
   }
 }

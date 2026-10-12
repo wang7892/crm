@@ -1,9 +1,12 @@
 package cn.cordys.crm.aiagent.service;
 
 import cn.cordys.common.exception.GenericException;
+import cn.cordys.common.service.BaseService;
 import cn.cordys.common.uid.IDGenerator;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeDocument;
+import cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentVersionResponse;
 import cn.cordys.crm.aiagent.mapper.AiAgentKnowledgeMapper;
 import cn.cordys.mybatis.BaseMapper;
 import org.junit.jupiter.api.Test;
@@ -109,6 +112,25 @@ class AiAgentKnowledgeServiceTest {
     }
 
     @Test
+    void shouldSplitEditableMarkdownByHeadingPath() {
+        List<AiAgentKnowledgeService.ParsedSection> sections = service.parseEditableMarkdown("""
+                # 产品手册
+
+                总体说明
+
+                ## 售后政策
+
+                七天内可以退换货。
+                """, "产品手册");
+
+        assertThat(sections).containsExactly(
+                new AiAgentKnowledgeService.ParsedSection("产品手册", "产品手册", null, "总体说明"),
+                new AiAgentKnowledgeService.ParsedSection(
+                        "售后政策", "产品手册 / 售后政策", null, "七天内可以退换货。")
+        );
+    }
+
+    @Test
     void shouldWriteNormalizedMarkdownNextToTheOriginalFile() throws IOException {
         AiKnowledgeDocument document = document("产品手册.pdf", "pdf");
         document.setStoragePath(tempDir.resolve("original.pdf").toString());
@@ -177,10 +199,83 @@ class AiAgentKnowledgeServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void shouldReturnEditorNameForDocumentVersion() {
+        AiAgentKnowledgeService versionService = new AiAgentKnowledgeService();
+        BaseMapper<AiKnowledgeDocument> documentMapper = mock(BaseMapper.class);
+        AiAgentKnowledgeMapper knowledgeMapper = mock(AiAgentKnowledgeMapper.class);
+        BaseService baseService = mock(BaseService.class);
+        AiKnowledgeDocument document = document("rules.docx", "docx");
+        document.setId("doc-1");
+        document.setOrganizationId("org-1");
+        AiKnowledgeDocumentVersion version = version("version-1", "doc-1", "ACTIVE");
+        version.setCreateUser("user-1");
+
+        when(knowledgeMapper.getDocumentVersion("version-1", "org-1")).thenReturn(version);
+        when(documentMapper.selectByPrimaryKey("doc-1")).thenReturn(document);
+        when(baseService.getUserName("user-1")).thenReturn("Alice");
+        when(baseService.getAndCheckOptionName("Alice")).thenReturn("Alice");
+        ReflectionTestUtils.setField(versionService, "documentMapper", documentMapper);
+        ReflectionTestUtils.setField(versionService, "aiAgentKnowledgeMapper", knowledgeMapper);
+        ReflectionTestUtils.setField(versionService, "baseService", baseService);
+
+        AiKnowledgeDocumentVersionResponse response = versionService.getDocumentVersion("version-1", "org-1");
+
+        assertThat(response.getCreateUser()).isEqualTo("user-1");
+        assertThat(response.getCreateUserName()).isEqualTo("Alice");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldDeleteArchivedDocumentVersion() {
+        AiAgentKnowledgeService versionService = new AiAgentKnowledgeService();
+        BaseMapper<AiKnowledgeDocumentVersion> versionMapper = mock(BaseMapper.class);
+        AiAgentKnowledgeMapper knowledgeMapper = mock(AiAgentKnowledgeMapper.class);
+        AiKnowledgeDocument document = document("rules.docx", "docx");
+        document.setId("doc-1");
+        document.setOrganizationId("org-1");
+        document.setActiveVersionId("version-2");
+        AiKnowledgeDocumentVersion version = version("version-1", "doc-1", "ARCHIVED");
+
+        when(knowledgeMapper.getDocumentVersionForUpdate("version-1", "org-1")).thenReturn(version);
+        when(knowledgeMapper.getKnowledgeDocumentForUpdate("doc-1", "org-1")).thenReturn(document);
+        ReflectionTestUtils.setField(versionService, "documentVersionMapper", versionMapper);
+        ReflectionTestUtils.setField(versionService, "aiAgentKnowledgeMapper", knowledgeMapper);
+
+        versionService.deleteDocumentVersion("version-1", "org-1");
+
+        verify(versionMapper).deleteByPrimaryKey("version-1");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldRejectDeletingActiveDocumentVersion() {
+        AiAgentKnowledgeService versionService = new AiAgentKnowledgeService();
+        BaseMapper<AiKnowledgeDocumentVersion> versionMapper = mock(BaseMapper.class);
+        AiAgentKnowledgeMapper knowledgeMapper = mock(AiAgentKnowledgeMapper.class);
+        AiKnowledgeDocument document = document("rules.docx", "docx");
+        document.setId("doc-1");
+        document.setOrganizationId("org-1");
+        document.setActiveVersionId("version-2");
+        AiKnowledgeDocumentVersion version = version("version-2", "doc-1", "ACTIVE");
+
+        when(knowledgeMapper.getDocumentVersionForUpdate("version-2", "org-1")).thenReturn(version);
+        when(knowledgeMapper.getKnowledgeDocumentForUpdate("doc-1", "org-1")).thenReturn(document);
+        ReflectionTestUtils.setField(versionService, "documentVersionMapper", versionMapper);
+        ReflectionTestUtils.setField(versionService, "aiAgentKnowledgeMapper", knowledgeMapper);
+
+        assertThatThrownBy(() -> versionService.deleteDocumentVersion("version-2", "org-1"))
+                .isInstanceOf(GenericException.class)
+                .hasMessageContaining("当前生效版本不能删除");
+        verify(versionMapper, never()).deleteByPrimaryKey(any());
+    }
+
+    @Test
     void shouldKeepNormalizedMarkdownWhenSemanticExtractionFails() throws Exception {
         AiAgentKnowledgeService parseService = new AiAgentKnowledgeService();
         AiAgentSemanticRuleService semanticRuleService = mock(AiAgentSemanticRuleService.class);
         AiAgentSemanticRuleExtractionService extractionService = mock(AiAgentSemanticRuleExtractionService.class);
+        AiAgentFileContentService fileContentService = new AiAgentFileContentService(mock(AiAgentLlmClient.class));
         AiKnowledgeDocument document = document("业务口径.txt", "txt");
         document.setId("doc-1");
         document.setOrganizationId("org-1");
@@ -192,6 +287,7 @@ class AiAgentKnowledgeServiceTest {
                 .thenThrow(new GenericException("model unavailable"));
         ReflectionTestUtils.setField(parseService, "semanticRuleService", semanticRuleService);
         ReflectionTestUtils.setField(parseService, "semanticRuleExtractionService", extractionService);
+        ReflectionTestUtils.setField(parseService, "aiAgentFileContentService", fileContentService);
 
         assertThatThrownBy(() -> parseService.prepareParse(document, "org-1", "user-1"))
                 .isInstanceOf(GenericException.class)
@@ -207,5 +303,15 @@ class AiAgentKnowledgeServiceTest {
         document.setOriginalName(originalName);
         document.setFileType(fileType);
         return document;
+    }
+
+    private AiKnowledgeDocumentVersion version(String id, String documentId, String status) {
+        AiKnowledgeDocumentVersion version = new AiKnowledgeDocumentVersion();
+        version.setId(id);
+        version.setOrganizationId("org-1");
+        version.setDocumentId(documentId);
+        version.setVersion(1);
+        version.setStatus(status);
+        return version;
     }
 }

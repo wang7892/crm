@@ -105,8 +105,8 @@
 
   import { mergeAccount, mergeAccountPage } from '@/api/modules';
 
-  import { InternalRowData } from 'naive-ui/es/data-table/src/interface';
-  import { SelectMixedOption } from 'naive-ui/es/select/src/interface';
+  import type { InternalRowData } from 'naive-ui/es/data-table/src/interface';
+  import type { SelectMixedOption } from 'naive-ui/es/select/src/interface';
 
   const Message = useMessage();
 

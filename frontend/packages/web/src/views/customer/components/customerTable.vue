@@ -177,7 +177,7 @@
 
   import { CustomerRouteEnum } from '@/enums/routeEnum';
 
-  import { InternalRowData } from 'naive-ui/es/data-table/src/interface';
+  import type { InternalRowData } from 'naive-ui/es/data-table/src/interface';
 
   const Message = useMessage();
   const { openModal } = useModal();

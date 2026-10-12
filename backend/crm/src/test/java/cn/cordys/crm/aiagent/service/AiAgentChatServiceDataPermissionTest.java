@@ -4,16 +4,11 @@ import cn.cordys.common.constants.InternalUserView;
 import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.dto.DeptDataPermissionDTO;
 import cn.cordys.crm.aiagent.controller.AiAgentChatController;
-import cn.cordys.crm.aiagent.dto.AiAgentContext;
 import cn.cordys.crm.aiagent.dto.request.AiAgentChatRequest;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,40 +25,48 @@ class AiAgentChatServiceDataPermissionTest {
     }
 
     @Test
-    void shouldIgnoreNarrowRequestedScopeAndPopulateEveryContextPermissionAsFull() {
-        AiAgentChatRequest request = new AiAgentChatRequest();
-        request.setQuestion("查询客户数据");
-        request.setTimeRange("30d");
-        request.setDataScope("mine");
+    void shouldDeriveSelfScopeWhenAllPermissionsAreSelf() {
+        DeptDataPermissionDTO selfPermission = new DeptDataPermissionDTO();
+        selfPermission.setViewId(InternalUserView.ALL.name());
+        selfPermission.setSelf(true);
 
-        AiAgentContext context = new AiAgentChatService().createContext("user-1", "org-1", request);
+        AiAgentChatService service = new AiAgentChatService();
+        AiAgentChatService.DataPermissions permissions =
+                new AiAgentChatService.DataPermissions(selfPermission, selfPermission, selfPermission);
 
-        assertThat(context.getDataScope()).isEqualTo("all");
-        assertThat(List.of(
-                context.getDataPermission(),
-                context.getCustomerDataPermission(),
-                context.getContractDataPermission(),
-                context.getOrderDataPermission()))
-                .allSatisfy(permission -> {
-                    assertThat(permission.getAll()).isTrue();
-                    assertThat(permission.getViewId()).isEqualTo(InternalUserView.ALL.name());
-                });
+        // Use reflection to call private deriveDataScope
+        try {
+            Method method = AiAgentChatService.class.getDeclaredMethod("deriveDataScope",
+                    AiAgentChatService.DataPermissions.class);
+            method.setAccessible(true);
+            String scope = (String) method.invoke(service, permissions);
+            assertThat(scope).isEqualTo("self");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
-    void shouldPreferExplicitChineseMonthOverDefaultRequestTimeRange() {
-        AiAgentChatRequest request = new AiAgentChatRequest();
-        request.setQuestion("2026年五月份新增的公司客户有哪些？");
-        request.setTimeRange("30d");
+    void shouldDerivePartialScopeWhenPermissionsAreMixed() {
+        DeptDataPermissionDTO allPermission = new DeptDataPermissionDTO();
+        allPermission.setAll(true);
 
-        AiAgentContext context = new AiAgentChatService().createContext("user-1", "org-1", request);
-        ZoneId zone = ZoneId.of("Asia/Shanghai");
+        DeptDataPermissionDTO selfPermission = new DeptDataPermissionDTO();
+        selfPermission.setSelf(true);
 
-        assertThat(context.getTimeWindow().label()).isEqualTo("2026年5月");
-        assertThat(Instant.ofEpochMilli(context.getTimeWindow().startTime()).atZone(zone).toLocalDate())
-                .isEqualTo(LocalDate.of(2026, 5, 1));
-        assertThat(Instant.ofEpochMilli(context.getTimeWindow().endTime()).atZone(zone).toLocalDate())
-                .isEqualTo(LocalDate.of(2026, 6, 1));
+        AiAgentChatService service = new AiAgentChatService();
+        AiAgentChatService.DataPermissions permissions =
+                new AiAgentChatService.DataPermissions(allPermission, selfPermission, selfPermission);
+
+        try {
+            Method method = AiAgentChatService.class.getDeclaredMethod("deriveDataScope",
+                    AiAgentChatService.DataPermissions.class);
+            method.setAccessible(true);
+            String scope = (String) method.invoke(service, permissions);
+            assertThat(scope).isEqualTo("partial");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test

@@ -3,7 +3,7 @@ import { ReasonTypeEnum } from '@lib/shared/enums/moduleEnum';
 
 import { getReasonConfig } from '@/api/modules';
 
-import { FilterOption } from 'naive-ui/es/data-table/src/interface';
+import type { FilterOption } from 'naive-ui/es/data-table/src/interface';
 
 export type ApprovalConfigType =
   | FormDesignKeyEnum.INVOICE

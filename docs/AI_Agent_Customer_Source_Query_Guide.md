@@ -189,20 +189,22 @@ email_webhook_attachment：邮件附件记录，文件名、类型、大小、�
 mls_agent_data
 ```
 
-第一版只允许这个表进入 schema 语义字典，用于读取合同/订单信息：
+当前允许以下外部表进入 schema 语义字典，用于读取合同/订单及订单进度信息：
 
 ```text
 mls_agent_data.contract_info
+mls_agent_data.order_timeline
 ```
 
 `contract_info` 已经被现有 `ExternalOrderTools` 查询，用于外部订单/合同问题，例如订单号、产品名称、负责人、客户、订单状态、金额、交期等。
+
+`order_timeline` 通过 `order_no` 与 `contract_info` 关联，用于订单时间轴和履约进度问题。已按外部表注释纳入字段语义：下单/定金/交货、色卡 SO、描稿、CAD、客户确认、排生产、生产交期、仓库打卷、包装单、发货、到港、提单、实际收款、库存数量、库龄及其考核/预警日期。日期字段按只读 SQL 时间字段处理，库存数量和库龄支持数值查询与统计。
 
 暂不纳入：
 
 ```text
 mls_agent_data.customer_info
 mls_agent_data.order_info
-mls_agent_data.order_timeline
 mls_agent_data.order_relevancy
 mls_agent_data.conversations
 mls_agent_data.messages

@@ -2,6 +2,7 @@ package cn.cordys.crm.aiagent.service;
 
 import cn.cordys.common.util.JSON;
 import cn.cordys.crm.aiagent.config.AiAgentLlmProperties;
+import cn.cordys.crm.aiagent.dto.AiAgentConversationMessage;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +41,11 @@ public class AiAgentLlmClient {
     }
 
     public String chat(String systemPrompt, String userPrompt, String preferredProvider) {
+        return chat(systemPrompt, userPrompt, preferredProvider, List.of());
+    }
+
+    public String chat(String systemPrompt, String userPrompt, String preferredProvider,
+                       List<AiAgentConversationMessage> history) {
         if (!properties.isEnabled()) {
             return null;
         }
@@ -52,7 +58,7 @@ public class AiAgentLlmClient {
         for (LlmProvider provider : providers) {
             aiAgentRequestCancellationService.throwIfCancellationRequested();
             try {
-                String content = chatWithProvider(provider, systemPrompt, userPrompt);
+                String content = chatWithProvider(provider, systemPrompt, userPrompt, history);
                 if (StringUtils.isNotBlank(content)) {
                     return content;
                 }
@@ -72,7 +78,16 @@ public class AiAgentLlmClient {
     }
 
     public String chatText(String systemPrompt, String userPrompt, String preferredProvider) {
-        return chatPlainContent(systemPrompt, userPrompt, preferredProvider);
+        return chatText(systemPrompt, userPrompt, preferredProvider, List.of());
+    }
+
+    public String chatText(String systemPrompt, String userPrompt, String preferredProvider,
+                           List<AiAgentConversationMessage> history) {
+        return chatPlainContent(systemPrompt, userPrompt, preferredProvider, history);
+    }
+
+    public String chatTextQuiet(String systemPrompt, String userPrompt, String provider, List<AiAgentConversationMessage> history) {
+        return chatPlainContent(systemPrompt, userPrompt, provider, history, false);
     }
 
     public String analyzeImage(String systemPrompt, String userPrompt, byte[] imageBytes,
@@ -82,10 +97,16 @@ public class AiAgentLlmClient {
                 Map.of("type", "text", "text", userPrompt),
                 Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))
         );
-        return chatPlainContent(systemPrompt, content, preferredProvider);
+        return chatPlainContent(systemPrompt, content, preferredProvider, List.of());
     }
 
-    private String chatPlainContent(String systemPrompt, Object userContent, String preferredProvider) {
+    private String chatPlainContent(String systemPrompt, Object userContent, String preferredProvider,
+                                    List<AiAgentConversationMessage> history) {
+        return chatPlainContent(systemPrompt, userContent, preferredProvider, history, true);
+    }
+
+    private String chatPlainContent(String systemPrompt, Object userContent, String preferredProvider,
+                                    List<AiAgentConversationMessage> history, boolean allowStream) {
         if (!properties.isEnabled()) {
             return null;
         }
@@ -98,7 +119,9 @@ public class AiAgentLlmClient {
         for (LlmProvider provider : providers) {
             aiAgentRequestCancellationService.throwIfCancellationRequested();
             try {
-                String content = chatPlainWithProvider(provider, systemPrompt, userContent);
+                String content = (allowStream || AiAgentLlmUsage.reasoningEnabled()) && AiAgentProgress.streaming() && userContent instanceof String
+                        ? chatStreamWithProvider(provider, systemPrompt, userContent, history, false, allowStream)
+                        : chatPlainWithProvider(provider, systemPrompt, userContent, history);
                 if (StringUtils.isNotBlank(content)) {
                     return content;
                 }
@@ -117,7 +140,15 @@ public class AiAgentLlmClient {
         return null;
     }
 
-    private String chatWithProvider(LlmProvider provider, String systemPrompt, String userPrompt) {
+    private String chatWithProvider(LlmProvider provider, String systemPrompt, String userPrompt,
+                                    List<AiAgentConversationMessage> history) {
+        if (AiAgentProgress.streaming() && AiAgentLlmUsage.reasoningEnabled())
+            return chatStreamWithProvider(provider, systemPrompt, userPrompt, history, true, false);
+        return chatJsonWithProvider(provider, systemPrompt, userPrompt, history);
+    }
+
+    private String chatJsonWithProvider(LlmProvider provider, String systemPrompt, String userPrompt,
+                                        List<AiAgentConversationMessage> history) {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(Math.max(1, provider.timeoutSeconds)))
                 .build();
@@ -128,19 +159,22 @@ public class AiAgentLlmClient {
             for (int index = 0; index < attempts; index++) {
                 aiAgentRequestCancellationService.throwIfCancellationRequested();
                 try {
-                    HttpRequest request = buildRequest(provider, systemPrompt, userPrompt, jsonFormat);
+                    HttpRequest request = buildRequest(provider, systemPrompt, userPrompt, jsonFormat, history);
                     log.debug("AI agent LLM request: provider={}, model={}, jsonFormat={}, attempt={}",
                             provider.name, provider.model, jsonFormat, index + 1);
                     HttpResponse<String> response = send(client, request);
                     if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                        AiAgentLlmUsage.failed(provider.name, provider.model);
                         lastException = new IllegalStateException("LLM request failed, provider=" + provider.name
-                                + ", status=" + response.statusCode() + ", jsonFormat=" + jsonFormat);
+                                + ", status=" + response.statusCode() + ", jsonFormat=" + jsonFormat
+                                + ", body=" + StringUtils.abbreviate(StringUtils.defaultString(response.body()), 1000));
                         continue;
                     }
-                    return extractMessageContent(response.body());
+                    return extractMessageContent(provider, response.body());
                 } catch (AiAgentRequestCancelledException e) {
                     throw e;
                 } catch (Exception e) {
+                    AiAgentLlmUsage.failed(provider.name, provider.model);
                     lastException = new RuntimeException("LLM request failed, provider=" + provider.name
                             + ", jsonFormat=" + jsonFormat, e);
                 }
@@ -152,7 +186,8 @@ public class AiAgentLlmClient {
         return null;
     }
 
-    private String chatPlainWithProvider(LlmProvider provider, String systemPrompt, Object userContent) {
+    private String chatPlainWithProvider(LlmProvider provider, String systemPrompt, Object userContent,
+                                         List<AiAgentConversationMessage> history) {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(Math.max(1, provider.timeoutSeconds)))
                 .build();
@@ -162,19 +197,22 @@ public class AiAgentLlmClient {
         for (int index = 0; index < attempts; index++) {
             aiAgentRequestCancellationService.throwIfCancellationRequested();
             try {
-                HttpRequest request = buildRequest(provider, systemPrompt, userContent, false);
+                HttpRequest request = buildRequest(provider, systemPrompt, userContent, false, history);
                 log.debug("AI agent LLM plain request: provider={}, model={}, attempt={}",
                         provider.name, provider.model, index + 1);
                 HttpResponse<String> response = send(client, request);
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    AiAgentLlmUsage.failed(provider.name, provider.model);
                     lastException = new IllegalStateException("LLM plain request failed, provider=" + provider.name
-                            + ", status=" + response.statusCode());
+                            + ", status=" + response.statusCode()
+                            + ", body=" + StringUtils.abbreviate(StringUtils.defaultString(response.body()), 1000));
                     continue;
                 }
-                return extractMessageContent(response.body());
+                return extractMessageContent(provider, response.body());
             } catch (AiAgentRequestCancelledException e) {
                 throw e;
             } catch (Exception e) {
+                AiAgentLlmUsage.failed(provider.name, provider.model);
                 lastException = new RuntimeException("LLM plain request failed, provider=" + provider.name, e);
             }
         }
@@ -184,20 +222,46 @@ public class AiAgentLlmClient {
         return null;
     }
 
-    private HttpRequest buildRequest(LlmProvider provider, String systemPrompt, Object userContent, boolean jsonFormat) {
+    private HttpRequest buildRequest(LlmProvider provider, String systemPrompt, Object userContent, boolean jsonFormat,
+                                     List<AiAgentConversationMessage> history) {
+        return buildRequest(provider, systemPrompt, userContent, jsonFormat, history, false);
+    }
+
+    private HttpRequest buildRequest(LlmProvider provider, String systemPrompt, Object userContent, boolean jsonFormat,
+                                     List<AiAgentConversationMessage> history, boolean stream) {
+        AiAgentLlmUsage.startCall();
         Map<String, Object> requestBody = new LinkedHashMap<>();
         requestBody.put("model", provider.model);
-        requestBody.put("temperature", 0);
-        requestBody.put("messages", List.of(
-                Map.of("role", "system", "content", systemPrompt),
-                Map.of("role", "user", "content", userContent)
-        ));
+        if (!provider.responses()) requestBody.put("temperature", 0);
+        if (stream) {
+            requestBody.put("stream", true);
+            if (!provider.responses()) requestBody.put("stream_options", Map.of("include_usage", true));
+        }
+        List<Map<String, Object>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", systemPrompt));
+        if (history != null) {
+            for (AiAgentConversationMessage message : history) {
+                if (message != null && ("user".equals(message.role()) || "assistant".equals(message.role()))
+                        && StringUtils.isNotBlank(message.content())) {
+                    messages.add(Map.of("role", message.role(), "content", message.content()));
+                }
+            }
+        }
+        messages.add(Map.of("role", "user", "content", provider.responses() ? responsesInput(userContent) : userContent));
+        requestBody.put(provider.responses() ? "input" : "messages", messages);
         if (jsonFormat) {
-            requestBody.put("response_format", Map.of("type", "json_object"));
+            if (provider.responses()) requestBody.put("text", Map.of("format", Map.of("type", "json_object")));
+            else requestBody.put("response_format", Map.of("type", "json_object"));
+        }
+        if (provider.responses()) {
+            requestBody.put("store", false);
+            if (AiAgentLlmUsage.reasoningEnabled())
+                requestBody.put("reasoning", Map.of("effort", "medium", "summary", "auto"));
         }
 
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(resolveChatCompletionsUrl(provider.baseUrl, provider.chatCompletionsPath)))
+                .uri(URI.create(provider.responses() ? resolveResponsesUrl(provider.baseUrl)
+                        : resolveChatCompletionsUrl(provider.baseUrl, provider.chatCompletionsPath)))
                 .timeout(Duration.ofSeconds(Math.max(1, provider.timeoutSeconds)))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(JSON.toJSONString(requestBody)));
@@ -205,6 +269,96 @@ public class AiAgentLlmClient {
             requestBuilder.header("Authorization", "Bearer " + provider.apiKey);
         }
         return requestBuilder.build();
+    }
+
+    private Object responsesInput(Object content) {
+        if (!(content instanceof List<?> parts)) return content;
+        var converted = new ArrayList<Map<String, Object>>();
+        for (Object part : parts) {
+            if (!(part instanceof Map<?, ?> value)) continue;
+            if ("text".equals(value.get("type")))
+                converted.add(Map.of("type", "input_text", "text", value.get("text")));
+            if ("image_url".equals(value.get("type")) && value.get("image_url") instanceof Map<?, ?> image)
+                converted.add(Map.of("type", "input_image", "image_url", image.get("url")));
+        }
+        return converted;
+    }
+
+    private String chatStreamWithProvider(LlmProvider provider, String systemPrompt, Object userContent,
+                                          List<AiAgentConversationMessage> history, boolean jsonFormat, boolean emitAnswer) {
+        if (emitAnswer) AiAgentProgress.send("reset", Map.of());
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(Math.max(1, provider.timeoutSeconds))).build();
+        var pending = aiAgentRequestCancellationService.trackLlmRequest(client.sendAsync(
+                buildRequest(provider, systemPrompt, userContent, jsonFormat, history, true), HttpResponse.BodyHandlers.ofInputStream()));
+        java.io.InputStream body = null;
+        try {
+            var response = pending.join(); body = response.body();
+            if (response.statusCode() < 200 || response.statusCode() >= 300) throw new IllegalStateException("Stream provider unavailable");
+            aiAgentRequestCancellationService.trackStream(body);
+            var done = new java.util.concurrent.atomic.AtomicBoolean();
+            final var input = body;
+            CompletableFuture.delayedExecutor(Math.max(1, provider.timeoutSeconds), java.util.concurrent.TimeUnit.SECONDS)
+                    .execute(() -> { if (!done.get()) try { input.close(); } catch (java.io.IOException ignored) { } });
+            try (var reader = new java.io.BufferedReader(new java.io.InputStreamReader(body, java.nio.charset.StandardCharsets.UTF_8))) {
+                if (!StringUtils.containsIgnoreCase(response.headers().firstValue("Content-Type").orElse(""), "text/event-stream")) {
+                    String json = reader.lines().collect(java.util.stream.Collectors.joining("\n"));
+                    String content = extractMessageContent(provider, json);
+                    if (emitAnswer && content != null) AiAgentProgress.delta(content);
+                    return content;
+                }
+                var content = new AiAgentLlmContent(text -> { if (emitAnswer) AiAgentProgress.delta(text); }, AiAgentLlmUsage::reasoning);
+                var responses = new AiAgentResponsesContent(content);
+                StringBuilder event = new StringBuilder();
+                String model = provider.model;
+                Object tokens = null;
+                boolean completed = false;
+                for (String line; (line = reader.readLine()) != null;) {
+                    aiAgentRequestCancellationService.throwIfCancellationRequested();
+                    if (line.length() > 200_000 || event.length() > 200_000)
+                        throw new IllegalStateException("Stream content too large");
+                    if (line.startsWith("data:")) {
+                        if (!event.isEmpty()) event.append('\n');
+                        event.append(line.substring(5).stripLeading());
+                    } else if (line.isEmpty() && !event.isEmpty()) {
+                        String data = event.toString(); event.setLength(0);
+                        if ("[DONE]".equals(data)) { completed = true; break; }
+                        Map<String, Object> root = JSON.parseToMap(data);
+                        if (provider.responses()) {
+                            responses.accept(root);
+                            if (responses.completed()) break;
+                            continue;
+                        }
+                        if (root.get("usage") != null) tokens = root.get("usage");
+                        if (root.get("model") instanceof String actual && !actual.isBlank()) model = actual;
+                        if (root.get("choices") instanceof List<?> choices && !choices.isEmpty()
+                                && choices.getFirst() instanceof Map<?, ?> choice) {
+                            if (choice.get("finish_reason") != null) completed = true;
+                            if (choice.get("delta") instanceof Map<?, ?> delta)
+                                content.accept(delta.get("content"), delta.get("reasoning_content"));
+                        }
+                    }
+                }
+                content.finish();
+                if (!(provider.responses() ? responses.completed() : completed) || content.answer().isBlank())
+                    throw new IllegalStateException("Incomplete model stream");
+                if (provider.responses()) { model = responses.model(provider.model); tokens = responses.usage(); }
+                AiAgentLlmUsage.record(provider.name, model, tokens);
+                return content.answer();
+            } finally { done.set(true); }
+        } catch (CancellationException e) { throw new AiAgentRequestCancelledException();
+        } catch (AiAgentRequestCancelledException e) { throw e;
+        } catch (Exception e) {
+            AiAgentLlmUsage.failed(provider.name, provider.model);
+            aiAgentRequestCancellationService.throwIfCancellationRequested();
+            if (emitAnswer) AiAgentProgress.send("reset", Map.of());
+            // Providers without SSE support retain the existing plain-text request path.
+            return jsonFormat ? chatJsonWithProvider(provider, systemPrompt, (String) userContent, history)
+                    : chatPlainWithProvider(provider, systemPrompt, userContent, history);
+        } finally {
+            aiAgentRequestCancellationService.clearLlmRequest(pending);
+            aiAgentRequestCancellationService.clearStream(body);
+            if (body != null) try { body.close(); } catch (java.io.IOException ignored) { }
+        }
     }
 
     private HttpResponse<String> send(HttpClient client, HttpRequest request) {
@@ -257,7 +411,7 @@ public class AiAgentLlmClient {
             return;
         }
         providers.add(new LlmProvider("primary", properties.getBaseUrl(), null, properties.getApiKey(),
-                properties.getModel(), properties.getTimeoutSeconds(), properties.getMaxRetry()));
+                properties.getModel(), properties.getTimeoutSeconds(), properties.getMaxRetry(), properties.getApiType()));
     }
 
     private void addConfiguredProvider(List<LlmProvider> providers, AiAgentLlmProperties.Provider provider) {
@@ -280,7 +434,8 @@ public class AiAgentLlmClient {
                 provider.getApiKey(),
                 provider.getModel(),
                 provider.getTimeoutSeconds() == null ? properties.getTimeoutSeconds() : provider.getTimeoutSeconds(),
-                provider.getMaxRetry() == null ? properties.getMaxRetry() : provider.getMaxRetry()
+                provider.getMaxRetry() == null ? properties.getMaxRetry() : provider.getMaxRetry(),
+                provider.getApiType()
         ));
     }
 
@@ -299,8 +454,28 @@ public class AiAgentLlmClient {
         return url + "/v1/chat/completions";
     }
 
-    private String extractMessageContent(String responseBody) {
+    private String resolveResponsesUrl(String baseUrl) {
+        String url = StringUtils.removeEnd(StringUtils.defaultString(baseUrl).trim(), "/");
+        if (url.endsWith("/responses")) return url;
+        url = StringUtils.removeEnd(url, "/chat/completions");
+        return url + (url.endsWith("/v1") ? "/responses" : "/v1/responses");
+    }
+
+    private String extractMessageContent(LlmProvider provider, String responseBody) {
         Map<String, Object> body = JSON.parseToMap(responseBody);
+        if (provider.responses()) {
+            var reasoning = new StringBuilder();
+            var content = new AiAgentLlmContent(text -> {}, reasoning::append);
+            var responses = new AiAgentResponsesContent(content);
+            responses.accept(body);
+            content.finish();
+            if (!responses.completed()) throw new IllegalStateException("Invalid model Responses response");
+            if (!content.answer().isBlank()) {
+                AiAgentLlmUsage.reasoning(reasoning.toString());
+                AiAgentLlmUsage.record(provider.name, responses.model(provider.model), responses.usage());
+            }
+            return content.answer();
+        }
         Object choicesObject = body.get("choices");
         if (!(choicesObject instanceof List<?> choices) || choices.isEmpty()) {
             return null;
@@ -310,11 +485,23 @@ public class AiAgentLlmClient {
             return null;
         }
         Object messageObject = choiceMap.get("message");
+        var reasoning = new StringBuilder();
+        var parsed = new AiAgentLlmContent(text -> {}, reasoning::append);
         if (messageObject instanceof Map<?, ?> messageMap) {
-            return StringUtils.defaultString((String) messageMap.get("content"));
+            parsed.accept(messageMap.get("content"), messageMap.get("reasoning_content"));
+        } else {
+            Object text = choiceMap.get("text");
+            parsed.accept(text == null ? null : String.valueOf(text), null);
         }
-        Object text = choiceMap.get("text");
-        return text == null ? null : String.valueOf(text);
+        parsed.finish();
+        String content = parsed.answer();
+        if (StringUtils.isNotBlank(content)) {
+            String model = body.get("model") instanceof String returnedModel
+                    ? StringUtils.defaultIfBlank(returnedModel.trim(), provider.model) : provider.model;
+            AiAgentLlmUsage.reasoning(reasoning.toString());
+            AiAgentLlmUsage.record(provider.name, model, body.get("usage"));
+        }
+        return content;
     }
 
     private static class LlmProvider {
@@ -325,9 +512,10 @@ public class AiAgentLlmClient {
         private final String model;
         private final int timeoutSeconds;
         private final int maxRetry;
+        private final String apiType;
 
         private LlmProvider(String name, String baseUrl, String chatCompletionsPath, String apiKey, String model,
-                            int timeoutSeconds, int maxRetry) {
+                            int timeoutSeconds, int maxRetry, String apiType) {
             this.name = name;
             this.baseUrl = baseUrl;
             this.chatCompletionsPath = chatCompletionsPath;
@@ -335,6 +523,8 @@ public class AiAgentLlmClient {
             this.model = model;
             this.timeoutSeconds = timeoutSeconds;
             this.maxRetry = maxRetry;
+            this.apiType = apiType;
         }
+        private boolean responses() { return "responses".equalsIgnoreCase(apiType); }
     }
 }

@@ -4,8 +4,11 @@ import cn.cordys.common.constants.PermissionConstants;
 import cn.cordys.common.pager.Pager;
 import cn.cordys.context.OrganizationContext;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeChunkPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeDocumentEditRequest;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeDocumentPageRequest;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeSearchTestRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeVersionPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeVersionRestoreRequest;
 import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleBatchReviewRequest;
 import cn.cordys.crm.aiagent.dto.request.AiSemanticRulePageRequest;
 import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleReviewRequest;
@@ -13,7 +16,9 @@ import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleSaveRequest;
 import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleVersionPageRequest;
 import cn.cordys.crm.aiagent.dto.request.AiSemanticRuleVersionSwitchRequest;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeChunkResponse;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentEditResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentResponse;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentVersionResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
 import cn.cordys.crm.aiagent.dto.response.AiSemanticRuleResponse;
 import cn.cordys.crm.aiagent.dto.response.AiSemanticSchemaOptionsResponse;
@@ -34,7 +39,7 @@ import java.util.List;
 
 @Tag(name = "AI Agent 公司文档知识库")
 @Validated
-@RestController
+// Historical document APIs are no longer registered; retained data is archival only.
 @RequestMapping("/ai-agent/knowledge/document")
 public class AiAgentKnowledgeController {
 
@@ -69,6 +74,54 @@ public class AiAgentKnowledgeController {
     @Operation(summary = "文档详情")
     public AiKnowledgeDocumentResponse detail(@PathVariable String id) {
         return aiAgentKnowledgeService.getDocument(id, OrganizationContext.getOrganizationId());
+    }
+
+    @GetMapping("/edit/{id}")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "获取可编辑知识正文")
+    public AiKnowledgeDocumentEditResponse editable(@PathVariable String id) {
+        return aiAgentKnowledgeService.getEditableDocument(id, OrganizationContext.getOrganizationId());
+    }
+
+    @PostMapping("/edit/{id}")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "保存知识正文并重新解析")
+    public AiKnowledgeDocumentResponse edit(@PathVariable String id,
+                                            @Valid @RequestBody AiKnowledgeDocumentEditRequest request) {
+        return aiAgentKnowledgeService.editDocument(
+                id, request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
+    }
+
+    @PostMapping("/version/page")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "知识正文版本分页")
+    public Pager<List<AiKnowledgeDocumentVersionResponse>> pageVersions(
+            @Valid @RequestBody AiKnowledgeVersionPageRequest request) {
+        return aiAgentKnowledgeService.pageDocumentVersions(request, OrganizationContext.getOrganizationId());
+    }
+
+    @GetMapping("/version/detail/{versionId}")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "知识正文版本详情")
+    public AiKnowledgeDocumentVersionResponse versionDetail(@PathVariable String versionId) {
+        return aiAgentKnowledgeService.getDocumentVersion(versionId, OrganizationContext.getOrganizationId());
+    }
+
+    @PostMapping("/version/restore/{versionId}")
+    @RequiresPermissions(PermissionConstants.AGENT_UPDATE)
+    @Operation(summary = "回退知识正文版本并重新解析")
+    public AiKnowledgeDocumentResponse restoreVersion(
+            @PathVariable String versionId,
+            @Valid @RequestBody AiKnowledgeVersionRestoreRequest request) {
+        return aiAgentKnowledgeService.restoreDocumentVersion(
+                versionId, request, OrganizationContext.getOrganizationId(), SessionUtils.getUserId());
+    }
+
+    @PostMapping("/version/delete/{versionId}")
+    @RequiresPermissions(PermissionConstants.AGENT_DELETE)
+    @Operation(summary = "删除知识正文历史版本")
+    public void deleteVersion(@PathVariable String versionId) {
+        aiAgentKnowledgeService.deleteDocumentVersion(versionId, OrganizationContext.getOrganizationId());
     }
 
     @PostMapping("/chunk/page")

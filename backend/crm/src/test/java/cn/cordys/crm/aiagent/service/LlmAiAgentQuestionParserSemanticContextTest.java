@@ -1,176 +1,50 @@
 package cn.cordys.crm.aiagent.service;
-
-import cn.cordys.crm.aiagent.config.AiAgentLlmProperties;
-import cn.cordys.crm.aiagent.config.AiAgentSemanticRagProperties;
-import cn.cordys.crm.aiagent.dto.AiAgentContext;
-import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchMatchResponse;
+import cn.cordys.crm.aiagent.config.*;
+import cn.cordys.crm.aiagent.dto.*;
+import cn.cordys.crm.aiagent.dto.knowledge.AiAgentQueryKnowledge;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
-import cn.cordys.crm.aiagent.dto.semantic.AiAgentSemanticRuleMatch;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import org.junit.jupiter.api.*;
+import org.springframework.test.util.ReflectionTestUtils;
+import java.util.*;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 class LlmAiAgentQuestionParserSemanticContextTest {
-
-    @Test
-    void shouldInjectRetrievedDocumentKnowledgeIntoSystemPrompt() {
-        AiAgentLlmClient llmClient = mock(AiAgentLlmClient.class);
-        AiAgentSemanticRagProperties semanticProperties = new AiAgentSemanticRagProperties();
-        LlmAiAgentQuestionParser parser = parser(llmClient, semanticProperties);
-        String question = "每个品种的总数量是多少？";
-        when(llmClient.chat(org.mockito.ArgumentMatchers.anyString(), eq(question), eq("provider")))
-                .thenReturn(validPlanJson());
-
-        AiKnowledgeSearchMatchResponse match = new AiKnowledgeSearchMatchResponse();
-        match.setDocumentName("业务口径.md");
-        match.setSectionPath("字段定义");
-        match.setContent("品种是外部合同表中的品名字段，不是订单中的原料名称。");
-        AiKnowledgeSearchTestResponse search = new AiKnowledgeSearchTestResponse();
-        search.setMatches(List.of(match));
-        AiAgentContext context = new AiAgentContext();
-        context.setKnowledgeSearch(search);
-
-        parser.parse(question, "provider", context);
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(llmClient).chat(promptCaptor.capture(), eq(question), eq("provider"));
-        assertThat(promptCaptor.getValue()).contains(
-                "retrievedKnowledge",
-                "业务口径.md",
-                "品种是外部合同表中的品名字段，不是订单中的原料名称",
-                "当公司知识与模型的一般常识或默认推断冲突时，以公司知识为准");
+    private AiAgentLlmClient llm; private LlmAiAgentQuestionParser parser; private AiAgentContext context;
+    @BeforeEach void setup() {
+        var props=new AiAgentLlmProperties(); props.setEnabled(true); llm=mock(AiAgentLlmClient.class);
+        var validator=new AiAgentIntentValidator();
+        parser=new LlmAiAgentQuestionParser(props,llm,validator,new AiAgentSemanticSchemaService(),new AiAgentParsedQuestionNormalizer(validator));
+        context=new AiAgentContext(); context.setOrganizationId("org"); context.setUserId("user");
+        when(llm.chat(anyString(),anyString(),any(),anyList())).thenReturn("{\"success\":true,\"sql\":\"SELECT 1 AS n\",\"chart-type\":\"table\"}");
     }
-
-    @Test
-    void shouldInjectOnlyControlledSemanticRuleJson() {
-        AiAgentLlmClient llmClient = mock(AiAgentLlmClient.class);
-        AiAgentSemanticRagProperties semanticProperties = new AiAgentSemanticRagProperties();
-        semanticProperties.setEnabled(true);
-        LlmAiAgentQuestionParser parser = parser(llmClient, semanticProperties);
-        String question = "每个品种的总数量是多少？";
-        when(llmClient.chat(org.mockito.ArgumentMatchers.anyString(), eq(question), eq("provider")))
-                .thenReturn(validPlanJson());
-
-        parser.parse(question, "provider", context());
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(llmClient).chat(promptCaptor.capture(), eq(question), eq("provider"));
-        String prompt = promptCaptor.getValue();
-        assertThat(prompt).contains(
-                "semanticRules",
-                "TERM_CONTRACT_PRODUCT_VARIETY",
-                "contract_info",
-                "product_name",
-                "品种是外部合同表的一个字段，不要理解为订单中的字段");
-        assertThat(prompt).doesNotContain(
-                "document-secret",
-                "chunk-secret",
-                "来源原文绝不能进入提示词");
+    @Test void ignoresRetiredDocumentRewriteAndUsesOriginalQuestion() {
+        var retired=new AiKnowledgeSearchTestResponse(); retired.setAnswerPreview("retired document"); retired.setRewriteQuestion("rewritten query");
+        context.setKnowledgeSearch(retired); parser.parse("每个品种数量","provider",context);
+        verify(llm).chat(argThat(p -> !p.contains("retired document")),argThat(p -> p.contains("每个品种数量") && !p.contains("rewritten query")),eq("provider"),anyList());
     }
-
-    @Test
-    void shouldNotInjectSemanticRulesWhenFeatureIsDisabled() {
-        AiAgentLlmClient llmClient = mock(AiAgentLlmClient.class);
-        AiAgentSemanticRagProperties semanticProperties = new AiAgentSemanticRagProperties();
-        semanticProperties.setEnabled(false);
-        LlmAiAgentQuestionParser parser = parser(llmClient, semanticProperties);
-        String question = "每个品种的总数量是多少？";
-        when(llmClient.chat(org.mockito.ArgumentMatchers.anyString(), eq(question), eq("provider")))
-                .thenReturn(validPlanJson());
-
-        parser.parse(question, "provider", context());
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(llmClient).chat(promptCaptor.capture(), eq(question), eq("provider"));
-        assertThat(promptCaptor.getValue()).doesNotContain(
-                "TERM_CONTRACT_PRODUCT_VARIETY",
-                "semanticRules:",
-                "品种是外部合同表的一个字段");
+    @Test void retrievesKnowledgeAfterKeywordTableSelectionAndSamplesBeforeGeneratingSql() {
+        var tables=mock(AiAgentTableSelectionService.class); var knowledge=mock(AiAgentQueryKnowledgeService.class); var samples=mock(AiAgentSampleDataService.class);
+        ReflectionTestUtils.setField(parser,"tableSelectionService",tables); ReflectionTestUtils.setField(parser,"queryKnowledgeService",knowledge); ReflectionTestUtils.setField(parser,"sampleDataService",samples);
+        doAnswer(i -> { context.setExtractedKeywords("品种,数量"); context.setSelectedQueryTables(List.of("contract_info")); return null; }).when(tables).select(anyString(),same(context));
+        when(knowledge.retrieve(eq("品种,数量"),any(),any(),any())).thenReturn(AiAgentQueryKnowledge.Matches.empty());
+        when(knowledge.prompt(any(),eq(false))).thenReturn("品种数量统计术语及示例 SQL");
+        when(samples.read(context)).thenReturn("[{\"product_name\":\"样例品种\"}]");
+        parser.parse("每个品种数量","provider",context);
+        var order=inOrder(tables,knowledge,samples,llm);
+        order.verify(tables).select("每个品种数量",context);
+        order.verify(knowledge).retrieve("品种,数量",null,"org","user");
+        order.verify(samples).read(context);
+        order.verify(knowledge).prompt(any(),eq(false));
+        order.verify(llm).chat(argThat(p -> p.contains("品种数量统计术语") && p.contains("样例品种")),anyString(),eq("provider"),anyList());
     }
-
-    @Test
-    void shouldFeedPlanValidationFailureBackForOneRepairRequest() {
-        AiAgentLlmClient llmClient = mock(AiAgentLlmClient.class);
-        AiAgentSemanticRagProperties semanticProperties = new AiAgentSemanticRagProperties();
-        semanticProperties.setEnabled(true);
-        LlmAiAgentQuestionParser parser = parser(llmClient, semanticProperties);
-        String question = "公司客户有哪些？";
-        when(llmClient.chat(org.mockito.ArgumentMatchers.anyString(), eq(question), eq("provider")))
-                .thenReturn(validPlanJson());
-
-        parser.repair(question, "provider", context(), "缺少 customer_source eq 公司客户");
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(llmClient).chat(promptCaptor.capture(), eq(question), eq("provider"));
-        assertThat(promptCaptor.getValue()).contains(
-                "上一次为同一问题生成的查询计划未通过", "缺少 customer_source eq 公司客户");
+    @Test void noGlobalPurchaseBusinessRulesAreInjectedWithoutTerminology() {
+        parser.parse("客户采购数量","provider",context);
+        verify(llm).chat(argThat(p -> !p.contains("默认以 delivery_date") && !p.contains("必须追加非空过滤") && !p.contains("全局业务口径")),anyString(),eq("provider"),anyList());
     }
-
-    private LlmAiAgentQuestionParser parser(AiAgentLlmClient llmClient,
-                                             AiAgentSemanticRagProperties semanticProperties) {
-        AiAgentLlmProperties llmProperties = new AiAgentLlmProperties();
-        llmProperties.setEnabled(true);
-        llmProperties.setMaxInputLength(1000);
-        AiAgentIntentValidator intentValidator = new AiAgentIntentValidator();
-        AiAgentSemanticContextBuilder contextBuilder = new AiAgentSemanticContextBuilder(semanticProperties);
-        return new LlmAiAgentQuestionParser(
-                llmProperties,
-                llmClient,
-                intentValidator,
-                new AiAgentSemanticSchemaService(),
-                new AiAgentParsedQuestionNormalizer(intentValidator),
-                contextBuilder,
-                semanticProperties
-        );
-    }
-
-    private AiAgentContext context() {
-        AiAgentSemanticRuleMatch match = new AiAgentSemanticRuleMatch();
-        match.setRuleId("TERM_CONTRACT_PRODUCT_VARIETY");
-        match.setVersion(1);
-        match.setCanonicalTerm("品种");
-        match.setAliases(List.of("产品品种"));
-        match.setInstruction("品种是外部合同表的一个字段，不要理解为订单中的字段。");
-        match.setDocumentId("document-secret");
-        match.setChunkId("chunk-secret");
-        match.setSectionPath("来源原文绝不能进入提示词");
-        AiAgentSemanticRuleMatch.Target target = new AiAgentSemanticRuleMatch.Target();
-        target.setEntity("contract_info");
-        target.setField("product_name");
-        match.setTarget(target);
-        AiAgentSemanticRuleMatch.Target forbidden = new AiAgentSemanticRuleMatch.Target();
-        forbidden.setEntity("sales_order");
-        match.setForbiddenTargets(List.of(forbidden));
-        AiAgentContext context = new AiAgentContext();
-        context.setSemanticRuleMatches(List.of(match));
-        return context;
-    }
-
-    private String validPlanJson() {
-        return """
-                {
-                  "intent": "CRM_DATABASE_QUERY",
-                  "confidence": 0.99,
-                  "queryPlan": {
-                    "intent": "CRM_DATABASE_QUERY",
-                    "queryType": "AGGREGATE",
-                    "entity": "contract_info",
-                    "selectFields": [],
-                    "filters": [],
-                    "metrics": [{"function":"sum","field":"total_quantity","alias":"total_quantity"}],
-                    "groupBy": ["product_name"],
-                    "orderBy": [],
-                    "limit": 100,
-                    "needClarification": false
-                  }
-                }
-                """;
+    @Test void sqlGenerationDisabledDoesNotRestoreLegacyPlanRoute() {
+        var props=new AiAgentSqlProperties(); props.setTextToSqlEnabled(false); ReflectionTestUtils.setField(parser,"sqlProperties",props);
+        assertThat(parser.parse("品种数量","provider",context)).isNull(); verifyNoInteractions(llm);
     }
 }

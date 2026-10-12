@@ -9,7 +9,6 @@ class AiAgentAttachmentServiceTest {
 
     private final AiAgentAttachmentService service = new AiAgentAttachmentService(
             mock(AiAgentFileContentService.class),
-            mock(AiAgentKnowledgeService.class),
             mock(AiAgentLlmClient.class));
 
     @Test
@@ -19,13 +18,13 @@ class AiAgentAttachmentServiceTest {
     }
 
     @Test
-    void shouldAddAttachmentsToKnowledgeForExplicitCommand() {
+    void shouldKeepAttachmentsTransientEvenForLegacyKnowledgeCommands() {
         assertThat(service.resolveMode("请把这些文件加入公司知识库"))
-                .isEqualTo(AiAgentAttachmentService.AttachmentMode.KNOWLEDGE);
+                .isEqualTo(AiAgentAttachmentService.AttachmentMode.CHAT);
         assertThat(service.resolveMode("上传这个文档到公司知识库中"))
-                .isEqualTo(AiAgentAttachmentService.AttachmentMode.KNOWLEDGE);
+                .isEqualTo(AiAgentAttachmentService.AttachmentMode.CHAT);
         assertThat(service.resolveMode("请把附件存到知识库里"))
-                .isEqualTo(AiAgentAttachmentService.AttachmentMode.KNOWLEDGE);
+                .isEqualTo(AiAgentAttachmentService.AttachmentMode.CHAT);
     }
 
     @Test

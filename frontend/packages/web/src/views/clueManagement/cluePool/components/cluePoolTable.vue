@@ -166,7 +166,7 @@
 
   import { ClueRouteEnum } from '@/enums/routeEnum';
 
-  import { SelectOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectOption } from 'naive-ui/es/select/src/interface';
 
   const { t } = useI18n();
   const { openModal } = useModal();

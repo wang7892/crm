@@ -1,13 +1,17 @@
 package cn.cordys.crm.aiagent.service;
 
 import cn.cordys.crm.aiagent.config.AiAgentKnowledgeParseProperties;
+import cn.cordys.common.uid.IDGenerator;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeChunk;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeDocument;
+import cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob;
 import cn.cordys.crm.aiagent.mapper.AiAgentKnowledgeMapper;
 import cn.cordys.mybatis.BaseMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.MockedStatic;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
@@ -17,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -24,6 +29,8 @@ import static org.mockito.Mockito.when;
 class AiAgentKnowledgeParsePersistenceServiceTest {
 
     private BaseMapper<AiKnowledgeChunk> chunkMapper;
+    private BaseMapper<AiKnowledgeDocument> documentMapper;
+    private BaseMapper<AiKnowledgeDocumentVersion> documentVersionMapper;
     private BaseMapper<AiKnowledgeParseJob> parseJobMapper;
     private AiAgentKnowledgeMapper knowledgeMapper;
     private AiAgentSemanticRuleService semanticRuleService;
@@ -33,6 +40,8 @@ class AiAgentKnowledgeParsePersistenceServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         chunkMapper = mock(BaseMapper.class);
+        documentMapper = mock(BaseMapper.class);
+        documentVersionMapper = mock(BaseMapper.class);
         parseJobMapper = mock(BaseMapper.class);
         knowledgeMapper = mock(AiAgentKnowledgeMapper.class);
         semanticRuleService = mock(AiAgentSemanticRuleService.class);
@@ -41,10 +50,13 @@ class AiAgentKnowledgeParsePersistenceServiceTest {
 
         service = new AiAgentKnowledgeParsePersistenceService();
         ReflectionTestUtils.setField(service, "chunkMapper", chunkMapper);
+        ReflectionTestUtils.setField(service, "documentMapper", documentMapper);
+        ReflectionTestUtils.setField(service, "documentVersionMapper", documentVersionMapper);
         ReflectionTestUtils.setField(service, "parseJobMapper", parseJobMapper);
         ReflectionTestUtils.setField(service, "knowledgeMapper", knowledgeMapper);
         ReflectionTestUtils.setField(service, "properties", properties);
         ReflectionTestUtils.setField(service, "semanticRuleService", semanticRuleService);
+        when(documentMapper.updateById(any(AiKnowledgeDocument.class))).thenReturn(1);
         when(knowledgeMapper.updateParseJobState(
                 org.mockito.ArgumentMatchers.anyString(),
                 org.mockito.ArgumentMatchers.anyString(),
@@ -113,6 +125,73 @@ class AiAgentKnowledgeParsePersistenceServiceTest {
         assertThat(document.getParseStatus()).isEqualTo("PARSED");
         assertThat(document.getChunkCount()).isEqualTo(1);
         assertThat(job.getStatus()).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void shouldActivateEditedVersionWithNewChunksInOneCompletion() {
+        AiKnowledgeParseJob job = runningJob("job-1", "RETRY_0");
+        job.setDocumentVersionId("version-2");
+        AiKnowledgeDocument document = document(false);
+        document.setActiveVersionId("version-1");
+        document.setActiveVersion(1);
+        document.setLatestVersion(2);
+        AiKnowledgeDocumentVersion version = version("version-2", 2, "PARSING");
+        version.setName("新版知识");
+        version.setRemark("新版备注");
+        AiKnowledgeChunk chunk = chunk();
+        when(knowledgeMapper.getParseJobForUpdate("job-1")).thenReturn(job);
+        when(knowledgeMapper.getLatestParseJobForUpdate("doc-1", "org-1")).thenReturn(job);
+        when(knowledgeMapper.getKnowledgeDocumentForUpdate("doc-1", "org-1")).thenReturn(document);
+        when(knowledgeMapper.getDocumentVersionForUpdate("version-2", "org-1")).thenReturn(version);
+        when(knowledgeMapper.updateDocumentVersionState(
+                eq("version-2"), eq("org-1"), eq("ACTIVE"),
+                org.mockito.ArgumentMatchers.isNull(), eq("user-1"), anyLong())).thenReturn(1);
+        when(chunkMapper.insert(chunk)).thenReturn(1);
+
+        AiAgentKnowledgeParsePersistenceService.CompletionResult result = service.complete(
+                "job-1", new AiAgentKnowledgeService.PreparedParse(List.of(chunk), "# 新版知识\n\n正文\n"));
+
+        assertThat(result).isEqualTo(AiAgentKnowledgeParsePersistenceService.CompletionResult.SUCCESS);
+        verify(knowledgeMapper).archiveActiveDocumentVersions(
+                eq("doc-1"), eq("org-1"), eq("version-2"), eq("user-1"), anyLong());
+        assertThat(document.getActiveVersionId()).isEqualTo("version-2");
+        assertThat(document.getActiveVersion()).isEqualTo(2);
+        assertThat(document.getName()).isEqualTo("新版知识");
+    }
+
+    @Test
+    void shouldCreateInitialEditableVersionAfterOriginalFileParsing() {
+        AiKnowledgeParseJob job = runningJob("job-1", "RETRY_0");
+        AiKnowledgeDocument document = document(false);
+        document.setName("产品手册.pdf");
+        document.setRemark("原始备注");
+        document.setLatestVersion(0);
+        AiKnowledgeChunk chunk = chunk();
+        when(knowledgeMapper.getParseJobForUpdate("job-1")).thenReturn(job);
+        when(knowledgeMapper.getLatestParseJobForUpdate("doc-1", "org-1")).thenReturn(job);
+        when(knowledgeMapper.getKnowledgeDocumentForUpdate("doc-1", "org-1")).thenReturn(document);
+        when(knowledgeMapper.maxDocumentVersion("doc-1", "org-1")).thenReturn(0);
+        when(knowledgeMapper.updateDocumentVersionState(
+                org.mockito.ArgumentMatchers.anyString(), eq("org-1"), eq("ACTIVE"),
+                org.mockito.ArgumentMatchers.isNull(), eq("user-1"), anyLong())).thenReturn(1);
+        when(documentVersionMapper.insert(any(AiKnowledgeDocumentVersion.class))).thenReturn(1);
+        when(chunkMapper.insert(chunk)).thenReturn(1);
+
+        try (MockedStatic<IDGenerator> idGenerator = mockStatic(IDGenerator.class)) {
+            idGenerator.when(IDGenerator::nextStr).thenReturn("version-1");
+            service.complete(
+                    "job-1", new AiAgentKnowledgeService.PreparedParse(List.of(chunk), "# 产品手册\n\n正文\n"));
+        }
+
+        ArgumentCaptor<AiKnowledgeDocumentVersion> versionCaptor =
+                ArgumentCaptor.forClass(AiKnowledgeDocumentVersion.class);
+        verify(documentVersionMapper).insert(versionCaptor.capture());
+        AiKnowledgeDocumentVersion version = versionCaptor.getValue();
+        assertThat(version.getVersion()).isEqualTo(1);
+        assertThat(version.getSource()).isEqualTo("ORIGINAL");
+        assertThat(version.getContent()).contains("产品手册");
+        assertThat(document.getActiveVersionId()).isEqualTo(version.getId());
+        assertThat(document.getActiveVersion()).isEqualTo(1);
     }
 
     @Test
@@ -243,5 +322,16 @@ class AiAgentKnowledgeParsePersistenceServiceTest {
         chunk.setChunkIndex(0);
         chunk.setContent("content");
         return chunk;
+    }
+
+    private AiKnowledgeDocumentVersion version(String id, int versionNumber, String status) {
+        AiKnowledgeDocumentVersion version = new AiKnowledgeDocumentVersion();
+        version.setId(id);
+        version.setOrganizationId("org-1");
+        version.setDocumentId("doc-1");
+        version.setVersion(versionNumber);
+        version.setStatus(status);
+        version.setContent("content");
+        return version;
     }
 }

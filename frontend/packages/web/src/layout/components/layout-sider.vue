@@ -121,7 +121,7 @@
     TenderRouteEnum,
   } from '@/enums/routeEnum';
 
-  import { MenuGroupOption, MenuOption } from 'naive-ui/es/menu/src/interface';
+  import type { MenuGroupOption, MenuOption } from 'naive-ui/es/menu/src/interface';
 
   const emit = defineEmits<{
     (e: 'openPersonalInfo', tab: PersonalEnum): void;

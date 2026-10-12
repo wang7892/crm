@@ -17,7 +17,11 @@ public class AiAgentQueryResult {
     private Map<String, String> fieldLabels;
     private Map<String, String> fieldMasks;
     private List<Map<String, Object>> rows = new ArrayList<>();
+    private Long totalRows;
+    private String totalWarning;
     private List<String> warnings = new ArrayList<>();
     private long durationMs;
     private String toolName;
+    private String traceId;
+    private String timeWindowLabel;
 }

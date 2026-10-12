@@ -78,6 +78,7 @@ export enum AgentRouteEnum {
 export enum AiKnowledgeRouteEnum {
   AI_KNOWLEDGE = 'aiKnowledge',
   AI_KNOWLEDGE_INDEX = 'aiKnowledgeIndex',
+  AI_KNOWLEDGE_EXAMPLES = 'aiKnowledgeExamples',
 }
 
 export enum DashboardRouteEnum {

@@ -25,7 +25,7 @@
 
   import useLocalForage from '@/hooks/useLocalForage';
 
-  import { SelectBaseOption, SelectMixedOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectBaseOption, SelectMixedOption } from 'naive-ui/es/select/src/interface';
 
   const { t } = useI18n();
   const { setItem, getItem } = useLocalForage();

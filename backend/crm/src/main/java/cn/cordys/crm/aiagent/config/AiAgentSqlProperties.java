@@ -9,7 +9,9 @@ import java.util.List;
 @ConfigurationProperties(prefix = "crm.ai-agent.sql")
 public class AiAgentSqlProperties {
     private boolean enabled = false;
+    private boolean textToSqlEnabled = true;
     private int maxRows = 100;
+    private int queryTimeoutSeconds = 30;
     private boolean auditEnabled = true;
     private List<String> allowedTables = List.of(
             "customer",
@@ -26,6 +28,8 @@ public class AiAgentSqlProperties {
             "email_webhook_event",
             "email_webhook_attachment",
             "contract_info",
-            "mls_agent_data.contract_info"
+            "mls_agent_data.contract_info",
+            "order_timeline",
+            "mls_agent_data.order_timeline"
     );
 }

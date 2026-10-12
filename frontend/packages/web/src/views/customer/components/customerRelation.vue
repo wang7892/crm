@@ -71,7 +71,7 @@
 
   import { getCustomerRelationList, saveCustomerRelation } from '@/api/modules';
 
-  import { RowData } from 'naive-ui/es/data-table/src/interface';
+  import type { RowData } from 'naive-ui/es/data-table/src/interface';
 
   const props = defineProps<{
     sourceId: string;

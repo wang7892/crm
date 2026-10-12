@@ -21,8 +21,19 @@ const aiKnowledge: AppRouteRecordRaw = {
       name: AiKnowledgeRouteEnum.AI_KNOWLEDGE_INDEX,
       component: () => import('../../../views/agent/knowledge.vue'),
       meta: {
-        locale: 'menu.aiKnowledge',
+        locale: 'menu.queryTerminology',
         permissions: ['AGENT:UPDATE'],
+        isTopMenu: true,
+      },
+    },
+    {
+      path: 'examples',
+      name: AiKnowledgeRouteEnum.AI_KNOWLEDGE_EXAMPLES,
+      component: () => import('../../../views/agent/knowledge.vue'),
+      meta: {
+        locale: 'menu.querySqlExamples',
+        permissions: ['AGENT:UPDATE'],
+        isTopMenu: true,
       },
     },
   ],

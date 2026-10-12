@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head
+    ><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title
+      >Agent UI Test Fixture</title
+    ></head
+  >
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h } from 'vue';
+      import { createMemoryHistory, createRouter } from 'vue-router';
+      import { NConfigProvider, NDialogProvider, NMessageProvider } from 'naive-ui';
+      import { getInstanceByDom } from 'echarts/core';
+      import store from '../src/store/index.ts';
+      import useUserStore from '../src/store/modules/user/index.ts';
+      import '../src/assets/style/index.less';
+      import 'virtual:svg-icons-register';
+
+      const mode = new URLSearchParams(location.search).get('mode') || 'chat';
+      const component =
+        mode === 'knowledge'
+          ? (await import('../src/views/agent/knowledge.vue')).default
+          : (await import('../src/views/agent/index.vue')).default;
+      const navigation = mode === 'navigation';
+      const destinations = [
+        { name: 'home', label: '首页' },
+        { name: 'customer', label: '客户' },
+        { name: 'specialist', label: '联系专员' },
+      ];
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [
+          { path: '/agent', name: 'agent', component },
+          ...destinations.map(({ name, label }) => ({
+            path: `/${name}`,
+            name,
+            component: { render: () => h('h1', { class: 'smoke-destination' }, label) },
+          })),
+          { path: '/:pathMatch(.*)*', component },
+        ],
+      });
+      await router.push(mode === 'knowledge' ? '/ai-knowledge/terms' : '/agent');
+      const PageContent = navigation ? (await import('../src/layout/page-content.vue')).default : null;
+      const content = () =>
+        navigation
+          ? h('div', { class: 'smoke-navigation-layout' }, [
+              h(
+                'nav',
+                { class: 'smoke-navigation' },
+                [...destinations, { name: 'agent', label: '智能体' }].map(({ name, label }) =>
+                  h('button', { onClick: () => router.push({ name }) }, label)
+                )
+              ),
+              h('div', { class: 'smoke-page-content' }, [h(PageContent)]),
+            ])
+          : h(component);
+      const app = createApp({
+        render: () =>
+          h(NConfigProvider, null, {
+            default: () => h(NDialogProvider, null, { default: () => h(NMessageProvider, null, { default: content }) }),
+          }),
+      });
+      app.use(store).use(router);
+      const user = useUserStore(store);
+      user.$patch({ userInfo: { id: 'admin', name: 'Test Admin' } });
+      app.mount('#app');
+      window.__agentChart = (index = 0, showLast = false) => {
+        const instance = getInstanceByDom(document.querySelectorAll('.chart-canvas')[index]);
+        if (!instance) return null;
+        const option = instance.getOption();
+        const categories =
+          option.xAxis?.[0]?.type === 'category'
+            ? option.xAxis[0].data
+            : option.yAxis?.[0]?.data || option.series[0].data.map((item) => item.name);
+        if (showLast)
+          instance.dispatchAction({
+            type: 'dataZoom',
+            startValue: Math.max(0, categories.length - 10),
+            endValue: categories.length - 1,
+          });
+        return {
+          categories,
+          values: option.series[0].data,
+          type: option.series[0].type,
+          series: option.series,
+          xType: option.xAxis?.[0]?.type,
+        };
+      };
+      window.__agentChartLayout = (index = 0, range) => {
+        const instance = getInstanceByDom(document.querySelectorAll('.chart-canvas')[index]);
+        if (range) instance.dispatchAction({ type: 'dataZoom', startValue: range[0], endValue: range[1] });
+        const option = instance.getOption();
+        const horizontal = option.yAxis?.[0]?.type === 'category';
+        const axisModel = instance.getModel().getComponent(horizontal ? 'yAxis' : 'xAxis');
+        const labels = [];
+        instance.getViewOfComponentModel(axisModel).group.traverse((element) => {
+          if (element.type !== 'text' || !element.anid?.startsWith('label_')) return;
+          const rect = element.getBoundingRect().clone();
+          rect.applyTransform(element.getComputedTransform());
+          labels.push({
+            text: element.style.text,
+            hidden: !!element.ignore,
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          });
+        });
+        const zoomTexts = [];
+        const zoomHandles = [];
+        const zoomModel = instance.getModel().getComponent('dataZoom');
+        if (zoomModel) {
+          const zoomView = instance.getViewOfComponentModel(zoomModel);
+          zoomView.group.traverse((element) => {
+            if (element.type === 'text' && element.style.text && !element.ignore) zoomTexts.push(element.style.text);
+          });
+          for (const handle of zoomView._displayables.handles) {
+            const rect = handle.getBoundingRect().clone();
+            rect.applyTransform(handle.getComputedTransform());
+            zoomHandles.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+          }
+        }
+        const tooltipElement = instance.getViewOfComponentModel(instance.getModel().getComponent('tooltip'))
+          ._tooltipContent.el;
+        const tooltip = tooltipElement && !tooltipElement.ignore ? { text: tooltipElement.style.text } : null;
+        return {
+          labels,
+          zoomTexts,
+          zoomHandles,
+          tooltip,
+          horizontal,
+          extent: axisModel.axis.scale.getExtent(),
+          zoom: option.dataZoom?.[0],
+          width: instance.getWidth(),
+          height: instance.getHeight(),
+          plot: instance.getModel().getComponent('grid').coordinateSystem.getRect(),
+        };
+      };
+      window.__agentSmokeReady = true;
+    </script>
+    <style>
+      html,
+      body,
+      #app {
+        margin: 0;
+        width: 100%;
+        min-height: 100vh;
+      }
+      #app {
+        height: 100vh;
+      }
+      .smoke-navigation-layout {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      .smoke-navigation {
+        display: flex;
+        gap: 16px;
+        padding: 12px;
+        flex: 0 0 auto;
+      }
+      .smoke-page-content {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+      }
+    </style>
+  </body>
+</html>

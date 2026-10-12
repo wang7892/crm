@@ -16,6 +16,10 @@ public class AiAgentQueryPlan {
     private List<String> groupBy = new ArrayList<>();
     private List<AiAgentQueryOrder> orderBy = new ArrayList<>();
     private Integer limit;
+    private Long offset;
+    /** Ranking scope, independent of the transport page size. */
+    private Integer topN;
+    private List<String> rankPartitions = new ArrayList<>();
     private Boolean needClarification;
     private String clarificationQuestion;
 }

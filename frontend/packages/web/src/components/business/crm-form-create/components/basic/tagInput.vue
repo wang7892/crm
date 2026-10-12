@@ -49,7 +49,7 @@
   import type { FormConfig } from '@lib/shared/models/system/module';
 
   import { FormCreateField } from '../../types';
-  import { SelectBaseOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectBaseOption } from 'naive-ui/es/select/src/interface';
 
   const props = defineProps<{
     fieldConfig: FormCreateField;

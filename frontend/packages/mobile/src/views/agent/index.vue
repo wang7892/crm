@@ -27,6 +27,11 @@
         </button>
       </header>
 
+      <label class="agent-row-limit">
+        <span>限制 1000 行数据</span>
+        <van-switch v-model="limitRows" :disabled="loading" size="20px" aria-label="限制 1000 行数据" />
+      </label>
+
       <main ref="messageScrollRef" class="agent-messages">
         <section v-if="currentSession.messages.length === 0" class="agent-welcome">
           <div class="agent-welcome__icon">
@@ -53,8 +58,18 @@
               <CrmIcon name="iconicon_bot" width="18px" height="18px" color="var(--primary-8)" />
             </div>
             <div class="agent-message__body">
-              <div v-if="message.role === 'assistant'" class="agent-message__name">
-                {{ message.llmProviderLabel || selectedLlmProviderLabel }}
+              <div v-if="message.role === 'assistant'" class="agent-message__header">
+                <span class="agent-message__name">{{ message.llmProviderLabel || t('agent.modelUnrecorded') }}</span>
+                <button
+                  type="button"
+                  class="agent-message__sql"
+                  :disabled="!message.sqlQueries?.length"
+                  :aria-label="t('agent.viewSql')"
+                  :title="t(message.sqlQueries?.length ? 'agent.viewSql' : 'agent.noSql')"
+                  @click="openSql(message)"
+                >
+                  <CrmIcon name="iconicon_file-sql_colorful" width="20px" height="20px" />
+                </button>
               </div>
               <div v-if="message.attachments?.length" class="agent-message__attachments">
                 <div v-for="attachment in message.attachments" :key="`${message.id}-${attachment.name}`">
@@ -63,31 +78,56 @@
                 </div>
                 <small v-if="message.attachmentMode">{{ attachmentModeText(message.attachmentMode) }}</small>
               </div>
+              <AiAgentThinking v-if="message.role === 'assistant'" :content="message.reasoningContent" />
               <div class="agent-message__bubble">
                 <p>{{ message.content }}</p>
+                <AiAgentResult
+                  v-if="message.role === 'assistant'"
+                  :result="message"
+                  :busy="loading"
+                  @action="runResultAction(message, $event)"
+                  @ask="askQuestion($event, undefined, { datasourceId: message.datasourceId })"
+                  @continue="askQuestion('继续查看', String(message.id), { datasourceId: message.datasourceId })"
+                  @export="exportResult(message)"
+                />
 
-                <ul v-if="plainPoints(message.points).length" class="agent-message__points">
+                <ul v-if="!message.resultTable && plainPoints(message.points).length" class="agent-message__points">
                   <li v-for="point in plainPoints(message.points)" :key="point">{{ point }}</li>
                 </ul>
 
-                <div v-if="detailRows(message.points).length" class="agent-detail-table-wrap">
-                  <table class="agent-detail-table">
-                    <thead>
-                      <tr>
-                        <th v-for="column in detailColumns(message.points)" :key="column">{{ column }}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(row, rowIndex) in detailRows(message.points)" :key="row.title || rowIndex">
-                        <td v-for="column in detailColumns(message.points)" :key="column">
-                          {{ detailCell(row, column) }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+                <div v-if="!message.resultTable && visibleDetailRows(message).length" class="agent-detail-table-wrap">
+                  <div class="agent-detail-table-scroll" tabindex="0" aria-label="查询结果，可上下左右滚动">
+                    <table class="agent-detail-table">
+                      <thead>
+                        <tr>
+                          <th v-for="column in detailColumns(message)" :key="column">{{ column }}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(row, rowIndex) in visibleDetailRows(message)" :key="row.title || rowIndex">
+                          <td v-for="column in detailColumns(message)" :key="column">
+                            {{ detailCell(row, column) }}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-if="message.pageInfo" class="agent-page-info" role="status">
+                    {{ pageInfoText(message) }}
+                    <button
+                      v-if="message.pageInfo.continuable"
+                      type="button"
+                      class="agent-detail-table-toggle"
+                      :disabled="loading"
+                      @click="askQuestion('继续查看', String(message.id))"
+                    >
+                      继续查看
+                    </button>
+                  </div>
                 </div>
               </div>
 
+              <AiAgentChart v-if="message.charts?.length" :charts="message.charts" />
               <div v-if="message.evidence?.length" class="agent-evidence-list">
                 <button
                   v-for="item in message.evidence"
@@ -100,6 +140,7 @@
                   <span>{{ item.label }}</span>
                 </button>
               </div>
+              <AiAgentExecution v-if="message.role === 'assistant'" :result="message" :data-message-id="message.id" />
             </div>
           </article>
 
@@ -108,11 +149,9 @@
               <CrmIcon name="iconicon_bot" width="18px" height="18px" color="var(--primary-8)" />
             </div>
             <div class="agent-message__body">
-              <div class="agent-message__name">{{ selectedLlmProviderLabel }}</div>
-              <div class="agent-message__bubble agent-message__bubble--thinking">
-                <van-loading size="16" />
-                <span>{{ t('agent.thinking') }}</span>
-              </div>
+              <div class="agent-message__name">{{ activeLlmProviderLabel }}</div>
+              <AiAgentThinking :content="Object.values(streamReasoning).join('\n\n')" loading />
+              <p v-if="streamText" class="agent-stream-text">{{ streamText }}</p>
             </div>
           </article>
         </div>
@@ -239,6 +278,22 @@
       </div>
     </van-popup>
 
+    <van-popup v-model:show="showSql" position="bottom" closeable class="agent-sql-popup">
+      <h2 class="agent-sql-title">{{ t('agent.sqlTitle') }}</h2>
+      <div class="agent-sql-list">
+        <section v-for="(sql, index) in selectedSqlQueries" :key="index" class="agent-sql-query">
+          <div class="agent-sql-query__header">
+            <span>SQL{{ selectedSqlQueries.length > 1 ? ` ${index + 1}` : '' }}</span>
+            <button type="button" @click="copySql(sql)">
+              <van-icon name="description-o" />
+              <span>{{ t('agent.copySql') }}</span>
+            </button>
+          </div>
+          <pre class="agent-sql-code" tabindex="0"><AiAgentSqlCode :code="sql" /></pre>
+        </section>
+      </div>
+    </van-popup>
+
     <van-action-sheet
       v-model:show="showModelSheet"
       :title="t('agent.selectModel')"
@@ -260,29 +315,41 @@
 
 <script setup lang="ts">
   import { useRouter } from 'vue-router';
-  import { showConfirmDialog, showFailToast, showSuccessToast, showToast } from 'vant';
+  import { useClipboard, useStorage } from '@vueuse/core';
 
   import type {
+    AiAgentChatParams,
     AiAgentChatResult,
     AiAgentCitation,
     AiAgentMessageItem,
     AiAgentSessionItem,
   } from '@lib/shared/api/modules/aiAgent';
+  import AiAgentChart from '@lib/shared/components/ai-agent-chart.vue';
+  import AiAgentExecution from '@lib/shared/components/ai-agent-execution.vue';
+  import AiAgentResult from '@lib/shared/components/ai-agent-result.vue';
+  import AiAgentSqlCode from '@lib/shared/components/ai-agent-sql-code.vue';
+  import AiAgentThinking from '@lib/shared/components/ai-agent-thinking.vue';
   import { useI18n } from '@lib/shared/hooks/useI18n';
+  import getAiAgentModelLabel from '@lib/shared/utils/aiAgentModel';
+  import getAiAgentSqlQueries, { formatAiAgentSql } from '@lib/shared/utils/aiAgentSql';
+  import { updateAiAgentReasoning } from '@lib/shared/utils/aiAgentStream';
 
   import CrmIcon from '@/components/pure/crm-icon-font/index.vue';
   import CrmPageWrapper from '@/components/pure/crm-page-wrapper/index.vue';
 
   import {
     cancelAiAgentChat,
-    chatAiAgent,
     chatAiAgentWithAttachments,
     deleteAiAgentSession,
+    exportAiAgentResult,
     getAiAgentMessages,
     getAiAgentSessions,
+    streamAiAgent,
   } from '@/api/modules';
 
   import { AgentRouteEnum, CustomerRouteEnum, WorkbenchRouteEnum } from '@/enums/routeEnum';
+
+  import { showConfirmDialog, showFailToast, showSuccessToast, showToast } from 'vant';
 
   type MessageRole = 'assistant' | 'user';
   type AttachmentMode = 'CHAT' | 'KNOWLEDGE';
@@ -310,7 +377,23 @@
     id: number | string;
     role: MessageRole;
     content: string;
+    resultTable?: AiAgentChatResult['resultTable'];
+    predictionTable?: AiAgentChatResult['predictionTable'];
+    recommendedQuestions?: string[];
+    queryQuestion?: string;
+    queryError?: string;
+    modelCalls?: AiAgentChatResult['modelCalls'];
+    durationMs?: AiAgentChatResult['durationMs'];
+    totalTokens?: AiAgentChatResult['totalTokens'];
+    warnings?: string[];
     points?: string[];
+    pageInfo?: AiAgentChatResult['pageInfo'];
+    sqlQueries?: string[];
+    charts?: AiAgentChatResult['charts'];
+    reasoningContent?: string;
+    processSteps?: AiAgentChatResult['processSteps'];
+    datasourceId?: string;
+    datasourceType?: string;
     evidence?: EvidenceItem[];
     llmProviderLabel?: string;
     attachments?: AttachmentItem[];
@@ -334,37 +417,6 @@
   const MAX_ATTACHMENT_COUNT = 5;
   const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
   const allowedAttachmentTypes = new Set(['jpg', 'jpeg', 'png', 'webp', 'pdf', 'docx', 'xls', 'xlsx', 'txt']);
-  const knowledgeIntentPhrases = [
-    '加入知识库',
-    '添加到知识库',
-    '保存到知识库',
-    '存入知识库',
-    '放进知识库',
-    '上传到知识库',
-    '加入公司知识库',
-    '保存为公司知识',
-    '沉淀为知识',
-    '沉淀到知识库',
-  ];
-  const knowledgeQuestionPhrases = [
-    '是否加入知识库',
-    '适合加入知识库',
-    '能否加入知识库',
-    '能不能加入知识库',
-    '可以加入知识库吗',
-  ];
-  const knowledgeNegativePhrases = [
-    '不要加入知识库',
-    '不用加入知识库',
-    '别加入知识库',
-    '不要保存到知识库',
-    '仅当前聊天',
-    '只在当前聊天',
-  ];
-  const knowledgeNegativePattern = /(?:不|别|勿|无需|无须|暂不|禁止).{0,8}(?:知识库|公司知识)/;
-  const knowledgeQuestionPattern =
-    /(?:(?:是否|能否|可否|要不要|需不需要|该不该|能不能|可以不可以).{0,10}(?:知识库|公司知识)|(?:知识库|公司知识).{0,6}(?:吗|么|呢)[？?]?)/;
-  const knowledgeIntentPattern = /(?:加入|添加|保存|存入|存到|放进|放入|上传|沉淀).{0,16}(?:公司)?知识库(?:中|里|内)?/;
 
   defineOptions({
     name: AgentRouteEnum.AGENT_CHAT,
@@ -372,6 +424,9 @@
 
   const router = useRouter();
   const { t } = useI18n();
+  const { copy } = useClipboard({ legacy: true });
+  const showSql = ref(false);
+  const selectedSqlQueries = ref<string[]>([]);
   const messageScrollRef = ref<HTMLElement>();
   const attachmentInputRef = ref<HTMLInputElement>();
   const showHistory = ref(false);
@@ -383,14 +438,17 @@
   const questionInput = ref('');
   const timeRange = ref('30d');
   const selectedLlmProvider = ref('primary');
+  const activeLlmProviderLabel = ref('');
   const loading = ref(false);
+  const streamReasoning = ref<Record<string, string>>({});
+  const streamText = ref('');
+  const limitRows = useStorage('crm-ai-agent-limit-rows', true);
   let activeRequestController: AbortController | null = null;
   let activeRequestId: string | null = null;
 
   const llmProviderOptions = [
-    { label: 'GPT-5.6 Sol', value: 'primary' },
-    { label: 'qwen', value: 'qwen' },
-    { label: 'deepseek', value: 'deepseek' },
+    { label: 'GPT-6.1 Sol', value: 'primary' },
+    { label: 'DeepSeek-Flash', value: 'deepseek' },
   ];
 
   const timeRangeOptions = computed(() => [
@@ -459,9 +517,11 @@
     );
   });
 
-  const selectedAttachmentMode = computed<AttachmentMode>(() =>
-    isKnowledgeIntent(questionInput.value) ? 'KNOWLEDGE' : 'CHAT'
-  );
+  function attachmentModeText(_mode: AttachmentMode) {
+    return t('agent.attachmentMode.chat');
+  }
+
+  const selectedAttachmentMode = computed<AttachmentMode>(() => 'CHAT');
   const selectedAttachmentModeText = computed(() => attachmentModeText(selectedAttachmentMode.value));
 
   function selectLlmProvider(action: SheetAction) {
@@ -496,34 +556,6 @@
 
   function fileKey(file: File) {
     return `${file.name}-${file.size}-${file.lastModified}`;
-  }
-
-  function isKnowledgeIntent(question: string) {
-    const text = question.replace(/\s+/g, '');
-    const normalized = question.toLocaleLowerCase();
-    if (
-      knowledgeNegativePhrases.some((phrase) => text.includes(phrase)) ||
-      knowledgeNegativePattern.test(text) ||
-      /(?:do not|don't|dont|never).{0,20}(?:knowledge base|company knowledge)/i.test(normalized)
-    ) {
-      return false;
-    }
-    if (
-      knowledgeQuestionPhrases.some((phrase) => text.includes(phrase)) ||
-      knowledgeQuestionPattern.test(text) ||
-      /[?？]/.test(text)
-    ) {
-      return false;
-    }
-    return (
-      knowledgeIntentPhrases.some((phrase) => text.includes(phrase)) ||
-      knowledgeIntentPattern.test(text) ||
-      /(?:add|save|upload|store).{0,24}(?:knowledge base|company knowledge)/i.test(normalized)
-    );
-  }
-
-  function attachmentModeText(mode: AttachmentMode) {
-    return t(mode === 'KNOWLEDGE' ? 'agent.attachmentMode.knowledge' : 'agent.attachmentMode.chat');
   }
 
   function openAttachmentPicker() {
@@ -609,14 +641,35 @@
       .filter((row) => row.title || Object.keys(row.fields).length > 0);
   }
 
-  function detailColumns(points: string[] = []) {
-    const columns = [t('agent.sequence')];
-    detailRows(points).forEach((row) => {
-      Object.keys(row.fields).forEach((label) => {
-        if (!columns.includes(label)) columns.push(label);
-      });
-    });
-    return columns;
+  const detailTables = computed(
+    () =>
+      new Map(
+        currentSession.value.messages.map((message) => {
+          const rows = detailRows(message.points);
+          const columns = [...new Set([t('agent.sequence'), ...rows.flatMap((row) => Object.keys(row.fields))])];
+          return [message.id, { rows, columns }] as const;
+        })
+      )
+  );
+
+  function visibleDetailRows(message: MessageItem) {
+    return detailTables.value.get(message.id)?.rows || [];
+  }
+
+  function pageInfoText(message: MessageItem) {
+    const page = message.pageInfo;
+    if (!page) return '';
+    const visible = visibleDetailRows(message).length;
+    const total = page.total == null ? '总数尚未核实' : `符合条件共 ${page.total} ${page.unit}`;
+    let remaining = '剩余数量未知';
+    if (page.remaining != null) {
+      remaining = page.remaining > 0 ? `还有 ${page.remaining} ${page.unit}未获取` : '已获取全部结果';
+    }
+    return `${total}；本次已获取 ${page.returned} ${page.unit}，当前表格展示 ${visible} ${page.unit}；${remaining}。`;
+  }
+
+  function detailColumns(message: MessageItem) {
+    return detailTables.value.get(message.id)?.columns || [];
   }
 
   function detailCell(row: DetailTableRow, column: string) {
@@ -640,7 +693,7 @@
     const recordIds = citation?.recordIds?.filter(Boolean) || [];
     const isCustomer = source === 'customer' || citation?.module === 'customer';
     const query: Record<string, string> = { source: 'aiAgent', evidence: source };
-    if (recordIds.length === 1 && isCustomer) query.id = recordIds[0];
+    if (recordIds.length === 1 && isCustomer) [query.id] = recordIds;
     if (recordIds.length) query.recordIds = recordIds.join(',');
     return {
       key: source,
@@ -696,15 +749,53 @@
     );
   }
 
-  function toAssistantMessage(response: AiAgentChatResult, llmProviderLabel?: string): MessageItem {
+  function modelLabel(response?: Partial<AiAgentChatResult>) {
+    return (
+      getAiAgentModelLabel(response) ||
+      t(response?.llmProvider === 'none' ? 'agent.assistant' : 'agent.modelUnrecorded')
+    );
+  }
+
+  function toAssistantMessage(response: AiAgentChatResult): MessageItem {
     return {
       id: response.messageId || `${Date.now()}-assistant`,
       role: 'assistant',
       content: response.answer,
       points: buildAssistantPoints(response),
+      pageInfo: response.pageInfo,
+      sqlQueries: getAiAgentSqlQueries(response),
+      charts: response.charts,
+      resultTable: response.resultTable,
+      predictionTable: response.predictionTable,
+      recommendedQuestions: response.recommendedQuestions,
+      queryQuestion: response.queryQuestion,
+      queryError: response.queryError,
+      modelCalls: response.modelCalls,
+      durationMs: response.durationMs,
+      totalTokens: response.totalTokens,
+      warnings: response.warnings,
+      reasoningContent: response.reasoningContent,
+      processSteps: response.processSteps,
+      datasourceId: response.datasourceId,
+      datasourceType: response.datasourceType,
       evidence: buildAssistantEvidence(response),
-      llmProviderLabel,
+      llmProviderLabel: modelLabel(response),
     };
+  }
+
+  function openSql(message: MessageItem) {
+    if (!message.sqlQueries?.length) return;
+    selectedSqlQueries.value = message.sqlQueries.map((sql) => formatAiAgentSql(sql, message.datasourceType));
+    showSql.value = true;
+  }
+
+  async function copySql(sql: string) {
+    try {
+      await copy(sql);
+      showSuccessToast(t('agent.sqlCopied'));
+    } catch {
+      showFailToast(t('agent.sqlCopyFailed'));
+    }
   }
 
   function parseStoredAssistantResponse(evidenceJson?: string) {
@@ -761,7 +852,24 @@
       role: item.role,
       content: item.content || storedResponse?.answer || '',
       points: buildAssistantPoints(storedResponse),
+      pageInfo: storedResponse?.pageInfo,
+      sqlQueries: getAiAgentSqlQueries(storedResponse),
+      charts: storedResponse?.charts,
+      resultTable: storedResponse?.resultTable,
+      predictionTable: storedResponse?.predictionTable,
+      recommendedQuestions: storedResponse?.recommendedQuestions,
+      queryQuestion: storedResponse?.queryQuestion,
+      queryError: storedResponse?.queryError,
+      modelCalls: storedResponse?.modelCalls,
+      durationMs: storedResponse?.durationMs,
+      totalTokens: storedResponse?.totalTokens,
+      warnings: storedResponse?.warnings,
+      reasoningContent: storedResponse?.reasoningContent,
+      processSteps: storedResponse?.processSteps,
+      datasourceId: storedResponse?.datasourceId,
+      datasourceType: storedResponse?.datasourceType,
       evidence: buildAssistantEvidence(storedResponse),
+      llmProviderLabel: item.role === 'assistant' ? modelLabel(storedResponse) : undefined,
       attachments: attachmentSnapshot?.attachments,
       attachmentMode: attachmentSnapshot?.attachmentMode,
     };
@@ -842,22 +950,6 @@
     showHistory.value = false;
   }
 
-  async function confirmDeleteSession(session: ChatSession) {
-    if (loading.value && activeSessionId.value === session.id) {
-      showToast(t('agent.finishCurrentAnswer'));
-      return;
-    }
-    try {
-      await showConfirmDialog({
-        title: t('agent.deleteChat'),
-        message: t('agent.deleteChatConfirm', { title: session.title }),
-      });
-    } catch {
-      return;
-    }
-    await deleteSession(session.id);
-  }
-
   async function deleteSession(sessionId: string) {
     const index = sessions.value.findIndex((item) => item.id === sessionId);
     if (index < 0) return;
@@ -882,6 +974,22 @@
       await loadMessages(nextSession.id);
     }
     showSuccessToast(t('agent.deleted'));
+  }
+
+  async function confirmDeleteSession(session: ChatSession) {
+    if (loading.value && activeSessionId.value === session.id) {
+      showToast(t('agent.finishCurrentAnswer'));
+      return;
+    }
+    try {
+      await showConfirmDialog({
+        title: t('agent.deleteChat'),
+        message: t('agent.deleteChatConfirm', { title: session.title }),
+      });
+    } catch {
+      return;
+    }
+    await deleteSession(session.id);
   }
 
   function openEvidence(item: EvidenceItem) {
@@ -928,11 +1036,15 @@
     };
   }
 
-  async function askQuestion(question: string) {
+  async function askQuestion(
+    question: string,
+    continueFromMessageId?: string,
+    operation?: { action?: AiAgentChatParams['action']; referenceMessageId?: string; datasourceId?: string }
+  ) {
     const text = question.trim();
     if (!text || loading.value) return;
     const session = currentSession.value;
-    const attachmentFiles = [...selectedAttachmentFiles.value];
+    const attachmentFiles = continueFromMessageId || operation ? [] : [...selectedAttachmentFiles.value];
     const attachmentMode = selectedAttachmentMode.value;
     if (!session.messages.length) {
       session.title = text.length > 14 ? `${text.slice(0, 14)}...` : text;
@@ -950,22 +1062,29 @@
       })),
       attachmentMode: attachmentFiles.length ? attachmentMode : undefined,
     });
-    questionInput.value = '';
+    if (!continueFromMessageId) questionInput.value = '';
+    const llmProvider = selectedLlmProvider.value;
+    activeLlmProviderLabel.value = selectedLlmProviderLabel.value;
     loading.value = true;
+    streamReasoning.value = {};
+    streamText.value = '';
     await scrollToBottom();
 
     const requestController = new AbortController();
     const requestId = createChatRequestId();
     activeRequestController = requestController;
     activeRequestId = requestId;
-    const llmProvider = selectedLlmProvider.value;
-    const llmProviderLabel = selectedLlmProviderLabel.value;
     try {
       const request = {
         requestId,
         sessionId: isLocalSession(session.id) ? undefined : session.id,
+        continueFromMessageId,
+        action: operation?.action,
+        referenceMessageId: operation?.referenceMessageId,
+        datasourceId: operation?.datasourceId,
         question: text,
         stream: false,
+        limitRows: limitRows.value,
         timeRange: timeRange.value,
         dataScope: 'all',
         llmProvider,
@@ -973,12 +1092,20 @@
       };
       const response = attachmentFiles.length
         ? await chatAiAgentWithAttachments(request, attachmentFiles, requestController.signal)
-        : await chatAiAgent(request, requestController.signal);
+        : await streamAiAgent(
+            request,
+            (event) => {
+              streamReasoning.value = updateAiAgentReasoning(streamReasoning.value, event);
+              if (event.event === 'reset') streamText.value = '';
+              if (event.event === 'delta') streamText.value += event.data.text || '';
+            },
+            requestController.signal
+          );
       if (!response?.answer?.trim()) throw new Error('EMPTY_AGENT_RESPONSE');
       session.id = response.sessionId || session.id;
       activeSessionId.value = session.id;
-      session.messages.push(toAssistantMessage(response, llmProviderLabel));
-      clearSelectedAttachments();
+      session.messages.push(toAssistantMessage(response));
+      if (!continueFromMessageId) clearSelectedAttachments();
     } catch (error) {
       if (isCanceledRequest(error, requestController)) {
         showToast(t('agent.stopped'));
@@ -1001,8 +1128,38 @@
         activeRequestController = null;
         activeRequestId = null;
         loading.value = false;
+        streamReasoning.value = {};
+        streamText.value = '';
       }
       await scrollToBottom();
+    }
+  }
+
+  function runResultAction(message: MessageItem, action: AiAgentChatParams['action']) {
+    const labels: Record<string, string> = {
+      ANALYSIS: '分析查询结果',
+      PREDICT: '预测查询数据',
+      REGENERATE: '重新生成',
+    };
+    const title = labels[action || 'REGENERATE'] || '重新生成';
+    return askQuestion(title, undefined, {
+      action,
+      referenceMessageId: String(message.id),
+      datasourceId: message.datasourceId,
+    });
+  }
+  async function exportResult(message: MessageItem) {
+    try {
+      const blob = await exportAiAgentResult(currentSession.value.id, String(message.id), message.datasourceId);
+      if (!blob.type.includes('spreadsheetml')) throw new Error('导出失败');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = '查询结果.xlsx';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      showFailToast('导出失败，请检查权限或重新查询');
     }
   }
 
@@ -1022,6 +1179,12 @@
 </script>
 
 <style lang="less" scoped>
+  .agent-stream-text {
+    font-size: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 24px;
+  }
   :deep(.crm-page-content) {
     overflow: hidden !important;
   }
@@ -1042,6 +1205,15 @@
     background: var(--text-n10);
     grid-template-columns: auto minmax(0, 1fr) 40px;
     gap: 8px;
+    flex-shrink: 0;
+  }
+  .agent-row-limit {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--text-n8);
     flex-shrink: 0;
   }
   .agent-toolbar__button,
@@ -1180,6 +1352,84 @@
   .agent-message--user .agent-message__body {
     max-width: 86%;
   }
+  .agent-message--assistant .agent-message__body {
+    flex: 1;
+  }
+  .agent-message__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+    min-height: 32px;
+    gap: 8px;
+  }
+  .agent-message__header .agent-message__name {
+    margin-bottom: 0;
+  }
+  .agent-message__sql {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 36px;
+    height: 32px;
+    border: 1px solid var(--text-n8);
+    border-radius: 4px;
+    background: var(--text-n10);
+    flex-shrink: 0;
+  }
+  .agent-message__sql:disabled {
+    opacity: 0.35;
+  }
+  .agent-sql-popup {
+    padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+    max-height: 80dvh;
+    border-radius: 8px 8px 0 0;
+  }
+  .agent-sql-title {
+    margin: 0 32px 16px 0;
+    font-size: 16px;
+    line-height: 24px;
+  }
+  .agent-sql-list {
+    overflow: auto;
+    max-height: 60dvh;
+  }
+  .agent-sql-query + .agent-sql-query {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--text-n8);
+  }
+  .agent-sql-query__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: var(--text-n3);
+  }
+  .agent-sql-query__header button {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 8px;
+    border: 0;
+    color: var(--primary-8);
+    background: transparent;
+    gap: 4px;
+  }
+  .agent-sql-code {
+    overflow: auto;
+    margin: 0;
+    padding: 12px;
+    font-size: 12px;
+    font-family: Consolas, 'Courier New', monospace;
+    border: 1px solid var(--text-n8);
+    border-radius: 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-n1);
+    background: var(--text-n9);
+    line-height: 20px;
+  }
   .agent-message__name {
     margin-bottom: 5px;
     font-size: 12px;
@@ -1203,12 +1453,6 @@
   .agent-message__bubble p {
     margin: 0;
     white-space: pre-wrap;
-  }
-  .agent-message__bubble--thinking {
-    display: flex;
-    align-items: center;
-    color: var(--text-n3);
-    gap: 8px;
   }
   .agent-message__points {
     margin: 10px 0 0;
@@ -1268,12 +1512,30 @@
     color: var(--text-n4);
     background: var(--text-n9);
   }
+  .agent-page-info {
+    margin-top: 10px;
+    color: var(--text-n2);
+    line-height: 1.8;
+  }
   .agent-detail-table-wrap {
-    overflow-x: auto;
     margin-top: 10px;
     width: 100%;
+  }
+  .agent-detail-table-scroll {
+    overflow: auto;
+    width: 100%;
+    max-height: min(420px, 60vh);
     border: 1px solid var(--text-n8);
     border-radius: 5px;
+  }
+  .agent-detail-table-toggle {
+    display: block;
+    margin: 8px auto;
+    padding: 5px 14px;
+    border: 0;
+    border-radius: 4px;
+    color: var(--primary-8);
+    background: transparent;
   }
   .agent-detail-table {
     min-width: 420px;
@@ -1292,6 +1554,11 @@
   .agent-detail-table th {
     color: var(--text-n3);
     background: var(--text-n9);
+  }
+  .agent-detail-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
   .agent-attachment-tray {
     padding: 8px 12px 0;

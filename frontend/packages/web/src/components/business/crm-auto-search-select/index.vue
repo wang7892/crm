@@ -22,7 +22,7 @@
   import { useI18n } from '@lib/shared/hooks/useI18n';
   import type { CommonList, TableQueryParams } from '@lib/shared/models/common';
 
-  import { AutoCompleteOption } from 'naive-ui/es/auto-complete/src/interface';
+  import type { AutoCompleteOption } from 'naive-ui/es/auto-complete/src/interface';
 
   const { t } = useI18n();
 

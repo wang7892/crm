@@ -93,7 +93,7 @@ public class MlsAgentDataSyncService {
               full_name = VALUES(full_name),
               credit_limit = VALUES(credit_limit),
               customs_code = VALUES(customs_code),
-              region = VALUES(region),
+              region = COALESCE(NULLIF(VALUES(region), ''), region),
               phone = VALUES(phone),
               address = VALUES(address),
               email = VALUES(email),
@@ -371,6 +371,7 @@ public class MlsAgentDataSyncService {
             createRun(runId, orgId, trigger, result.getStartTime());
             OrganizationContext.setOrganizationId(orgId);
             try {
+                backfillCustomerRegions(orgId);
                 syncCustomers(orgId, runId, pageSize, result);
                 MirrorStageState contractStage = syncContracts(orgId, runId, pageSize, result);
                 MirrorStageState orderStage = syncOrders(orgId, runId, pageSize, result);
@@ -488,6 +489,38 @@ public class MlsAgentDataSyncService {
                 "客户阶段有 " + result.getCustomerFailed() + " 条失败记录，请查询 mls_sync_run_error");
     }
 
+    /** Fills legacy customers whose region was never populated during import. */
+    private void backfillCustomerRegions(String orgId) {
+        List<Map<String, Object>> rows = crmJdbcTemplate.queryForList("""
+                SELECT id, name, full_name, address
+                FROM customer
+                WHERE organization_id = :organizationId
+                  AND (region IS NULL OR TRIM(region) = '')
+                """, new MapSqlParameterSource().addValue("organizationId", orgId));
+        int updated = 0;
+        for (Map<String, Object> row : rows) {
+            String region = CustomerRegionExtractor.extract(
+                    text(row.get("name")), text(row.get("full_name")), text(row.get("address")));
+            if (StringUtils.isBlank(region)) {
+                continue;
+            }
+            updated += crmJdbcTemplate.update("""
+                    UPDATE customer
+                    SET region = :region, update_time = :updateTime
+                    WHERE id = :id AND organization_id = :organizationId
+                      AND (region IS NULL OR TRIM(region) = '')
+                    """, new MapSqlParameterSource()
+                    .addValue("region", region)
+                    .addValue("id", text(row.get("id")))
+                    .addValue("organizationId", orgId)
+                    .addValue("updateTime", System.currentTimeMillis()));
+        }
+        if (updated > 0) {
+            log.info("Backfilled customer regions from name/full_name/address, organizationId={}, updated={}",
+                    orgId, updated);
+        }
+    }
+
     private ProcessOutcome syncCustomerRow(String orgId, String runId, Map<String, Object> row,
                                             MappingRecord mapping, CustomerIndex customerIndex,
                                             boolean forceRewrite, boolean remapTarget, long syncTime) {
@@ -496,10 +529,14 @@ public class MlsAgentDataSyncService {
         if (StringUtils.isBlank(sourceId) || StringUtils.isBlank(name)) {
             throw new SyncRowException("INVALID_CUSTOMER", "customer_info.id/customer_name 为空");
         }
+        String detectedRegion = CustomerRegionExtractor.extract(name, text(row.get("customer_full_name")),
+                text(row.get("address")));
+        String sourceRegion = text(row.get("region"));
+        String resolvedRegion = StringUtils.isNotBlank(sourceRegion) ? sourceRegion : detectedRegion;
         String hash = hashValues(
                 name, text(row.get("customer_full_name")), row.get("credit_limit"), row.get("address"),
                 row.get("telephone"), row.get("email"), row.get("remark"), row.get("is_usable"),
-                row.get("customs_code"), row.get("region"), row.get("creator"), row.get("create_time"),
+                row.get("customs_code"), resolvedRegion, row.get("creator"), row.get("create_time"),
                 row.get("updater"), row.get("update_time"));
 
         String targetId = mapping == null || remapTarget ? null : mapping.targetId;
@@ -542,7 +579,7 @@ public class MlsAgentDataSyncService {
                 .addValue("fullName", text(row.get("customer_full_name")))
                 .addValue("creditLimit", text(row.get("credit_limit")))
                 .addValue("customsCode", text(row.get("customs_code")))
-                .addValue("region", text(row.get("region")))
+                .addValue("region", resolvedRegion)
                 .addValue("phone", text(row.get("telephone")))
                 .addValue("address", text(row.get("address")))
                 .addValue("remark", row.get("remark"))
@@ -782,9 +819,11 @@ public class MlsAgentDataSyncService {
         long stageStart = System.currentTimeMillis();
         updateStageStart(runId, "order", stageStart);
         MlsMirrorSyncProtection.SourceSnapshot startSnapshot = queryExternalSnapshot(SOURCE_ORDER);
-        long mappedCount = countMirrorMappings(orgId, SOURCE_ORDER, TABLE_ORDER);
-        if (!MlsMirrorSyncProtection.allowsMirrorPass(startSnapshot.rowCount(), mappedCount)) {
-            String warning = mirrorCountGuardMessage(SOURCE_ORDER, startSnapshot.rowCount(), mappedCount);
+        long baselineCount = loadOrderMirrorBaseline(orgId);
+        if (!MlsMirrorSyncProtection.allowsMirrorPass(startSnapshot.rowCount(), baselineCount)) {
+            String warning = SOURCE_ORDER + " mirror pass was blocked: external count=" + startSnapshot.rowCount()
+                    + ", baseline count=" + baselineCount
+                    + "; the source is empty or below the 90% deletion safety threshold";
             result.setMirrorProtectionTriggered(true);
             result.warning(warning);
             upsertCheckpoint(orgId, SOURCE_ORDER, null, Long.toString(startSnapshot.maxId()), runId,
@@ -862,9 +901,11 @@ public class MlsAgentDataSyncService {
         MlsMirrorSyncProtection.SourceSnapshot endSnapshot = queryExternalSnapshot(SOURCE_ORDER);
         boolean complete = MlsMirrorSyncProtection.isComplete(startSnapshot, endSnapshot,
                 result.getOrderRead(), result.getOrderFailed());
-        if (!startSnapshot.equals(endSnapshot)) {
+        if (!complete) {
             result.setMirrorProtectionTriggered(true);
-            result.warning("order_info changed while it was being read; order cleanup was blocked");
+            result.warning("order_info was not completely processed or its count/max id changed; order cleanup was blocked"
+                    + " (start=" + startSnapshot + ", end=" + endSnapshot
+                    + ", read=" + result.getOrderRead() + ", failed=" + result.getOrderFailed() + ")");
         }
         upsertCheckpoint(orgId, SOURCE_ORDER, null, Long.toString(lastId), runId,
                 complete ? STATUS_SUCCESS : STATUS_PARTIAL,
@@ -996,6 +1037,41 @@ public class MlsAgentDataSyncService {
                 .addValue("organizationId", orgId)
                 .addValue("sourceTable", sourceTable)
                 .addValue("targetTable", targetTable), Long.class);
+        return count == null ? 0 : count;
+    }
+
+    /** Staged/retained mappings must not inflate the source count or lower it after a failed retry. */
+    private long loadOrderMirrorBaseline(String orgId) {
+        List<Long> counts = crmJdbcTemplate.queryForList("""
+                SELECT run.order_read_count
+                FROM mls_sync_checkpoint checkpoint
+                JOIN mls_sync_run run
+                  ON run.run_id = checkpoint.last_success_run_id
+                 AND run.organization_id = checkpoint.organization_id
+                WHERE checkpoint.organization_id = :organizationId
+                  AND checkpoint.source_table = :sourceTable
+                  AND run.order_read_count > 0
+                  AND run.order_failed_count = 0
+                """, new MapSqlParameterSource()
+                .addValue("organizationId", orgId)
+                .addValue("sourceTable", SOURCE_ORDER), Long.class);
+        if (!counts.isEmpty()) {
+            return counts.getFirst();
+        }
+        // Compatibility with installations whose checkpoint has no usable successful run.
+        // Keep unconfirmed mappings in the baseline even if a previous attempt staged them.
+        Long count = crmJdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM mls_sync_mapping
+                WHERE organization_id = :organizationId
+                  AND source_table = :sourceTable
+                  AND target_table = :targetTable
+                  AND target_id IS NOT NULL
+                  AND missing_count = 0
+                """, new MapSqlParameterSource()
+                .addValue("organizationId", orgId)
+                .addValue("sourceTable", SOURCE_ORDER)
+                .addValue("targetTable", TABLE_ORDER), Long.class);
         return count == null ? 0 : count;
     }
 
@@ -1160,20 +1236,32 @@ public class MlsAgentDataSyncService {
             List<String> targetIds = rows.stream().map(row -> text(row.get("target_id")))
                     .filter(StringUtils::isNotBlank).distinct().toList();
             int removed = transactionTemplate.execute(status -> {
-                if (!targetIds.isEmpty()) {
-                    MapSqlParameterSource ids = new MapSqlParameterSource().addValue("ids", targetIds);
+                List<String> ownedTargetIds = targetIds.isEmpty() ? List.of() : crmJdbcTemplate.queryForList("""
+                        SELECT id FROM sales_order
+                        WHERE organization_id = :organizationId AND id IN (:ids)
+                        FOR UPDATE
+                        """, new MapSqlParameterSource().addValue("organizationId", orgId)
+                        .addValue("ids", targetIds), String.class);
+                if (!ownedTargetIds.isEmpty()) {
+                    MapSqlParameterSource ids = new MapSqlParameterSource().addValue("ids", ownedTargetIds);
                     crmJdbcTemplate.update("DELETE FROM sales_order_field WHERE resource_id IN (:ids)", ids);
                     crmJdbcTemplate.update("DELETE FROM sales_order_field_blob WHERE resource_id IN (:ids)", ids);
                     crmJdbcTemplate.update("DELETE FROM sales_order_snapshot WHERE order_id IN (:ids)", ids);
                 }
-                int targetCount = targetIds.isEmpty() ? 0 : crmJdbcTemplate.update("""
+                int targetCount = ownedTargetIds.isEmpty() ? 0 : crmJdbcTemplate.update("""
                         DELETE FROM sales_order
                         WHERE organization_id = :organizationId AND id IN (:ids)
                         """, new MapSqlParameterSource()
                         .addValue("organizationId", orgId)
-                        .addValue("ids", targetIds));
-                crmJdbcTemplate.update("DELETE FROM mls_sync_mapping WHERE id IN (:ids)",
-                        new MapSqlParameterSource().addValue("ids", mappingIds));
+                        .addValue("ids", ownedTargetIds));
+                crmJdbcTemplate.update("""
+                        DELETE FROM mls_sync_mapping
+                        WHERE organization_id = :organizationId AND source_table = :sourceTable
+                          AND target_table = :targetTable AND id IN (:ids)
+                        """, new MapSqlParameterSource().addValue("ids", mappingIds)
+                        .addValue("organizationId", orgId)
+                        .addValue("sourceTable", SOURCE_ORDER)
+                        .addValue("targetTable", TABLE_ORDER));
                 return targetCount;
             });
             deleted += removed;
@@ -1241,7 +1329,8 @@ public class MlsAgentDataSyncService {
                 .addValue("targetTable", targetTable)
                 .addValue("status", STATUS_STALE)
                 .addValue("requiredMissingPasses",
-                        MlsMirrorSyncProtection.REQUIRED_CONSECUTIVE_MISSING_PASSES)
+                        SOURCE_ORDER.equals(sourceTable) ? MlsMirrorSyncProtection.REQUIRED_ORDER_MISSING_PASSES
+                                : MlsMirrorSyncProtection.REQUIRED_CONSECUTIVE_MISSING_PASSES)
                 .addValue("limit", limit));
     }
 

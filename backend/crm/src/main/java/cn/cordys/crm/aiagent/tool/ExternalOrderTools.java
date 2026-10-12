@@ -2,7 +2,7 @@ package cn.cordys.crm.aiagent.tool;
 
 import cn.cordys.common.dto.DeptDataPermissionDTO;
 import cn.cordys.crm.aiagent.dto.AiAgentContext;
-import cn.cordys.crm.aiagent.dto.internal.AiAgentCustomerRow;
+import cn.cordys.crm.aiagent.dto.internal.AiAgentExternalOrderQuery;
 import cn.cordys.crm.aiagent.dto.internal.ExternalOrderQueryResult;
 import cn.cordys.crm.aiagent.dto.internal.ExternalOrderRow;
 import cn.cordys.crm.aiagent.mapper.AiAgentInternalMapper;
@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataAccessException;
 
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -33,124 +34,49 @@ public class ExternalOrderTools {
     @Qualifier("aiAgentExternalOrderJdbcTemplate")
     private NamedParameterJdbcTemplate jdbcTemplate;
     @Resource
-    private CustomerTools customerTools;
-    @Resource
     private AiAgentInternalMapper aiAgentInternalMapper;
 
     public ExternalOrderQueryResult findOrdersForSales(AiAgentContext context, String specialistName,
                                                        boolean activeOnly, int limit) {
-        List<AiAgentCustomerRow> customers = customerTools.findCustomersBySpecialist(context, specialistName, 200);
-        List<String> customerNames = customers.stream()
-                .map(AiAgentCustomerRow::getName)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .toList();
-        ExternalOrderQueryResult result = queryOrders(context, customerNames, specialistName, activeOnly, limit, null, null);
-        result.setSearchedCustomers(customerNames);
-        if (customerNames.isEmpty()) {
-            result.getWarnings().add("当前权限范围内未找到该销售专员负责的客户。");
-        }
-        return result;
+        return continueQuery(context, spec(specialistName, null, true, activeOnly, false, null, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findRecentOrdersForSales(AiAgentContext context, String specialistName, int limit) {
-        List<AiAgentCustomerRow> customers = customerTools.findCustomersBySpecialist(context, specialistName, 200);
-        List<String> customerNames = customers.stream()
-                .map(AiAgentCustomerRow::getName)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .toList();
-        ExternalOrderQueryResult result = queryOrders(context, customerNames, specialistName, false, limit,
-                context.getTimeWindow().startTime(), context.getTimeWindow().endTime());
-        result.setSearchedCustomers(customerNames);
-        if (customerNames.isEmpty()) {
-            result.getWarnings().add("当前权限范围内未找到该销售专员负责的客户。");
-        }
-        return result;
+        return continueQuery(context, spec(specialistName, null, true, false, true, null, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findOrdersForCustomer(AiAgentContext context, String customerName,
                                                           boolean activeOnly, int limit) {
-        List<AiAgentCustomerRow> customers = customerTools.searchCustomers(context, customerName, 10);
-        List<String> customerNames = customers.stream()
-                .map(AiAgentCustomerRow::getName)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .toList();
-        ExternalOrderQueryResult result = queryOrders(context, customerNames, null, activeOnly, limit, null, null);
-        result.setSearchedCustomers(customerNames);
-        return result;
+        return continueQuery(context, spec(null, customerName, true, activeOnly, false, null, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findRecentOrdersForCustomer(AiAgentContext context, String customerName, int limit) {
-        List<AiAgentCustomerRow> customers = customerTools.searchCustomers(context, customerName, 10);
-        List<String> customerNames = customers.stream()
-                .map(AiAgentCustomerRow::getName)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .toList();
-        ExternalOrderQueryResult result = queryOrders(context, customerNames, null, false, limit,
-                context.getTimeWindow().startTime(), context.getTimeWindow().endTime());
-        result.setSearchedCustomers(customerNames);
-        return result;
+        return continueQuery(context, spec(null, customerName, true, false, true, null, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findOrdersForVisibleCustomers(AiAgentContext context, boolean activeOnly, int limit) {
-        List<String> customerNames = customerTools.searchCustomers(context, "", 500)
-                .stream()
-                .map(AiAgentCustomerRow::getName)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .toList();
-        ExternalOrderQueryResult result = queryOrders(context, customerNames, null, activeOnly, limit, null, null);
-        result.setSearchedCustomers(customerNames);
-        if (customerNames.isEmpty()) {
-            result.getWarnings().add("当前权限范围内没有可用于匹配外部订单的客户。");
-        }
-        return result;
+        return continueQuery(context, spec(null, null, true, activeOnly, false, null, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findRecentOrdersForVisibleCustomers(AiAgentContext context, int limit) {
-        List<String> customerNames = customerTools.searchCustomers(context, "", 500)
-                .stream()
-                .map(AiAgentCustomerRow::getName)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .toList();
-        ExternalOrderQueryResult result = queryOrders(context, customerNames, null, false, limit,
-                context.getTimeWindow().startTime(), context.getTimeWindow().endTime());
-        result.setSearchedCustomers(customerNames);
-        if (customerNames.isEmpty()) {
-            result.getWarnings().add("当前权限范围内没有可用于匹配外部订单的客户。");
-        }
-        return result;
+        return continueQuery(context, spec(null, null, true, false, true, null, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findOrdersByOrderNo(AiAgentContext context, String orderNo, int limit) {
-        ExternalOrderQueryResult result = queryOrders(context, List.of(), null, false, limit,
-                null, null, orderNo, null);
-        result.setSearchedCustomers(List.of());
-        return result;
+        return continueQuery(context, spec(null, null, false, false, false, orderNo, null), limit, 0);
     }
 
     public ExternalOrderQueryResult findOrdersByProduct(AiAgentContext context, String productName, int limit) {
-        ExternalOrderQueryResult result = queryOrders(context, List.of(), null, false, limit,
-                null, null, null, productName);
-        result.setSearchedCustomers(List.of());
-        return result;
+        return continueQuery(context, spec(null, null, false, false, false, null, productName), limit, 0);
     }
 
-    private ExternalOrderQueryResult queryOrders(AiAgentContext context, List<String> customerNames, String managerName,
-                                                 boolean activeOnly, int limit, Long startTime, Long endTime) {
-        return queryOrders(context, customerNames, managerName, activeOnly, limit, startTime, endTime, null, null);
-    }
-
-    private ExternalOrderQueryResult queryOrders(AiAgentContext context, List<String> customerNames, String managerName,
-                                                 boolean activeOnly, int limit, Long startTime, Long endTime,
-                                                 String orderNoKeyword, String productKeyword) {
+    public ExternalOrderQueryResult continueQuery(AiAgentContext context, AiAgentExternalOrderQuery query,
+                                                  int limit, long offset) {
         ExternalOrderQueryResult result = new ExternalOrderQueryResult();
         result.setConfigured(jdbcTemplate != null);
-        result.setDateFilterAvailable(startTime != null && endTime != null);
+        result.setLimit(cn.cordys.crm.aiagent.service.AiAgentResultWindow.normalizeSize(limit, context == null || context.isLimitRows()));
+        result.setOffset(Math.max(0, offset));
+        result.setQuery(query);
         if (jdbcTemplate == null) {
             result.getWarnings().add("请配置 crm.ai-agent.external-order.* 后再查询外部订单表。");
             return result;
@@ -159,52 +85,77 @@ public class ExternalOrderTools {
             result.getWarnings().add("缺少智能体查询上下文，不能查询外部订单数据源。");
             return result;
         }
-        if ((customerNames == null || customerNames.isEmpty()) && StringUtils.isBlank(managerName)
-                && StringUtils.isBlank(orderNoKeyword) && StringUtils.isBlank(productKeyword)) {
-            return result;
-        }
         boolean restrictByManager = shouldRestrictByContractPermission(context);
         List<String> allowedManagerNames = restrictByManager ? resolveAllowedManagerNames(context) : List.of();
         if (restrictByManager && allowedManagerNames.isEmpty()) {
             result.getWarnings().add("No available contract managers in current data permission.");
             return result;
         }
-
+        List<String> customerNames = query.isVisibleCustomers()
+                ? aiAgentInternalMapper.findCustomerNamesForOrderQuery(context.getOrganizationId(), context.getUserId(),
+                query.getSpecialistName(), query.getCustomerKeyword(), context.getDataPermission()) : List.of();
+        result.setSearchedCustomers(customerNames);
+        if (query.isVisibleCustomers() && customerNames.isEmpty()) {
+            result.setTotalRows(0L);
+            return result;
+        }
+        result.setDateFilterAvailable(query.isRecent() && context.getTimeWindow() != null
+                && !"全部".equals(context.getTimeWindow().label()));
         MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("limit", Math.max(1, Math.min(limit, 1000)));
-        StringBuilder sql = new StringBuilder("""
-                SELECT *
-                FROM contract_info
-                WHERE 1 = 1
-                """);
-
+        params.addValue("limit", result.getLimit());
+        params.addValue("offset", result.getOffset());
+        StringBuilder sql = new StringBuilder("SELECT * FROM contract_info WHERE 1 = 1");
         appendCustomerFilter(sql, params, customerNames);
-        if (StringUtils.isNotBlank(managerName)) {
-            sql.append(" AND manager LIKE :managerName");
-            params.addValue("managerName", "%" + managerName.trim() + "%");
+        if (StringUtils.isNotBlank(query.getSpecialistName())) {
+            sql.append(" AND TRIM(manager) = :managerName");
+            params.addValue("managerName", query.getSpecialistName().trim());
         }
-        if (StringUtils.isNotBlank(orderNoKeyword)) {
+        if (StringUtils.isNotBlank(query.getOrderNo())) {
             sql.append(" AND order_no LIKE :orderNoKeyword");
-            params.addValue("orderNoKeyword", "%" + orderNoKeyword.trim() + "%");
+            params.addValue("orderNoKeyword", "%" + query.getOrderNo().trim() + "%");
         }
-        if (StringUtils.isNotBlank(productKeyword)) {
+        if (StringUtils.isNotBlank(query.getProductName())) {
             sql.append(" AND product_name LIKE :productKeyword");
-            params.addValue("productKeyword", "%" + productKeyword.trim() + "%");
+            params.addValue("productKeyword", "%" + query.getProductName().trim() + "%");
         }
         appendAllowedManagerFilter(sql, params, allowedManagerNames);
-        if (activeOnly) {
+        if (query.isActiveOnly()) {
             sql.append(" AND (order_status IS NULL OR order_status NOT IN (:closedStatuses))");
             params.addValue("closedStatuses", CLOSED_STATUSES);
         }
         if (result.isDateFilterAvailable()) {
             sql.append(" AND create_time >= :startTime AND create_time < :endTime");
-            params.addValue("startTime", new Timestamp(startTime));
-            params.addValue("endTime", new Timestamp(endTime));
+            params.addValue("startTime", new Timestamp(context.getTimeWindow().startTime()));
+            params.addValue("endTime", new Timestamp(context.getTimeWindow().endTime()));
         }
-        sql.append(" ORDER BY id DESC LIMIT :limit");
-
+        String countSql = "SELECT COUNT(*) FROM (" + sql + ") agent_order_count";
+        sql.append(" ORDER BY id DESC");
+        if (result.getLimit() > 0) sql.append(" LIMIT :limit OFFSET :offset");
         result.setRows(jdbcTemplate.query(sql.toString(), params, this::mapOrderRow));
+        try {
+            Long total = jdbcTemplate.queryForObject(countSql, params, Long.class);
+            if (total != null && total >= 0 && (result.getRows().isEmpty() || total >= offset + result.getRows().size())) {
+                result.setTotalRows(total);
+            } else {
+                result.setTotalWarning("总数尚未核实，不能将本次返回条数视为总数。");
+            }
+        } catch (DataAccessException e) {
+            result.setTotalWarning("总数统计失败，当前仅展示已取得的记录，无法确认剩余数量。");
+        }
         return result;
+    }
+
+    private AiAgentExternalOrderQuery spec(String specialist, String customer, boolean visible, boolean active,
+                                           boolean recent, String orderNo, String product) {
+        var query = new AiAgentExternalOrderQuery();
+        query.setSpecialistName(specialist);
+        query.setCustomerKeyword(customer);
+        query.setVisibleCustomers(visible);
+        query.setActiveOnly(active);
+        query.setRecent(recent);
+        query.setOrderNo(orderNo);
+        query.setProductName(product);
+        return query;
     }
 
     private boolean shouldRestrictByContractPermission(AiAgentContext context) {

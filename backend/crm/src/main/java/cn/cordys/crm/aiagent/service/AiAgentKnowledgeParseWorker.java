@@ -58,11 +58,17 @@ public class AiAgentKnowledgeParseWorker {
             if (claimed == null) {
                 return;
             }
-            AiAgentKnowledgeService.PreparedParse prepared = knowledgeService.prepareParse(
+            AiAgentKnowledgeService.PreparedParse prepared = claimed.version() == null
+                    ? knowledgeService.prepareParse(
                     claimed.document(),
                     claimed.job().getOrganizationId(),
+                    StringUtils.defaultIfBlank(claimed.job().getUpdateUser(), claimed.job().getCreateUser()))
+                    : knowledgeService.prepareParse(
+                    claimed.document(),
+                    claimed.version(),
+                    claimed.job().getOrganizationId(),
                     StringUtils.defaultIfBlank(claimed.job().getUpdateUser(), claimed.job().getCreateUser()));
-            persistenceService.completeAndActivate(jobId, prepared.chunks());
+            persistenceService.completeAndActivate(jobId, prepared);
         } catch (Exception e) {
             log.warn("知识文档解析失败，任务将按重试策略处理: jobId={}, message={}", jobId, e.getMessage());
             try {

@@ -17,6 +17,9 @@ public class ParsedAiAgentQuestion {
     private Boolean activeOnly;
     private boolean sqlRequired;
     private String candidateSql;
+    private String queryExplanation;
+    private String chartType;
+    private String brief;
     private boolean needClarification;
     private String clarificationQuestion;
     private AiAgentQueryPlan queryPlan;

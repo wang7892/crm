@@ -14,8 +14,7 @@ import java.util.Locale;
 @Service
 public class AiAgentQueryPlanner {
 
-    private static final int DEFAULT_LIMIT = 20;
-    private static final int MAX_LIMIT = 1000;
+    private static final int DEFAULT_LIMIT = AiAgentResultWindow.DEFAULT_SIZE;
 
     private final AiAgentSemanticSchemaService schemaService;
 
@@ -41,13 +40,37 @@ public class AiAgentQueryPlanner {
         normalized.setEntity(entity.name());
         normalized.setQueryType(queryType);
         normalized.setLimit(clampLimit(queryPlan.getLimit()));
+        normalized.setOffset(Math.max(0L, queryPlan.getOffset() == null ? 0L : queryPlan.getOffset()));
         normalized.setNeedClarification(Boolean.TRUE.equals(queryPlan.getNeedClarification()));
         normalized.setClarificationQuestion(StringUtils.trimToNull(queryPlan.getClarificationQuestion()));
         normalized.setSelectFields(normalizeSelectFields(queryPlan, entity, queryType));
         normalized.setFilters(normalizeFilters(queryPlan.getFilters(), entity));
         normalized.setMetrics(normalizeMetrics(queryPlan.getMetrics(), entity, queryType));
         normalized.setGroupBy(normalizeGroupBy(queryPlan.getGroupBy(), entity));
-        normalized.setOrderBy(normalizeOrderBy(queryPlan.getOrderBy(), entity, queryType));
+        for (AiAgentQueryMetric metric : normalized.getMetrics()) {
+            if (!List.of("sum", "avg").contains(metric.getFunction())) {
+                continue;
+            }
+            String dimension = metric.getField().equals("amount") ? "currency"
+                    : List.of("quantity", "total_quantity").contains(metric.getField()) ? "unit" : null;
+            if (dimension != null && entity.findField(dimension).isPresent()
+                    && !normalized.getGroupBy().contains(dimension)) {
+                normalized.getGroupBy().add(dimension);
+            }
+        }
+        normalized.setOrderBy(normalizeOrderBy(queryPlan.getOrderBy(), entity, normalized));
+        if (queryPlan.getTopN() != null) {
+            if (queryPlan.getTopN() < 1 || queryPlan.getTopN() > 10000 || normalized.getGroupBy().isEmpty()
+                    || normalized.getOrderBy().isEmpty() || "LIST".equals(queryType)
+                    || normalized.getMetrics().stream().noneMatch(metric -> metric.getAlias().equals(normalized.getOrderBy().getFirst().getField()))) {
+                throw new IllegalArgumentException("前 N 名需要有效的分组及统计指标排序，N 范围为 1—10000");
+            }
+            normalized.setTopN(queryPlan.getTopN());
+        }
+        if (!"LIST".equals(queryType) && !normalized.getOrderBy().isEmpty()) {
+            normalized.setRankPartitions(normalized.getGroupBy().stream()
+                    .filter(field -> List.of("currency", "unit", "order_month").contains(field)).toList());
+        }
 
         return new PlannedQuery(entity, normalized);
     }
@@ -84,7 +107,7 @@ public class AiAgentQueryPlanner {
         }
         for (AiAgentQueryFilter filter : filters) {
             if (filter == null || StringUtils.isBlank(filter.getField())) {
-                continue;
+                throw new IllegalArgumentException("过滤条件缺少字段，不能忽略用户条件");
             }
             AiAgentSemanticSchemaService.FieldSpec field = resolveField(entity, filter.getField());
             if (!field.filterable()) {
@@ -96,6 +119,11 @@ public class AiAgentQueryPlanner {
             }
             if (!schemaService.isOperatorAllowed(operator)) {
                 throw new IllegalArgumentException("不支持过滤操作符：" + filter.getOperator());
+            }
+            if (!List.of("is_null", "not_null").contains(operator)
+                    && (filter.getValue() == null || filter.getValue() instanceof String text && StringUtils.isBlank(text)
+                    || filter.getValue() instanceof java.util.Collection<?> values && values.isEmpty())) {
+                throw new IllegalArgumentException("过滤条件缺少有效值：" + field.key());
             }
             AiAgentQueryFilter normalized = new AiAgentQueryFilter();
             normalized.setField(field.key());
@@ -126,12 +154,16 @@ public class AiAgentQueryPlanner {
                 continue;
             }
             String function = normalize(metric.getFunction());
-            if (!List.of("count", "sum", "avg", "max", "min").contains(function)) {
+            if (!List.of("count", "count_distinct", "sum", "avg", "max", "min").contains(function)) {
                 throw new IllegalArgumentException("不支持聚合函数：" + metric.getFunction());
             }
             AiAgentSemanticSchemaService.FieldSpec field = resolveField(entity, StringUtils.defaultIfBlank(metric.getField(), "id"));
-            if (!StringUtils.equals(function, "count") && !field.aggregatable()) {
+            if (!List.of("count", "count_distinct").contains(function) && !field.aggregatable()) {
                 throw new IllegalArgumentException("字段不允许聚合：" + metric.getField());
+            }
+            if (List.of("sum", "avg").contains(function)
+                    && field.valueKind() != AiAgentSemanticSchemaService.ValueKind.NUMBER) {
+                throw new IllegalArgumentException("只有数值字段可以求和或求平均：" + field.key());
             }
             AiAgentQueryMetric normalized = new AiAgentQueryMetric();
             normalized.setFunction(function);
@@ -151,7 +183,13 @@ public class AiAgentQueryPlanner {
             if (StringUtils.isBlank(fieldName)) {
                 continue;
             }
-            AiAgentSemanticSchemaService.FieldSpec field = resolveField(entity, fieldName);
+            // The model commonly represents “按月汇总订单” as groupBy=order_time.
+            // order_time is an epoch timestamp and must not be grouped by its raw
+            // value; normalize that request to the controlled month bucket.
+            String normalizedFieldName = StringUtils.equalsIgnoreCase(entity.name(), "sales_order")
+                    && StringUtils.equalsIgnoreCase(fieldName, "order_time")
+                    ? "order_month" : fieldName;
+            AiAgentSemanticSchemaService.FieldSpec field = resolveField(entity, normalizedFieldName);
             if (!field.aggregatable()) {
                 throw new IllegalArgumentException("字段不允许分组统计：" + fieldName);
             }
@@ -164,21 +202,31 @@ public class AiAgentQueryPlanner {
 
     private List<AiAgentQueryOrder> normalizeOrderBy(List<AiAgentQueryOrder> orderBy,
                                                      AiAgentSemanticSchemaService.EntitySpec entity,
-                                                     String queryType) {
+                                                     AiAgentQueryPlan plan) {
         List<AiAgentQueryOrder> result = new ArrayList<>();
-        if (orderBy == null || !StringUtils.equals(queryType, "LIST")) {
+        if (orderBy == null) {
             return result;
         }
         for (AiAgentQueryOrder order : orderBy) {
             if (order == null || StringUtils.isBlank(order.getField())) {
                 continue;
             }
-            AiAgentSemanticSchemaService.FieldSpec field = resolveField(entity, order.getField());
-            if (!field.sortable()) {
-                throw new IllegalArgumentException("字段不允许排序：" + order.getField());
-            }
             AiAgentQueryOrder normalized = new AiAgentQueryOrder();
-            normalized.setField(field.key());
+            if (!"LIST".equals(plan.getQueryType())) {
+                var matches = plan.getMetrics().stream().filter(metric -> metric.getAlias().equals(order.getField())
+                        || metric.getField().equals(order.getField())).toList();
+                if (matches.size() == 1) normalized.setField(matches.getFirst().getAlias());
+                else if (matches.size() > 1) throw new IllegalArgumentException("排序指标不唯一，请使用明确的统计指标别名");
+                else {
+                    var field = resolveField(entity, order.getField());
+                    if (!plan.getGroupBy().contains(field.key())) throw new IllegalArgumentException("汇总结果只能按统计指标或分组字段排序");
+                    normalized.setField(field.key());
+                }
+            } else {
+                AiAgentSemanticSchemaService.FieldSpec field = resolveField(entity, order.getField());
+                if (!field.sortable()) throw new IllegalArgumentException("字段不允许排序：" + order.getField());
+                normalized.setField(field.key());
+            }
             normalized.setDirection(StringUtils.equalsIgnoreCase(order.getDirection(), "asc") ? "asc" : "desc");
             result.add(normalized);
         }
@@ -191,10 +239,10 @@ public class AiAgentQueryPlanner {
     }
 
     private int clampLimit(Integer limit) {
-        if (limit == null || limit <= 0) {
+        if (limit == null || limit < 0) {
             return DEFAULT_LIMIT;
         }
-        return Math.min(limit, MAX_LIMIT);
+        return limit;
     }
 
     private String normalize(String value) {

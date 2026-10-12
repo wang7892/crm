@@ -69,6 +69,22 @@ public class AiAgentSemanticSchemaService {
     public String schemaPrompt() {
         StringBuilder builder = new StringBuilder();
         builder.append("可查询实体和字段如下。只能使用这些 entity、field、operator，不要输出 SQL。\n");
+        builder.append("""
+                基础业务定义（所有问题均适用）：
+                - 销售额、销售金额、销售总额统一按外部 contract_info.amount 求和，按 release_date 筛选日期；不得改用 sales_order 加工金额。按 currency 分组，各币种分别排名。
+                - 排名前 N 名必须用 AGGREGATE，按目标（客户/人员/产品）分组、按统计指标别名排序并设置 topN=N；不是普通列表的 limit=N。没有要求前 N 名时按每页 200 条展示。
+                - 订单的理单员就是联系专员，源字段为 contract_info.manager；CRM contract.owner、sales_order.owner 是同步后的 ID/名称。跟单员 merchandiser 是另一种角色。
+                - sales_order 是加工明细粒度，同一 order_no 可以有多行。订单数量使用 count_distinct(order_no)，明细数量使用 count(id)。不得把 LIMIT 返回行数称为总数。
+                - 客户采购的品种和数量以 contract_info 为准：品种是 product_name，采购数量是 total_quantity，按 product_name、unit 分组求和；不能用加工明细的 material_name、quantity 替代合同采购口径。
+                - 客户采购的时间范围默认按 contract_info.release_date（合同下单日期）筛选；用户已明确按下单日期时也使用此字段。合同表已包含日期、产品、数量和单位，无需关联 order_timeline，不要因这些字段请求澄清。
+                - order_timeline 通过 order_no 关联合同，可同时使用时间轴字段和 manager/customer。它的关联行数不保证就是订单数。
+                - warehouse_actual_ship_date 是实际发货记录；order_status/status 是业务流程状态，approval_status 是审批状态，三者不能互相替代。
+                - 发货日期为空只能证明未记录实际发货日期；不能区分漏录、未同步和实际未发货，也不能用单个日期判断部分发货或全部发完。
+                - 本月下单用 order_time/release_date，本月应交用 delivery_date，本月已发货用 warehouse_actual_ship_date。只说本月未发货时默认按下单日期，并在结果中说明口径。
+                - create_time/created_at 是数据创建时间，不自动等于业务下单时间。日期范围统一 Asia/Shanghai，时间窗口左闭右开。
+                - 金额统计必须按 currency 分组，数量统计必须按 unit 分组，禁止直接把不同币种/单位相加。
+                - 没有订单/没有合同/没有跟进等排除问题不能用一张明细表的普通正向筛选代替；当前计划无法表达完整条件时请求澄清或说明能力缺失。
+                """);
         for (EntitySpec entity : entities.values()) {
             builder.append("- ")
                     .append(entity.name())
@@ -83,6 +99,10 @@ public class AiAgentSemanticSchemaService {
                 if (!field.aliases().isEmpty()) {
                     builder.append("，别名：").append(String.join("、", field.aliases()));
                 }
+                if (StringUtils.isNotBlank(field.description())) {
+                    builder.append("，业务定义：").append(field.description());
+                }
+                builder.append("，值类型：").append(field.valueKind());
                 List<String> capabilities = new ArrayList<>();
                 if (field.selectable()) {
                     capabilities.add("可展示");
@@ -111,6 +131,29 @@ public class AiAgentSemanticSchemaService {
         return builder.toString();
     }
 
+    public String sqlSchemaPrompt() {
+        return sqlSchemaPrompt(Set.of());
+    }
+
+    public String sqlSchemaPrompt(Set<String> selected) {
+        StringBuilder builder = new StringBuilder("以下是后端提供的逻辑业务表，不是原始物理表。SQL 只能使用这些表名和可查询列。\n");
+        for (EntitySpec entity : entities.values()) {
+            if (!selected.isEmpty() && !selected.contains(entity.name())) continue;
+            builder.append("TABLE ").append(entity.name()).append(" [").append(entity.dataSourceKind())
+                    .append("] ").append(entity.label()).append("\n");
+            for (FieldSpec field : entity.fields().values()) {
+                if (!field.selectable()) continue;
+                builder.append("  ").append(field.key()).append(" ").append(field.valueKind())
+                        .append("：").append(field.label());
+                if (!field.aliases().isEmpty()) builder.append("，别名：").append(String.join("、", field.aliases()));
+                if (StringUtils.isNotBlank(field.description())) builder.append("，业务定义：").append(field.description());
+                if (field.sensitive()) builder.append("，仅提供脱敏值");
+                builder.append("\n");
+            }
+        }
+        return builder.toString();
+    }
+
     private Map<String, EntitySpec> buildEntities() {
         Map<String, EntitySpec> map = new LinkedHashMap<>();
         register(map, customerEntity());
@@ -125,6 +168,7 @@ public class AiAgentSemanticSchemaService {
         register(map, emailEventEntity());
         register(map, emailAttachmentEntity());
         register(map, externalContractInfoEntity());
+        register(map, externalOrderTimelineEntity());
         return Collections.unmodifiableMap(map);
     }
 
@@ -160,6 +204,8 @@ public class AiAgentSemanticSchemaService {
                         field("address", "地址", "c.address"),
                         field("remark", "备注", "c.remark"),
                         field("follow_time", "最近跟进时间", "c.follow_time", "上次跟进时间").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
+                        field("follow_time_or_zero", "最近跟进时间（含未记录）", "COALESCE(c.follow_time, 0)")
+                                .selectable(false).valueKind(ValueKind.EPOCH_MILLIS),
                         field("create_time", "创建时间", "c.create_time", "新增时间").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
                         field("update_time", "更新时间", "c.update_time").sortable(true).valueKind(ValueKind.EPOCH_MILLIS)
                 ));
@@ -200,7 +246,7 @@ public class AiAgentSemanticSchemaService {
                         field("customer_id", "客户ID", "ct.customer_id"),
                         field("customer_name", "客户名称", "c.name", "客户").aggregatable(true),
                         field("owner", "负责人ID", "ct.owner"),
-                        field("owner_name", "负责人", "owner_user.name", "销售").aggregatable(true),
+                        field("owner_name", "联系专员/理单员", "owner_user.name", "销售", "负责人", "理单员", "联系专员").aggregatable(true),
                         field("amount", "金额", "ct.amount", "合同金额", "订单金额").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
                         field("approval_status", "审核状态", "ct.approval_status", "审批状态", "合同状态").aggregatable(true),
                         field("start_time", "合同开始时间", "ct.start_time").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
@@ -236,11 +282,12 @@ public class AiAgentSemanticSchemaService {
                         field("contract_name", "合同名称", "ct.name", "合同").aggregatable(true),
                         field("contract_number", "合同编号", "ct.number", "合同订单号"),
                         field("owner", "联系专员ID/名称", "so.owner", "负责人ID", "销售ID"),
-                        field("owner_name", "联系专员", "COALESCE(owner_user.name, so.owner)", "负责人", "销售", "负责专员")
+                        field("owner_name", "联系专员", "COALESCE(owner_user.name, so.owner)", "负责人", "销售", "负责专员", "理单员", "manager")
+                                .description("来自同步合同的理单员；ID/姓名映射异常时不能认定人员相同。")
                                 .sortable(true).aggregatable(true),
                         field("process_order_no", "加工单号", "so.process_order_no", "生产单号").sortable(true),
                         field("processor", "加工商", "so.processor").aggregatable(true),
-                        field("merchandiser", "跟单员", "so.merchandiser").aggregatable(true),
+                        field("merchandiser", "跟单员", "so.merchandiser").description("加工跟单人员，不等于理单员/联系专员。显式询问跟单员时才按此字段过滤。").aggregatable(true),
                         field("status", "订单状态", "so.status", "状态", "order_info状态").aggregatable(true),
                         field("color", "颜色", "so.color").aggregatable(true),
                         field("color_code", "色号", "so.color_code", "颜色编号").aggregatable(true),
@@ -249,6 +296,12 @@ public class AiAgentSemanticSchemaService {
                         field("material_type", "原料类型", "so.material_type", "纱线类型").aggregatable(true),
                         field("process_technology", "加工工艺", "so.process_technology", "工艺").aggregatable(true),
                         field("order_time", "下单时间", "so.order_time", "订单时间").sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
+                        field("order_month", "下单月份",
+                                "DATE_FORMAT(FROM_UNIXTIME(so.order_time / 1000), '%Y-%m')", "月份", "按月")
+                                .filterable(false).sortable(true).aggregatable(true),
+                        field("warehouse_actual_ship_date", "仓库实际发货日", "so.warehouse_actual_ship_date", "实际发货日期")
+                                .description("从外部时间轴同步的日期；空值表示未记录，不能证明实际未发货。")
+                                .sortable(true).valueKind(ValueKind.EPOCH_MILLIS),
                         field("quantity", "数量", "so.quantity").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
                         field("unit", "单位", "so.unit").aggregatable(true),
                         field("unit_price", "单价", "so.unit_price").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
@@ -394,19 +447,117 @@ public class AiAgentSemanticSchemaService {
                 List.of(
                         field("id", "ID", "ci.id").sortable(true),
                         field("order_no", "订单号", "ci.order_no", "MLS编号", "编号").sortable(true),
-                        field("product_name", "产品名称", "ci.product_name", "品名").aggregatable(true),
+                        field("product_name", "产品名称", "ci.product_name", "品名", "品种", "产品品种")
+                                .description("合同采购的产品品种；按品种汇总时使用此字段分组，不是加工明细原料名称。")
+                                .aggregatable(true),
                         field("total_quantity", "总数量", "ci.total_quantity", "数量", "采购数量")
+                                .description("合同采购数量；按产品和单位求和，不是订单笔数，不同单位分别统计。")
                                 .sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
                         field("unit", "单位", "ci.unit").aggregatable(true),
-                        field("manager", "负责人", "ci.manager", "销售").aggregatable(true),
-                        field("customer", "客户名称", "ci.customer", "客户").aggregatable(true),
+                        field("manager", "联系专员/理单员", "TRIM(ci.manager)", "负责人", "销售", "理单员", "联系专员", "owner_name")
+                                .description("合同订单的理单员，也是 CRM 联系专员；指定姓名默认精确匹配，不是跟单员。")
+                                .aggregatable(true),
+                        field("customer", "客户名称", "ci.customer", "客户", "customer_name").aggregatable(true),
                         field("order_status", "订单状态", "ci.order_status", "状态").aggregatable(true),
                         field("composition", "成分", "ci.composition"),
                         field("amount", "金额", "ci.amount", "订单金额").sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
                         field("currency", "币种", "ci.currency").aggregatable(true),
+                        field("release_date", "下单日期", "ci.release_date", "下单时间", "order_time")
+                                .description("客户采购统计的业务下单日期；时间范围默认使用此字段，空值不自动回退到创建时间或时间轴日期。")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("order_month", "下单月份", "DATE_FORMAT(ci.release_date, '%Y-%m')", "月份", "按月")
+                                .filterable(false).sortable(true).aggregatable(true),
                         field("delivery_date", "交期", "ci.delivery_date", "交货日期").sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
-                        field("create_time", "创建时间", "ci.create_time", "下单时间").sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("create_time", "创建时间", "ci.create_time").description("记录创建时间，不自动视为业务下单时间。").sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
                         field("update_time", "更新时间", "ci.update_time").sortable(true).valueKind(ValueKind.SQL_TIMESTAMP)
+                ));
+    }
+
+    private EntitySpec externalOrderTimelineEntity() {
+        return entity("order_timeline", "外部订单时间轴", "mls_agent_data.order_timeline",
+                DataSourceKind.EXTERNAL_CONTRACT, PermissionKind.EXTERNAL_CONTRACT,
+                """
+                        order_timeline ot
+                        JOIN contract_info ci ON ci.order_no = ot.order_no
+                        """,
+                List.of("order_no", "manager", "customer", "release_date", "delivery_date", "production_actual_delivery",
+                        "warehouse_actual_ship_date", "arrival_date", "actual_receipt_date", "stock_qty", "stock_age"),
+                List.of(
+                        field("id", "主键ID", "ot.id").sortable(true),
+                        field("order_no", "订单号", "ot.order_no", "订单编号", "MLS编号").sortable(true),
+                        field("manager", "联系专员/理单员", "TRIM(ci.manager)", "理单员", "联系专员", "负责人", "销售", "owner_name")
+                                .description("由 order_no 关联的合同理单员；人员权限过滤之外，仍须应用用户指定的姓名条件。")
+                                .aggregatable(true),
+                        field("customer", "客户名称", "ci.customer", "客户", "customer_name").aggregatable(true),
+                        field("product_name", "产品名称", "ci.product_name", "品名").aggregatable(true),
+                        field("order_status", "订单流程状态", "ci.order_status", "订单状态")
+                                .description("合同订单流程状态，不能替代实际发货日期。").aggregatable(true),
+                        field("release_date", "下单日期", "ot.release_date", "下单时间")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("has_deposit", "是否有定金", "ot.has_deposit", "定金状态").aggregatable(true),
+                        field("deposit_date", "定金日期", "ot.deposit_date").sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("delivery_date", "交货日期", "ot.delivery_date", "交期")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("color_card_so_date", "给色卡SO日期", "ot.color_card_so_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("color_card_so_complete_date", "色卡SO完成日期", "ot.color_card_so_complete_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("draft_receive_date", "描稿收到日期", "ot.draft_receive_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("customer_confirm_cad_date", "客户确认CAD日期", "ot.customer_confirm_cad_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("cad_complete_date", "CAD完成日期", "ot.cad_complete_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("customer_confirm_date", "客户确认日期", "ot.customer_confirm_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("color_card_so_check_date", "色卡SO考核日期", "ot.color_card_so_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("draft_receive_check_date", "描稿收到考核日期", "ot.draft_receive_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("customer_confirm_cad_check_date", "客户确认CAD考核日期", "ot.customer_confirm_cad_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("cad_check_date", "CAD考核日", "ot.cad_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("customer_confirm_check_date", "客户确认考核日", "ot.customer_confirm_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("actual_production_date", "实际排生产日期", "ot.actual_production_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("production_actual_delivery", "生产实际交期", "ot.production_actual_delivery")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("production_check_date", "下生产考核日", "ot.production_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("production_delivery_check_date", "生产交期考核日", "ot.production_delivery_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("warehouse_roll_start", "仓库打卷开始", "ot.warehouse_roll_start")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("warehouse_roll_complete", "仓库打卷完成", "ot.warehouse_roll_complete")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("has_packaging_order", "给仓库包装单", "ot.has_packaging_order", "是否给仓库包装单")
+                                .aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("packaging_order_check_date", "包装单考核日期", "ot.packaging_order_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("rolling_check_date", "打卷考核日", "ot.rolling_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("warehouse_actual_ship_date", "仓库实际发货日", "ot.warehouse_actual_ship_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("warehouse_ship_check_date", "仓库发货考核日期", "ot.warehouse_ship_check_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("arrival_date", "到港日期", "ot.arrival_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("bill_of_lading_date", "提单日期", "ot.bill_of_lading_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("actual_receipt_date", "实际收款日期", "ot.actual_receipt_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("stock_qty", "库存数量", "ot.stock_qty")
+                                .sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("stock_age", "库龄(天)", "ot.stock_age", "库龄天数")
+                                .sortable(true).aggregatable(true).valueKind(ValueKind.NUMBER),
+                        field("stock_age_warning_date", "库龄延期预警日期", "ot.stock_age_warning_date")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("created_at", "创建时间", "ot.created_at", "create_time")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP),
+                        field("updated_at", "更新时间", "ot.updated_at", "update_time")
+                                .sortable(true).valueKind(ValueKind.SQL_TIMESTAMP)
                 ));
     }
 
@@ -465,6 +616,7 @@ public class AiAgentSemanticSchemaService {
         private boolean sensitive = false;
         private String mask;
         private ValueKind valueKind = ValueKind.TEXT;
+        private String description;
 
         private FieldSpec(String key, String label, String expression, List<String> aliases) {
             this.key = key;
@@ -515,6 +667,15 @@ public class AiAgentSemanticSchemaService {
 
         public ValueKind valueKind() {
             return valueKind;
+        }
+
+        public String description() {
+            return description;
+        }
+
+        public FieldSpec description(String description) {
+            this.description = description;
+            return this;
         }
 
         public FieldSpec selectable(boolean selectable) {

@@ -174,7 +174,7 @@
   import { useI18n } from '@lib/shared/hooks/useI18n';
   import { LOCALE_OPTIONS } from '@lib/shared/locale';
   import useLocale from '@lib/shared/locale/useLocale';
-  import { LocaleType } from '@lib/shared/types/global';
+  import type { LocaleType } from '@lib/shared/types/global';
 
   import CrmButtonGroup from '@/components/pure/crm-button-group/index.vue';
   import CrmIcon from '@/components/pure/crm-icon-font/index.vue';

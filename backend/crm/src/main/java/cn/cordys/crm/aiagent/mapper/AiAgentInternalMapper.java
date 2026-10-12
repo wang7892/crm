@@ -13,6 +13,12 @@ import java.util.List;
 
 public interface AiAgentInternalMapper {
 
+    List<String> findCustomerNamesForOrderQuery(@Param("orgId") String orgId,
+                                               @Param("userId") String userId,
+                                               @Param("specialistName") String specialistName,
+                                               @Param("keyword") String keyword,
+                                               @Param("dataPermission") DeptDataPermissionDTO dataPermission);
+
     String findUserNameById(@Param("userId") String userId);
 
     List<String> findUserNamesByDataPermission(@Param("orgId") String orgId,
@@ -70,6 +76,11 @@ public interface AiAgentInternalMapper {
     List<AiAgentMessage> listMessages(@Param("sessionId") String sessionId,
                                       @Param("orgId") String orgId,
                                       @Param("userId") String userId);
+
+    List<AiAgentMessage> listRecentConversationMessages(@Param("sessionId") String sessionId,
+                                                       @Param("orgId") String orgId,
+                                                       @Param("userId") String userId,
+                                                       @Param("limit") int limit);
 
     int deleteToolLogsBySession(@Param("sessionId") String sessionId,
                                 @Param("orgId") String orgId,

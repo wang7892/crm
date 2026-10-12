@@ -1,8 +1,10 @@
 package cn.cordys.crm.aiagent.service;
 
+import cn.cordys.common.uid.IDGenerator;
 import cn.cordys.crm.aiagent.config.AiAgentKnowledgeParseProperties;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeChunk;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeDocument;
+import cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob;
 import cn.cordys.crm.aiagent.mapper.AiAgentKnowledgeMapper;
 import cn.cordys.mybatis.BaseMapper;
@@ -25,6 +27,10 @@ public class AiAgentKnowledgeParsePersistenceService {
 
     @Resource
     private BaseMapper<AiKnowledgeChunk> chunkMapper;
+    @Resource
+    private BaseMapper<AiKnowledgeDocument> documentMapper;
+    @Resource
+    private BaseMapper<AiKnowledgeDocumentVersion> documentVersionMapper;
     @Resource
     private BaseMapper<AiKnowledgeParseJob> parseJobMapper;
     @Resource
@@ -63,25 +69,37 @@ public class AiAgentKnowledgeParsePersistenceService {
                 job.getDocumentId(), job.getOrganizationId());
         if (!isSameJob(job, latest)) {
             failJob(job, "SUPERSEDED", "已有更新的解析任务，本任务已作废", null, now);
+            transitionVersion(job, AiAgentKnowledgeService.VERSION_FAILED, "已有更新的解析任务", now);
             return null;
         }
         AiKnowledgeDocument document = knowledgeMapper.getKnowledgeDocumentForUpdate(
                 job.getDocumentId(), job.getOrganizationId());
         if (document == null) {
             failJob(job, "DOCUMENT_MISSING", "文档不存在或已被删除", null, now);
+            transitionVersion(job, AiAgentKnowledgeService.VERSION_FAILED, "文档不存在或已被删除", now);
+            return null;
+        }
+        AiKnowledgeDocumentVersion version = claimVersion(job, document, now);
+        if (StringUtils.isNotBlank(job.getDocumentVersionId()) && version == null) {
+            failJob(job, "VERSION_MISSING", "知识正文版本不存在或不属于当前文档", null, now);
+            document.setParseStatus("FAILED");
+            document.setParseError("知识正文版本不存在或不属于当前文档");
+            document.setUpdateUser(operator(job));
+            document.setUpdateTime(now);
+            persistDocument(document, "更新文档失败状态失败");
             return null;
         }
         document.setParseStatus("PARSING");
         document.setParseError(null);
         document.setUpdateUser(operator(job));
         document.setUpdateTime(now);
-        persistDocumentParseState(document, null, "更新文档解析状态失败");
-        return new ClaimedParseJob(job, document);
+        persistDocument(document, "更新文档解析状态失败");
+        return new ClaimedParseJob(job, document, version);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public CompletionResult completeAndActivate(String jobId, List<AiKnowledgeChunk> chunks) {
-        CompletionResult result = complete(jobId, chunks);
+    public CompletionResult completeAndActivate(String jobId, AiAgentKnowledgeService.PreparedParse prepared) {
+        CompletionResult result = complete(jobId, prepared);
         if (result != CompletionResult.SUCCESS) {
             return result;
         }
@@ -98,8 +116,12 @@ public class AiAgentKnowledgeParsePersistenceService {
         return result;
     }
 
+    public CompletionResult completeAndActivate(String jobId, List<AiKnowledgeChunk> chunks) {
+        return completeAndActivate(jobId, new AiAgentKnowledgeService.PreparedParse(chunks));
+    }
+
     @Transactional(rollbackFor = Exception.class)
-    public CompletionResult complete(String jobId, List<AiKnowledgeChunk> chunks) {
+    public CompletionResult complete(String jobId, AiAgentKnowledgeService.PreparedParse prepared) {
         long now = System.currentTimeMillis();
         AiKnowledgeParseJob job = knowledgeMapper.getParseJobForUpdate(jobId);
         if (job == null || !StringUtils.equals(job.getStatus(), STATUS_RUNNING)) {
@@ -109,36 +131,59 @@ public class AiAgentKnowledgeParsePersistenceService {
                 job.getDocumentId(), job.getOrganizationId());
         if (!isSameJob(job, latest)) {
             failJob(job, "SUPERSEDED", "已有更新的解析任务，本任务结果未写入", null, now);
+            transitionVersion(job, AiAgentKnowledgeService.VERSION_FAILED, "已有更新的解析任务", now);
             return CompletionResult.SUPERSEDED;
         }
         AiKnowledgeDocument document = knowledgeMapper.getKnowledgeDocumentForUpdate(
                 job.getDocumentId(), job.getOrganizationId());
         if (document == null) {
             failJob(job, "DOCUMENT_MISSING", "文档不存在或已被删除", null, now);
+            transitionVersion(job, AiAgentKnowledgeService.VERSION_FAILED, "文档不存在或已被删除", now);
             return CompletionResult.DOCUMENT_MISSING;
         }
-        validateChunks(chunks, document);
+        validateChunks(prepared.chunks(), document);
+        AiKnowledgeDocumentVersion version = resolveCompletedVersion(job, document, prepared, now);
 
         knowledgeMapper.deleteChunksByDocumentId(document.getId(), document.getOrganizationId());
-        for (AiKnowledgeChunk chunk : chunks) {
+        for (AiKnowledgeChunk chunk : prepared.chunks()) {
             requireOne(chunkMapper.insert(chunk), "写入知识片段失败");
+        }
+
+        if (version != null) {
+            knowledgeMapper.archiveActiveDocumentVersions(
+                    document.getId(), document.getOrganizationId(), version.getId(), operator(job), now);
+            requireOne(knowledgeMapper.updateDocumentVersionState(
+                    version.getId(), document.getOrganizationId(), AiAgentKnowledgeService.VERSION_ACTIVE,
+                    null, operator(job), now), "启用知识正文版本失败");
         }
 
         document.setParseStatus("PARSED");
         document.setParseError(null);
-        document.setChunkCount(chunks.size());
+        document.setChunkCount(prepared.chunks().size());
+        if (version != null) {
+            document.setName(version.getName());
+            document.setRemark(version.getRemark());
+            document.setActiveVersionId(version.getId());
+            document.setActiveVersion(version.getVersion());
+            document.setLatestVersion(Math.max(
+                    Objects.requireNonNullElse(document.getLatestVersion(), 0), version.getVersion()));
+        }
         document.setUpdateUser(operator(job));
         document.setUpdateTime(now);
-        persistDocumentParseState(document, chunks.size(), "更新文档解析结果失败");
+        persistDocument(document, "更新文档解析结果失败");
 
         job.setStatus(STATUS_SUCCESS);
         job.setStep("DONE");
-        job.setMessage("解析成功，共生成 " + chunks.size() + " 个知识片段");
+        job.setMessage("解析成功，共生成 " + prepared.chunks().size() + " 个知识片段");
         job.setErrorStack(null);
         job.setFinishTime(now);
         job.setUpdateTime(now);
         persistJobState(job, "更新解析任务结果失败");
         return CompletionResult.SUCCESS;
+    }
+
+    public CompletionResult complete(String jobId, List<AiKnowledgeChunk> chunks) {
+        return complete(jobId, new AiAgentKnowledgeService.PreparedParse(chunks));
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -195,21 +240,23 @@ public class AiAgentKnowledgeParsePersistenceService {
             job.setFinishTime(null);
             job.setUpdateTime(now);
             persistJobState(job, "重置解析任务失败");
+            transitionVersion(job, AiAgentKnowledgeService.VERSION_PENDING, null, now);
 
             document.setParseStatus("UPLOADED");
             document.setParseError(null);
             document.setUpdateUser(operator(job));
             document.setUpdateTime(now);
-            persistDocumentParseState(document, null, "重置文档解析状态失败");
+            persistDocument(document, "重置文档解析状态失败");
             return RetryResult.REQUEUED;
         }
 
         failJob(job, "FAILED", safeMessage, errorStack, now);
+        transitionVersion(job, AiAgentKnowledgeService.VERSION_FAILED, safeMessage, now);
         document.setParseStatus("FAILED");
         document.setParseError(StringUtils.left(safeMessage, 2000));
         document.setUpdateUser(operator(job));
         document.setUpdateTime(now);
-        persistDocumentParseState(document, null, "更新文档失败状态失败");
+        persistDocument(document, "更新文档失败状态失败");
         return RetryResult.FAILED;
     }
 
@@ -273,17 +320,76 @@ public class AiAgentKnowledgeParsePersistenceService {
                 job.getUpdateTime()), errorMessage);
     }
 
-    private void persistDocumentParseState(AiKnowledgeDocument document,
-                                           Integer chunkCount,
-                                           String errorMessage) {
-        requireOne(knowledgeMapper.updateKnowledgeDocumentParseState(
-                document.getId(),
-                document.getOrganizationId(),
-                document.getParseStatus(),
-                document.getParseError(),
-                chunkCount,
-                document.getUpdateUser(),
-                document.getUpdateTime()), errorMessage);
+    private void persistDocument(AiKnowledgeDocument document, String errorMessage) {
+        requireOne(documentMapper.updateById(document), errorMessage);
+    }
+
+    private AiKnowledgeDocumentVersion claimVersion(AiKnowledgeParseJob job,
+                                                     AiKnowledgeDocument document,
+                                                     long now) {
+        if (StringUtils.isBlank(job.getDocumentVersionId())) {
+            return null;
+        }
+        AiKnowledgeDocumentVersion version = knowledgeMapper.getDocumentVersionForUpdate(
+                job.getDocumentVersionId(), document.getOrganizationId());
+        if (version == null || !Objects.equals(version.getDocumentId(), document.getId())) {
+            return null;
+        }
+        if (Objects.equals(document.getActiveVersionId(), version.getId())) {
+            return version;
+        }
+        requireOne(knowledgeMapper.updateDocumentVersionState(
+                version.getId(), document.getOrganizationId(), AiAgentKnowledgeService.VERSION_PARSING,
+                null, operator(job), now), "更新知识正文版本状态失败");
+        return version;
+    }
+
+    private AiKnowledgeDocumentVersion resolveCompletedVersion(AiKnowledgeParseJob job,
+                                                                AiKnowledgeDocument document,
+                                                                AiAgentKnowledgeService.PreparedParse prepared,
+                                                                long now) {
+        if (StringUtils.isNotBlank(job.getDocumentVersionId())) {
+            AiKnowledgeDocumentVersion version = knowledgeMapper.getDocumentVersionForUpdate(
+                    job.getDocumentVersionId(), document.getOrganizationId());
+            if (version == null || !Objects.equals(version.getDocumentId(), document.getId())) {
+                throw new IllegalStateException("知识正文版本不存在或不属于当前文档");
+            }
+            return version;
+        }
+        String content = StringUtils.defaultIfBlank(prepared.normalizedContent(), "");
+        if (StringUtils.isBlank(content)) {
+            return null;
+        }
+        AiKnowledgeDocumentVersion version = new AiKnowledgeDocumentVersion();
+        version.setId(IDGenerator.nextStr());
+        version.setOrganizationId(document.getOrganizationId());
+        version.setDocumentId(document.getId());
+        version.setVersion(knowledgeMapper.maxDocumentVersion(document.getId(), document.getOrganizationId()) + 1);
+        version.setName(document.getName());
+        version.setRemark(document.getRemark());
+        version.setContent(content);
+        version.setStatus(AiAgentKnowledgeService.VERSION_PENDING);
+        version.setSource("ORIGINAL");
+        version.setCreateUser(operator(job));
+        version.setUpdateUser(operator(job));
+        version.setCreateTime(now);
+        version.setUpdateTime(now);
+        requireOne(documentVersionMapper.insert(version), "创建初始知识正文版本失败");
+        return version;
+    }
+
+    private void transitionVersion(AiKnowledgeParseJob job, String status, String errorMessage, long now) {
+        if (StringUtils.isBlank(job.getDocumentVersionId())) {
+            return;
+        }
+        AiKnowledgeDocumentVersion version = knowledgeMapper.getDocumentVersionForUpdate(
+                job.getDocumentVersionId(), job.getOrganizationId());
+        if (version == null || StringUtils.equals(version.getStatus(), AiAgentKnowledgeService.VERSION_ACTIVE)) {
+            return;
+        }
+        knowledgeMapper.updateDocumentVersionState(
+                job.getDocumentVersionId(), job.getOrganizationId(), status,
+                StringUtils.left(errorMessage, 2000), operator(job), now);
     }
 
     private void requireOne(Integer affectedRows, String message) {
@@ -292,7 +398,12 @@ public class AiAgentKnowledgeParsePersistenceService {
         }
     }
 
-    public record ClaimedParseJob(AiKnowledgeParseJob job, AiKnowledgeDocument document) {
+    public record ClaimedParseJob(AiKnowledgeParseJob job,
+                                  AiKnowledgeDocument document,
+                                  AiKnowledgeDocumentVersion version) {
+        public ClaimedParseJob(AiKnowledgeParseJob job, AiKnowledgeDocument document) {
+            this(job, document, null);
+        }
     }
 
     public enum CompletionResult {

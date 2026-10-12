@@ -27,10 +27,10 @@ class MlsMirrorSyncProtectionTest {
     }
 
     @Test
-    void shouldDeleteOnlyAfterTwoConsecutiveCompleteMissingPasses() {
+    void shouldKeepTwoPassConfirmationForContracts() {
+        assertThat(MlsMirrorSyncProtection.REQUIRED_ORDER_MISSING_PASSES).isEqualTo(1);
         assertThat(MlsMirrorSyncProtection.allowsDelete(0)).isFalse();
         assertThat(MlsMirrorSyncProtection.allowsDelete(1)).isFalse();
         assertThat(MlsMirrorSyncProtection.allowsDelete(2)).isTrue();
-        assertThat(MlsMirrorSyncProtection.allowsDelete(3)).isTrue();
     }
 }

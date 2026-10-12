@@ -189,7 +189,7 @@
   import { useUserStore } from '@/store';
 
   import { rules } from '../crm-form-create/config';
-  import { SelectMixedOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectMixedOption } from 'naive-ui/es/select/src/interface';
 
   const { t } = useI18n();
   const Message = useMessage();

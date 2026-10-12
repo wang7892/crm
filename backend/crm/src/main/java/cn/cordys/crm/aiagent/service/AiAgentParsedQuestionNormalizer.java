@@ -28,6 +28,10 @@ public class AiAgentParsedQuestionNormalizer {
         parsed.setOrderNo(cleanText(parsed.getOrderNo()));
         parsed.setTimeRange(cleanText(parsed.getTimeRange()));
         parsed.setCandidateSql(StringUtils.trimToNull(parsed.getCandidateSql()));
+        if ("LLM".equals(source) && parsed.getCandidateSql() != null) {
+            parsed.setSqlRequired(true);
+            parsed.setIntent("CRM_DATABASE_QUERY");
+        }
         parsed.setClarificationQuestion(StringUtils.trimToNull(parsed.getClarificationQuestion()));
         normalizeQueryPlan(parsed);
         if (parsed.getConfidence() < 0 || parsed.getConfidence() > 1) {

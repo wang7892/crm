@@ -13,6 +13,10 @@ import cn.cordys.crm.aiagent.service.AiAgentAuditService;
 import cn.cordys.crm.aiagent.service.AiAgentChatService;
 import cn.cordys.crm.aiagent.service.AiAgentRequestCancellationService;
 import cn.cordys.crm.aiagent.service.AiAgentRequestCancelledException;
+import cn.cordys.crm.aiagent.service.AiAgentProgress;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import cn.cordys.security.SessionUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -48,6 +52,46 @@ public class AiAgentChatController {
     @Operation(summary = "智能问答")
     public AiAgentChatResponse chat(@Valid @RequestBody AiAgentChatRequest request) {
         return withCancellation(request, () -> aiAgentChatService.chat(request));
+    }
+
+    @PostMapping("/result/export")
+    @RequiresPermissions(PermissionConstants.AGENT_READ)
+    public void exportResult(@Valid @RequestBody AiAgentChatRequest request, HttpServletResponse response) throws IOException {
+        byte[] data = aiAgentChatService.exportResult(request);
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setHeader("Content-Disposition", "attachment; filename=query-result.xlsx");
+        response.getOutputStream().write(data);
+    }
+
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @RequiresPermissions(PermissionConstants.AGENT_READ)
+    public void stream(@Valid @RequestBody AiAgentChatRequest request, HttpServletResponse response) {
+        response.setContentType("text/event-stream;charset=UTF-8");
+        response.setHeader("Cache-Control", "no-cache, no-transform");
+        response.setHeader("X-Accel-Buffering", "no");
+        try (var scope = AiAgentProgress.open((event, data) -> {
+            try {
+                response.getOutputStream().write(("event: " + event + "\ndata: " + JSON.toJSONString(data) + "\n\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                response.flushBuffer();
+            } catch (IOException e) { throw new AiAgentRequestCancelledException(); }
+        })) {
+            AiAgentProgress.stage("request", "开始处理问题");
+            AiAgentChatResponse result = withCancellation(request, () -> aiAgentChatService.chat(request));
+            if (result == null) AiAgentProgress.send("cancelled", Map.of("message", "已停止回答"));
+            else AiAgentProgress.send("result", result);
+        } catch (AiAgentRequestCancelledException ignored) {
+            // A disconnected client must not cause a second JSON response or more model calls.
+        } catch (RuntimeException e) {
+            try (var scope = AiAgentProgress.open((event, data) -> {
+                try {
+                    response.getOutputStream().write(("event: " + event + "\ndata: " + JSON.toJSONString(data) + "\n\n")
+                            .getBytes(StandardCharsets.UTF_8)); response.flushBuffer();
+                } catch (IOException ignored) { }
+            })) {
+                AiAgentProgress.send("error", Map.of("message", "问答处理失败，请检查配置或稍后重试"));
+            }
+        }
     }
 
     @PostMapping(value = "/chat/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

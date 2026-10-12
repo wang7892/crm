@@ -1390,7 +1390,7 @@
   import subTableFields from './subTableFields.vue';
 
   // import useUserStore from '@/store/modules/user';
-  import { SelectOption } from 'naive-ui/es/select/src/interface';
+  import type { SelectOption } from 'naive-ui/es/select/src/interface';
 
   const props = defineProps<{
     formKey: FormDesignKeyEnum;

@@ -21,6 +21,7 @@ import java.util.Set;
 public class AiAgentSemanticPlanGuard {
 
     private final AiAgentSemanticRagProperties properties;
+    private final AiAgentSemanticSchemaService schema = new AiAgentSemanticSchemaService();
 
     public AiAgentSemanticPlanGuard(AiAgentSemanticRagProperties properties) {
         this.properties = properties;
@@ -67,21 +68,21 @@ public class AiAgentSemanticPlanGuard {
                 return GuardResult.reject("语义规则目标为空");
             }
             String targetEntity = normalizeKey(match.getTarget().getEntity());
-            String targetField = normalizeKey(match.getTarget().getField());
-            if (!StringUtils.equals(entity, targetEntity)) {
+            String targetField = equivalentField(entity, targetEntity, match.getTarget().getField());
+            if (targetField == null) {
                 return GuardResult.reject("查询实体与术语“" + safeTerm(match.getCanonicalTerm()) + "”的已审核目标不一致");
             }
             for (AiAgentSemanticRuleMatch.Target forbidden : safeList(match.getForbiddenTargets())) {
-                if (!StringUtils.equals(entity, normalizeKey(forbidden.getEntity()))) {
+                String forbiddenField = equivalentField(entity, normalizeKey(forbidden.getEntity()), forbidden.getField());
+                if (forbiddenField == null) {
                     continue;
                 }
-                String forbiddenField = normalizeKey(forbidden.getField());
                 if (StringUtils.isBlank(forbiddenField) || usedFields.contains(forbiddenField)) {
                     return GuardResult.reject("查询计划使用了术语“" + safeTerm(match.getCanonicalTerm()) + "”的禁止目标");
                 }
             }
             for (AiAgentSemanticRuleMatch.FilterConstraint required : safeList(match.getRequiredFilters())) {
-                if (!StringUtils.equals(entity, normalizeKey(required.getEntity()))) {
+                if (equivalentField(entity, normalizeKey(required.getEntity()), required.getField()) == null) {
                     return GuardResult.reject("术语“" + safeTerm(match.getCanonicalTerm()) + "”的必需过滤条件实体不一致");
                 }
                 if (!containsFilter(plan, required)) {
@@ -90,7 +91,7 @@ public class AiAgentSemanticPlanGuard {
                 }
             }
             for (AiAgentSemanticRuleMatch.FilterConstraint forbidden : safeList(match.getForbiddenFilters())) {
-                if (StringUtils.equals(entity, normalizeKey(forbidden.getEntity()))
+                if (equivalentField(entity, normalizeKey(forbidden.getEntity()), forbidden.getField()) != null
                         && containsFilter(plan, forbidden)) {
                     return GuardResult.reject("查询计划使用了术语“" + safeTerm(match.getCanonicalTerm())
                             + "”禁止的过滤条件：" + safeFilter(forbidden));
@@ -108,13 +109,37 @@ public class AiAgentSemanticPlanGuard {
 
     private boolean containsFilter(AiAgentQueryPlan plan,
                                    AiAgentSemanticRuleMatch.FilterConstraint constraint) {
-        String expectedField = normalizeKey(constraint.getField());
+        String expectedField = equivalentField(normalizeKey(plan.getEntity()), normalizeKey(constraint.getEntity()), constraint.getField());
         String expectedOperator = normalizeOperator(constraint.getOperator());
         String expectedValue = normalizeValue(constraint.getValue());
         return safeList(plan.getFilters()).stream().anyMatch(filter ->
-                StringUtils.equals(expectedField, normalizeKey(filter.getField()))
+                StringUtils.equals(expectedField, canonicalField(plan.getEntity(), filter.getField()))
                         && StringUtils.equals(expectedOperator, normalizeOperator(filter.getOperator()))
                         && StringUtils.equals(expectedValue, normalizeValue(filter.getValue())));
+    }
+
+    // Only fields backed by the same configured SQL expression and data source are interchangeable.
+    private String equivalentField(String planEntity, String sourceEntity, String field) {
+        if (StringUtils.equals(planEntity, sourceEntity)) {
+            return canonicalField(planEntity, field);
+        }
+        var destination = schema.findEntity(planEntity).orElse(null);
+        var source = schema.findEntity(sourceEntity).orElse(null);
+        if (destination == null || source == null || destination.dataSourceKind() != source.dataSourceKind()) {
+            return null;
+        }
+        var sourceField = source.resolveField(field).orElse(null);
+        if (sourceField == null) {
+            return null;
+        }
+        return destination.fields().values().stream()
+                .filter(candidate -> candidate.expression().equals(sourceField.expression()))
+                .map(AiAgentSemanticSchemaService.FieldSpec::key).findFirst().orElse(null);
+    }
+
+    private String canonicalField(String entity, String field) {
+        return schema.findEntity(entity).flatMap(spec -> spec.resolveField(field))
+                .map(AiAgentSemanticSchemaService.FieldSpec::key).orElse(normalizeKey(field));
     }
 
     private String normalizeOperator(String value) {
@@ -143,7 +168,7 @@ public class AiAgentSemanticPlanGuard {
     private boolean usesTargetSemantically(AiAgentQueryPlan plan, String targetField) {
         boolean filtered = safeList(plan.getFilters()).stream()
                 .map(AiAgentQueryFilter::getField)
-                .map(this::normalizeKey)
+                .map(field -> canonicalField(plan.getEntity(), field))
                 .anyMatch(targetField::equals);
         String queryType = StringUtils.upperCase(
                 StringUtils.defaultIfBlank(plan.getQueryType(), "LIST"), Locale.ROOT);
@@ -230,13 +255,18 @@ public class AiAgentSemanticPlanGuard {
         return values == null ? List.of() : values;
     }
 
-    public record GuardResult(boolean allowed, String reason) {
+    public record GuardResult(boolean allowed, boolean soft, String reason) {
         static GuardResult pass() {
-            return new GuardResult(true, null);
+            return new GuardResult(true, false, null);
         }
 
         static GuardResult reject(String reason) {
-            return new GuardResult(false, reason);
+            return new GuardResult(false, false, reason);
+        }
+
+        /** Plan preparation failed (format/value mismatch), but not a semantic rule violation. */
+        static GuardResult softReject(String reason) {
+            return new GuardResult(false, true, reason);
         }
     }
 }

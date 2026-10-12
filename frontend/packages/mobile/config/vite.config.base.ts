@@ -43,6 +43,7 @@ export default defineConfig({
     }),
   ],
   resolve: {
+    dedupe: ['echarts'],
     alias: [
       {
         find: '@locale',
@@ -62,6 +63,9 @@ export default defineConfig({
       },
     ],
     extensions: ['.ts', '.js', '.jsx', '.tsx', '.json', '.vue', '.mjs'],
+  },
+  optimizeDeps: {
+    include: ['echarts', 'echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'],
   },
   define: {
     'process.env': {},

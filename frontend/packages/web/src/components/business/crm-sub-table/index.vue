@@ -42,7 +42,7 @@
 
   import { formKeyMap } from '../crm-data-source-select/config';
   import { FormCreateField } from '../crm-form-create/types';
-  import { RowData, TableColumns } from 'naive-ui/es/data-table/src/interface';
+  import type { RowData, TableColumns } from 'naive-ui/es/data-table/src/interface';
 
   const props = defineProps<{
     parentId: string;

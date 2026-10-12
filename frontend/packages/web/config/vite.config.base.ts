@@ -34,6 +34,8 @@ export default defineConfig({
     }),
   ],
   resolve: {
+    // Shared components and app imports must use the same ECharts registry.
+    dedupe: ['echarts'],
     alias: [
       {
         find: '@locale',
@@ -53,6 +55,9 @@ export default defineConfig({
       },
     ],
     extensions: ['.ts', '.js', '.jsx', '.tsx', '.json', '.vue'],
+  },
+  optimizeDeps: {
+    include: ['echarts', 'echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'],
   },
   define: {
     'process.env': {},

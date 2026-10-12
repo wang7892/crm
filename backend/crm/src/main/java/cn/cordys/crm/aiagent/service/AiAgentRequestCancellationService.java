@@ -41,6 +41,7 @@ public class AiAgentRequestCancellationService {
         if (llmRequest != null) {
             llmRequest.cancel(true);
         }
+        closeStream(activeRequest.stream().getAndSet(null));
         return true;
     }
 
@@ -74,6 +75,20 @@ public class AiAgentRequestCancellationService {
         }
     }
 
+    public void trackStream(java.io.InputStream stream) {
+        ActiveRequest active = currentActiveRequest();
+        if (active == null) return;
+        active.stream().set(stream);
+        if (active.cancelled().get()) { closeStream(stream); throw new AiAgentRequestCancelledException(); }
+    }
+    public void clearStream(java.io.InputStream stream) {
+        ActiveRequest active = currentActiveRequest();
+        if (active != null) active.stream().compareAndSet(stream, null);
+    }
+    private static void closeStream(java.io.InputStream stream) {
+        if (stream != null) try { stream.close(); } catch (java.io.IOException ignored) { }
+    }
+
     public void unregister(String requestId) {
         try {
             if (isValidRequestId(requestId)) {
@@ -97,9 +112,10 @@ public class AiAgentRequestCancellationService {
     }
 
     private record ActiveRequest(String userId, AtomicBoolean cancelled,
-                                 AtomicReference<CompletableFuture<?>> llmRequest) {
+                                 AtomicReference<CompletableFuture<?>> llmRequest,
+                                 AtomicReference<java.io.InputStream> stream) {
         private ActiveRequest(String userId) {
-            this(userId, new AtomicBoolean(false), new AtomicReference<>());
+            this(userId, new AtomicBoolean(false), new AtomicReference<>(), new AtomicReference<>());
         }
     }
 }

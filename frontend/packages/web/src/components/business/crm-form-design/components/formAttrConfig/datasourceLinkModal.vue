@@ -346,7 +346,7 @@
 
   import { getFieldDisplayList } from '@/api/modules';
 
-  import { Option } from 'naive-ui/es/transfer/src/interface';
+  import type { Option } from 'naive-ui/es/transfer/src/interface';
 
   const props = defineProps<{
     fieldConfig: FormCreateField;

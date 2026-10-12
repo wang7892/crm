@@ -56,7 +56,7 @@
 
   import type { FormCreateField } from '../crm-form-create/types';
   import { formKeyMap, sourceApi } from './config';
-  import { InternalRowData, RowData } from 'naive-ui/es/data-table/src/interface';
+  import type { InternalRowData, RowData } from 'naive-ui/es/data-table/src/interface';
 
   const props = withDefaults(
     defineProps<{

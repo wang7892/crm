@@ -3,16 +3,23 @@ package cn.cordys.crm.aiagent.service;
 import cn.cordys.common.exception.GenericException;
 import cn.cordys.common.pager.PageUtils;
 import cn.cordys.common.pager.Pager;
+import cn.cordys.common.service.BaseService;
 import cn.cordys.common.uid.IDGenerator;
 import cn.cordys.common.util.JSON;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeChunk;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeDocument;
+import cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeQueryLog;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeChunkPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeDocumentEditRequest;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeDocumentPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeVersionPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeVersionRestoreRequest;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeChunkResponse;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentEditResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentResponse;
+import cn.cordys.crm.aiagent.dto.response.AiKnowledgeDocumentVersionResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchMatchResponse;
 import cn.cordys.crm.aiagent.dto.response.AiKnowledgeSearchTestResponse;
 import cn.cordys.crm.aiagent.dto.response.AiSemanticRuleMatchResponse;
@@ -54,6 +61,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 @Service
@@ -64,10 +72,17 @@ public class AiAgentKnowledgeService {
     private static final int CHUNK_SIZE = 800;
     private static final int CHUNK_OVERLAP = 150;
     private static final int MAX_SEARCH_KEYWORDS = 64;
+    private static final int MAX_EDITABLE_CONTENT_LENGTH = 2_000_000;
     private static final String DEFAULT_CATEGORY = "GENERAL";
+    static final String VERSION_PENDING = "PENDING";
+    static final String VERSION_PARSING = "PARSING";
+    static final String VERSION_ACTIVE = "ACTIVE";
+    static final String VERSION_ARCHIVED = "ARCHIVED";
+    static final String VERSION_FAILED = "FAILED";
     private static final Pattern WORD_SPLIT_PATTERN = Pattern.compile("[\\s，。？！；：、,.?;:()（）【】\\[\\]{}<>《》\"'“”‘’]+");
     private static final Pattern ASCII_TERM_PATTERN = Pattern.compile("[A-Za-z0-9_\\-]{2,}");
     private static final Pattern CHINESE_TERM_PATTERN = Pattern.compile("[\\u4e00-\\u9fff]{2,}");
+    private static final Pattern MARKDOWN_HEADING_PATTERN = Pattern.compile("^(#{1,6})\\s+(.+?)\\s*$");
     private static final Set<String> SEARCH_STOP_KEYWORDS = Set.of(
             "什么", "哪些", "怎么", "怎样", "是否", "可以", "这个", "那个",
             "现在", "最近", "一下", "进行", "回答", "问题", "多少", "有没有", "为什么");
@@ -76,6 +91,8 @@ public class AiAgentKnowledgeService {
 
     @Resource
     private BaseMapper<AiKnowledgeDocument> documentMapper;
+    @Resource
+    private BaseMapper<AiKnowledgeDocumentVersion> documentVersionMapper;
     @Resource
     private BaseMapper<AiKnowledgeParseJob> parseJobMapper;
     @Resource
@@ -96,6 +113,8 @@ public class AiAgentKnowledgeService {
     private AiAgentFileContentService aiAgentFileContentService;
     @Resource
     private ApplicationEventPublisher eventPublisher;
+    @Resource
+    private BaseService baseService;
 
     public Pager<List<AiKnowledgeDocumentResponse>> pageDocuments(AiKnowledgeDocumentPageRequest request, String orgId) {
         Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
@@ -148,18 +167,123 @@ public class AiAgentKnowledgeService {
         document.setChunkCount(0);
         document.setEnabled(1);
         document.setRemark(StringUtils.trimToNull(remark));
+        document.setActiveVersionId(null);
+        document.setActiveVersion(0);
+        document.setLatestVersion(0);
         document.setCreateUser(userId);
         document.setUpdateUser(userId);
         document.setCreateTime(now);
         document.setUpdateTime(now);
         documentMapper.insert(document);
 
-        enqueueParse(document, userId);
+        enqueueParse(document, userId, null);
         return getDocument(documentId, orgId);
     }
 
     public AiKnowledgeDocumentResponse getDocument(String id, String orgId) {
         return toDocumentResponse(requireDocument(id, orgId));
+    }
+
+    public AiKnowledgeDocumentEditResponse getEditableDocument(String id, String orgId) {
+        AiKnowledgeDocument document = requireDocument(id, orgId);
+        AiKnowledgeDocumentVersion activeVersion = aiAgentKnowledgeMapper.getActiveDocumentVersion(id, orgId);
+        String content = activeVersion == null ? readLegacyEditableContent(document) : activeVersion.getContent();
+
+        AiKnowledgeDocumentEditResponse response = new AiKnowledgeDocumentEditResponse();
+        response.setDocumentId(document.getId());
+        response.setName(document.getName());
+        response.setOriginalName(document.getOriginalName());
+        response.setFileType(document.getFileType());
+        response.setRemark(document.getRemark());
+        response.setContent(content);
+        response.setActiveVersion(activeVersion == null ? 0 : activeVersion.getVersion());
+        response.setRevision(Math.max(
+                Objects.requireNonNullElse(document.getLatestVersion(), 0),
+                aiAgentKnowledgeMapper.maxDocumentVersion(id, orgId)));
+        response.setParseStatus(document.getParseStatus());
+        return response;
+    }
+
+    public Pager<List<AiKnowledgeDocumentVersionResponse>> pageDocumentVersions(
+            AiKnowledgeVersionPageRequest request, String orgId) {
+        requireDocument(request.getDocumentId(), orgId);
+        Page<Object> page = PageHelper.startPage(request.getCurrent(), request.getPageSize());
+        List<AiKnowledgeDocumentVersion> versionEntities = aiAgentKnowledgeMapper
+                .listDocumentVersions(request, orgId);
+        Map<String, String> userNames = baseService.getUserNameMap(versionEntities.stream()
+                .map(AiKnowledgeDocumentVersion::getCreateUser)
+                .filter(StringUtils::isNotBlank)
+                .collect(Collectors.toSet()));
+        List<AiKnowledgeDocumentVersionResponse> versions = versionEntities
+                .stream()
+                .map(version -> toVersionResponse(
+                        version,
+                        false,
+                        baseService.getAndCheckOptionName(userNames.get(version.getCreateUser()))))
+                .toList();
+        return PageUtils.setPageInfo(page, versions);
+    }
+
+    public AiKnowledgeDocumentVersionResponse getDocumentVersion(String versionId, String orgId) {
+        AiKnowledgeDocumentVersion version = requireVersion(versionId, orgId);
+        requireDocument(version.getDocumentId(), orgId);
+        return toVersionResponse(version, true, baseService.getAndCheckOptionName(
+                baseService.getUserName(version.getCreateUser())));
+    }
+
+    public AiKnowledgeDocumentResponse editDocument(String id,
+                                                     AiKnowledgeDocumentEditRequest request,
+                                                     String orgId,
+                                                     String userId) {
+        AiKnowledgeDocument document = requireEditableDocumentForUpdate(id, orgId, request.getExpectedRevision());
+        AiKnowledgeDocumentVersion version = createPendingVersion(
+                document,
+                request.getName(),
+                request.getRemark(),
+                request.getContent(),
+                "EDIT",
+                null,
+                userId);
+        enqueueParse(document, userId, version.getId());
+        return getDocument(id, orgId);
+    }
+
+    public AiKnowledgeDocumentResponse restoreDocumentVersion(String versionId,
+                                                              AiKnowledgeVersionRestoreRequest request,
+                                                              String orgId,
+                                                              String userId) {
+        AiKnowledgeDocumentVersion source = requireVersion(versionId, orgId);
+        AiKnowledgeDocument document = requireEditableDocumentForUpdate(
+                source.getDocumentId(), orgId, request.getExpectedRevision());
+        AiKnowledgeDocumentVersion version = createPendingVersion(
+                document,
+                source.getName(),
+                source.getRemark(),
+                source.getContent(),
+                "ROLLBACK",
+                source.getVersion(),
+                userId);
+        enqueueParse(document, userId, version.getId());
+        return getDocument(document.getId(), orgId);
+    }
+
+    public void deleteDocumentVersion(String versionId, String orgId) {
+        AiKnowledgeDocumentVersion version = aiAgentKnowledgeMapper.getDocumentVersionForUpdate(versionId, orgId);
+        if (version == null) {
+            throw new GenericException("知识正文版本不存在或无权限");
+        }
+        AiKnowledgeDocument document = aiAgentKnowledgeMapper.getKnowledgeDocumentForUpdate(
+                version.getDocumentId(), orgId);
+        if (document == null) {
+            throw new GenericException("文档不存在或无权限");
+        }
+        if (Objects.equals(document.getActiveVersionId(), versionId) || VERSION_ACTIVE.equals(version.getStatus())) {
+            throw new GenericException("当前生效版本不能删除");
+        }
+        if (!Set.of(VERSION_ARCHIVED, VERSION_FAILED).contains(version.getStatus())) {
+            throw new GenericException("等待解析或解析中的版本不能删除");
+        }
+        documentVersionMapper.deleteByPrimaryKey(versionId);
     }
 
     public Pager<List<AiKnowledgeChunkResponse>> pageChunks(AiKnowledgeChunkPageRequest request, String orgId) {
@@ -177,7 +301,11 @@ public class AiAgentKnowledgeService {
         if (document == null) {
             throw new GenericException("文档不存在或无权限");
         }
-        enqueueParse(document, userId);
+        if (isParsePending(document.getParseStatus())) {
+            throw new GenericException("文档正在解析，请等待本次解析完成后再重新解析");
+        }
+        AiKnowledgeDocumentVersion activeVersion = aiAgentKnowledgeMapper.getActiveDocumentVersion(id, orgId);
+        enqueueParse(document, userId, activeVersion == null ? null : activeVersion.getId());
     }
 
     public void setEnabled(String id, String orgId, String userId, boolean enabled) {
@@ -199,6 +327,7 @@ public class AiAgentKnowledgeService {
     public void deleteDocument(String id, String orgId) {
         AiKnowledgeDocument document = requireDocument(id, orgId);
         aiAgentKnowledgeMapper.deleteChunksByDocumentId(id, orgId);
+        aiAgentKnowledgeMapper.deleteDocumentVersions(id, orgId);
         documentMapper.deleteByPrimaryKey(id);
         deleteQuietly(Path.of(document.getStoragePath()).getParent());
     }
@@ -306,7 +435,7 @@ public class AiAgentKnowledgeService {
         return response;
     }
 
-    private void enqueueParse(AiKnowledgeDocument document, String userId) {
+    private void enqueueParse(AiKnowledgeDocument document, String userId, String documentVersionId) {
         long now = System.currentTimeMillis();
         document.setParseStatus("UPLOADED");
         document.setParseError(null);
@@ -322,6 +451,7 @@ public class AiAgentKnowledgeService {
         job.setId(IDGenerator.nextStr());
         job.setOrganizationId(document.getOrganizationId());
         job.setDocumentId(document.getId());
+        job.setDocumentVersionId(documentVersionId);
         job.setStatus(AiAgentKnowledgeParsePersistenceService.STATUS_PENDING);
         job.setStep(AiAgentKnowledgeParsePersistenceService.STEP_RETRY_PREFIX + "0");
         job.setMessage("等待后台解析");
@@ -336,13 +466,27 @@ public class AiAgentKnowledgeService {
     }
 
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public PreparedParse prepareParse(AiKnowledgeDocument document, String orgId, String userId) throws IOException {
-        List<ParsedSection> sections = parseFile(document);
-        writeMarkdownFile(document, sections);
+    public PreparedParse prepareParse(AiKnowledgeDocument document,
+                                      AiKnowledgeDocumentVersion version,
+                                      String orgId,
+                                      String userId) throws IOException {
+        List<ParsedSection> sections = version == null
+                ? parseFile(document)
+                : parseEditableMarkdown(version.getContent(), version.getName());
+        String normalizedMarkdown = version == null
+                ? sourceMarkdown(document, sections)
+                : version.getContent();
+        if (version == null) {
+            writeMarkdownFile(document, normalizedMarkdown);
+        }
         List<AiKnowledgeChunk> chunks = semanticRuleService.isSemanticDocument(document)
-                ? buildSemanticRuleChunks(sections, document, orgId, userId)
+                ? buildSemanticRuleChunks(sections, document, orgId, userId, normalizedMarkdown)
                 : buildChunks(sections, document, orgId, userId);
-        return new PreparedParse(chunks);
+        return new PreparedParse(chunks, normalizedMarkdown);
+    }
+
+    public PreparedParse prepareParse(AiKnowledgeDocument document, String orgId, String userId) throws IOException {
+        return prepareParse(document, null, orgId, userId);
     }
 
     private List<ParsedSection> parseFile(AiKnowledgeDocument document) throws IOException {
@@ -359,16 +503,17 @@ public class AiAgentKnowledgeService {
     }
 
     void writeMarkdownFile(AiKnowledgeDocument document, List<ParsedSection> sections) throws IOException {
-        if ("md".equals(document.getFileType())) {
-            return;
-        }
+        writeMarkdownFile(document, renderMarkdown(document, sections));
+    }
+
+    private void writeMarkdownFile(AiKnowledgeDocument document, String markdown) throws IOException {
         Path documentDir = Path.of(document.getStoragePath()).getParent();
         if (documentDir == null) {
             throw new GenericException("文档存储路径无效");
         }
         Files.writeString(
                 documentDir.resolve("normalized.md"),
-                renderMarkdown(document, sections),
+                markdown,
                 StandardCharsets.UTF_8
         );
     }
@@ -397,9 +542,47 @@ public class AiAgentKnowledgeService {
                         .append(cleanMarkdownHeading(heading))
                         .append("\n\n");
             }
-            markdown.append(section.content().trim()).append("\n\n");
+            markdown.append(renderSectionContent(document, section.content())).append("\n\n");
         }
         return markdown.toString();
+    }
+
+    private String sourceMarkdown(AiKnowledgeDocument document, List<ParsedSection> sections) throws IOException {
+        if ("md".equals(document.getFileType())) {
+            return Files.readString(Path.of(document.getStoragePath()), StandardCharsets.UTF_8);
+        }
+        return renderMarkdown(document, sections);
+    }
+
+    private String renderSectionContent(AiKnowledgeDocument document, String content) {
+        if (!List.of("xls", "xlsx").contains(document.getFileType()) || !content.contains("\t")) {
+            return content.trim();
+        }
+        List<List<String>> rows = content.lines()
+                .filter(StringUtils::isNotBlank)
+                .map(line -> List.of(line.split("\\t", -1)).stream()
+                        .map(cell -> cell.replace("|", "\\|").trim())
+                        .toList())
+                .toList();
+        if (rows.isEmpty()) {
+            return content.trim();
+        }
+        int columnCount = rows.stream().mapToInt(List::size).max().orElse(1);
+        StringBuilder table = new StringBuilder();
+        appendMarkdownRow(table, rows.get(0), columnCount);
+        appendMarkdownRow(table, java.util.Collections.nCopies(columnCount, "---"), columnCount);
+        rows.stream().skip(1).forEach(row -> appendMarkdownRow(table, row, columnCount));
+        return table.toString().trim();
+    }
+
+    private void appendMarkdownRow(StringBuilder table, List<String> row, int columnCount) {
+        table.append('|');
+        for (int index = 0; index < columnCount; index++) {
+            table.append(' ')
+                    .append(index < row.size() ? row.get(index) : "")
+                    .append(" |");
+        }
+        table.append('\n');
     }
 
     private String cleanMarkdownHeading(String value) {
@@ -407,6 +590,54 @@ public class AiAgentKnowledgeService {
                 .replaceAll("[\\r\\n]+", " ")
                 .replaceAll("^#+\\s*", "")
                 .trim();
+    }
+
+    List<ParsedSection> parseEditableMarkdown(String markdown, String documentName) {
+        String normalized = StringUtils.defaultString(markdown).replace("\r\n", "\n").replace('\r', '\n');
+        if (StringUtils.isBlank(normalized)) {
+            throw new GenericException("知识正文不能为空");
+        }
+        List<ParsedSection> sections = new ArrayList<>();
+        List<String> headingPath = new ArrayList<>();
+        StringBuilder body = new StringBuilder();
+        for (String line : normalized.split("\n", -1)) {
+            var matcher = MARKDOWN_HEADING_PATTERN.matcher(line);
+            if (!matcher.matches()) {
+                body.append(line).append('\n');
+                continue;
+            }
+            appendEditableSection(sections, headingPath, documentName, body);
+            int level = matcher.group(1).length();
+            while (headingPath.size() >= level) {
+                headingPath.remove(headingPath.size() - 1);
+            }
+            while (headingPath.size() < level - 1) {
+                headingPath.add("");
+            }
+            headingPath.add(cleanMarkdownHeading(matcher.group(2)));
+        }
+        appendEditableSection(sections, headingPath, documentName, body);
+        if (sections.isEmpty()) {
+            throw new GenericException("知识正文未包含可解析的内容");
+        }
+        return sections;
+    }
+
+    private void appendEditableSection(List<ParsedSection> sections,
+                                       List<String> headingPath,
+                                       String documentName,
+                                       StringBuilder body) {
+        String content = body.toString().trim();
+        body.setLength(0);
+        if (StringUtils.isBlank(content)) {
+            return;
+        }
+        List<String> headings = headingPath.stream().filter(StringUtils::isNotBlank).toList();
+        String title = headings.isEmpty()
+                ? StringUtils.defaultIfBlank(documentName, "知识正文")
+                : headings.get(headings.size() - 1);
+        String sectionPath = headings.isEmpty() ? null : String.join(" / ", headings);
+        sections.add(new ParsedSection(title, sectionPath, null, content));
     }
 
     private List<AiKnowledgeChunk> buildChunks(List<ParsedSection> sections,
@@ -448,10 +679,8 @@ public class AiAgentKnowledgeService {
     private List<AiKnowledgeChunk> buildSemanticRuleChunks(List<ParsedSection> sections,
                                                            AiKnowledgeDocument document,
                                                            String orgId,
-                                                           String userId) throws IOException {
-        String normalizedMarkdown = "md".equals(document.getFileType())
-                ? Files.readString(Path.of(document.getStoragePath()), StandardCharsets.UTF_8)
-                : renderMarkdown(document, sections);
+                                                           String userId,
+                                                           String normalizedMarkdown) {
         List<AiAgentSemanticRuleExtractionService.SourceFragment> fragments = sections.stream()
                 .map(section -> new AiAgentSemanticRuleExtractionService.SourceFragment(
                         section.pageNo(),
@@ -516,6 +745,96 @@ public class AiAgentKnowledgeService {
         return chunks;
     }
 
+    private AiKnowledgeDocument requireEditableDocumentForUpdate(String id,
+                                                                 String orgId,
+                                                                 int expectedRevision) {
+        AiKnowledgeDocument document = aiAgentKnowledgeMapper.getKnowledgeDocumentForUpdate(id, orgId);
+        if (document == null) {
+            throw new GenericException("文档不存在或无权限");
+        }
+        if (isParsePending(document.getParseStatus())) {
+            throw new GenericException("文档正在解析，请等待本次解析完成后再编辑");
+        }
+        int actualRevision = Math.max(
+                Objects.requireNonNullElse(document.getLatestVersion(), 0),
+                aiAgentKnowledgeMapper.maxDocumentVersion(id, orgId));
+        if (actualRevision != expectedRevision) {
+            throw new GenericException("知识正文已被其他用户修改，请刷新后重试");
+        }
+        return document;
+    }
+
+    private AiKnowledgeDocumentVersion createPendingVersion(AiKnowledgeDocument document,
+                                                             String name,
+                                                             String remark,
+                                                             String content,
+                                                             String source,
+                                                             Integer sourceVersion,
+                                                             String userId) {
+        String normalizedContent = StringUtils.defaultString(content)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .trim();
+        if (StringUtils.isBlank(normalizedContent)) {
+            throw new GenericException("知识正文不能为空");
+        }
+        if (normalizedContent.length() > MAX_EDITABLE_CONTENT_LENGTH) {
+            throw new GenericException("知识正文不能超过 200 万个字符");
+        }
+
+        long now = System.currentTimeMillis();
+        int versionNumber = aiAgentKnowledgeMapper.maxDocumentVersion(
+                document.getId(), document.getOrganizationId()) + 1;
+        AiKnowledgeDocumentVersion version = new AiKnowledgeDocumentVersion();
+        version.setId(IDGenerator.nextStr());
+        version.setOrganizationId(document.getOrganizationId());
+        version.setDocumentId(document.getId());
+        version.setVersion(versionNumber);
+        version.setName(cleanFileName(StringUtils.trim(name)));
+        version.setRemark(StringUtils.trimToNull(remark));
+        version.setContent(normalizedContent + "\n");
+        version.setStatus(VERSION_PENDING);
+        version.setSource(source);
+        version.setSourceVersion(sourceVersion);
+        version.setErrorMessage(null);
+        version.setCreateUser(userId);
+        version.setUpdateUser(userId);
+        version.setCreateTime(now);
+        version.setUpdateTime(now);
+        if (!Objects.equals(documentVersionMapper.insert(version), 1)) {
+            throw new GenericException("创建知识正文版本失败");
+        }
+
+        document.setLatestVersion(versionNumber);
+        document.setUpdateUser(userId);
+        document.setUpdateTime(now);
+        if (!Objects.equals(documentMapper.updateById(document), 1)) {
+            throw new GenericException("更新文档版本失败");
+        }
+        return version;
+    }
+
+    private String readLegacyEditableContent(AiKnowledgeDocument document) {
+        Path originalPath = Path.of(document.getStoragePath());
+        Path documentDir = originalPath.getParent();
+        Path normalizedPath = documentDir == null ? null : documentDir.resolve("normalized.md");
+        try {
+            if (normalizedPath != null && Files.isRegularFile(normalizedPath)) {
+                return Files.readString(normalizedPath, StandardCharsets.UTF_8);
+            }
+            if (List.of("md", "txt").contains(document.getFileType()) && Files.isRegularFile(originalPath)) {
+                return Files.readString(originalPath, StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            throw new GenericException("读取知识正文失败：" + e.getMessage());
+        }
+        throw new GenericException("该文档尚未生成可编辑正文，请先重新解析");
+    }
+
+    private boolean isParsePending(String parseStatus) {
+        return StringUtils.equalsAny(parseStatus, "UPLOADED", "PARSING");
+    }
+
     private int findPreferredEnd(String content, int start, int end) {
         if (end >= content.length()) {
             return content.length();
@@ -536,6 +855,14 @@ public class AiAgentKnowledgeService {
             throw new GenericException("文档不存在或无权限");
         }
         return document;
+    }
+
+    private AiKnowledgeDocumentVersion requireVersion(String versionId, String orgId) {
+        AiKnowledgeDocumentVersion version = aiAgentKnowledgeMapper.getDocumentVersion(versionId, orgId);
+        if (version == null) {
+            throw new GenericException("知识正文版本不存在或无权限");
+        }
+        return version;
     }
 
     private Map<String, AiKnowledgeDocument> loadDocuments(List<AiKnowledgeChunk> chunks, String orgId) {
@@ -565,6 +892,10 @@ public class AiAgentKnowledgeService {
         response.setChunkCount(document.getChunkCount());
         response.setEnabled(document.getEnabled());
         response.setRemark(document.getRemark());
+        response.setActiveVersionId(document.getActiveVersionId());
+        response.setActiveVersion(Objects.requireNonNullElse(document.getActiveVersion(), 0));
+        response.setLatestVersion(Objects.requireNonNullElse(document.getLatestVersion(), 0));
+        response.setKnowledgeAvailable(Objects.requireNonNullElse(document.getChunkCount(), 0) > 0);
         if (semanticRuleService.isSemanticDocument(document)) {
             AiSemanticRuleStats stats = semanticRuleService.ruleStats(document.getId(), document.getOrganizationId());
             response.setRuleStats(stats);
@@ -574,6 +905,27 @@ public class AiAgentKnowledgeService {
         response.setUpdateUser(document.getUpdateUser());
         response.setCreateTime(document.getCreateTime());
         response.setUpdateTime(document.getUpdateTime());
+        return response;
+    }
+
+    private AiKnowledgeDocumentVersionResponse toVersionResponse(AiKnowledgeDocumentVersion version,
+                                                                 boolean includeContent,
+                                                                 String createUserName) {
+        AiKnowledgeDocumentVersionResponse response = new AiKnowledgeDocumentVersionResponse();
+        response.setId(version.getId());
+        response.setDocumentId(version.getDocumentId());
+        response.setVersion(version.getVersion());
+        response.setName(version.getName());
+        response.setRemark(version.getRemark());
+        response.setContent(includeContent ? version.getContent() : null);
+        response.setStatus(version.getStatus());
+        response.setSource(version.getSource());
+        response.setSourceVersion(version.getSourceVersion());
+        response.setErrorMessage(version.getErrorMessage());
+        response.setCreateUser(version.getCreateUser());
+        response.setCreateUserName(createUserName);
+        response.setCreateTime(version.getCreateTime());
+        response.setUpdateTime(version.getUpdateTime());
         return response;
     }
 
@@ -725,6 +1077,9 @@ public class AiAgentKnowledgeService {
     record ParsedSection(String title, String sectionPath, Integer pageNo, String content) {
     }
 
-    public record PreparedParse(List<AiKnowledgeChunk> chunks) {
+    public record PreparedParse(List<AiKnowledgeChunk> chunks, String normalizedContent) {
+        public PreparedParse(List<AiKnowledgeChunk> chunks) {
+            this(chunks, null);
+        }
     }
 }

@@ -65,7 +65,7 @@
     VirtualScrollPropsType,
   } from './type';
   import useRenameNode from './useRenameNode';
-  import { DropPosition } from 'naive-ui/es/tree/src/interface';
+  import type { DropPosition } from 'naive-ui/es/tree/src/interface';
 
   const { t } = useI18n();
 

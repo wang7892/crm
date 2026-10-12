@@ -16,6 +16,10 @@ public class AiKnowledgeDocumentResponse {
     private Integer chunkCount;
     private Integer enabled;
     private String remark;
+    private String activeVersionId;
+    private Integer activeVersion;
+    private Integer latestVersion;
+    private Boolean knowledgeAvailable;
     private String semanticStatus;
     private AiSemanticRuleStats ruleStats;
     private String createUser;

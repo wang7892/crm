@@ -1,1376 +1,351 @@
 <template>
   <CrmPageWrapper :title="t('aiKnowledge.title')" :back-route-name="WorkbenchRouteEnum.WORKBENCH_INDEX">
-    <main class="knowledge-page">
-      <section class="knowledge-summary">
-        <div>
-          <h1>{{ t('aiKnowledge.title') }}</h1>
-          <p>{{ t('aiKnowledge.description') }}</p>
-        </div>
-        <button type="button" class="primary-command" @click="openUploadPopup">
-          <van-icon name="plus" />
-          <span>{{ t('aiKnowledge.uploadDocument') }}</span>
-        </button>
-      </section>
-
-      <section class="knowledge-section document-section">
-        <div class="document-search-row">
-          <van-search
-            v-model="query.keyword"
-            shape="round"
-            clearable
-            :placeholder="t('aiKnowledge.searchPlaceholder')"
-            @search="applyDocumentFilters"
-            @clear="applyDocumentFilters"
+    <main class="query-knowledge-mobile">
+      <van-tabs v-model:active="kind"
+        ><van-tab title="术语配置" name="TERM" /><van-tab title="SQL 示例库" name="SQL_EXAMPLE"
+      /></van-tabs>
+      <van-search v-model="keyword" :placeholder="isTerm ? '搜索术语、同义词' : '搜索问题、SQL'" />
+      <div class="list-toolbar"
+        ><span>{{ filtered.length }} 条</span
+        ><van-button size="small" icon="replay" :loading="loading" aria-label="刷新" @click="load" /><van-button
+          size="small"
+          type="primary"
+          icon="plus"
+          @click="edit()"
+          >{{ isTerm ? '新建术语' : '添加示例' }}</van-button
+        ></div
+      >
+      <van-empty v-if="!loading && !filtered.length" :description="loadError || '暂无数据'" />
+      <div v-for="item in filtered" :key="item.id" class="knowledge-row">
+        <button class="row-title" @click="openDetail(item)">{{ item.name }}</button
+        ><p>{{ item.content.slice(0, 160) }}</p
+        ><small>{{ scopeLabel(item) }}</small>
+        <div class="row-actions"
+          ><van-switch
+            :model-value="item.enabled"
+            size="20"
+            :aria-label="`${item.name}启用状态`"
+            @update:model-value="toggle(item, $event)" /><van-button
+            size="mini"
+            icon="edit"
+            aria-label="编辑"
+            @click="edit(item)" /><van-button
+            v-if="canDelete"
+            size="mini"
+            icon="delete-o"
+            aria-label="删除"
+            @click="remove(item)"
+        /></div>
+      </div>
+      <van-popup v-model:show="editorVisible" position="bottom" closeable class="knowledge-popup">
+        <h2>{{ form.id ? '编辑' : '新建' }}{{ isTerm ? '术语' : 'SQL 示例' }}</h2>
+        <van-form @submit="save">
+          <van-field
+            v-model="form.name"
+            :label="isTerm ? '术语名称' : '问题描述'"
+            :maxlength="255"
+            :rules="[{ required: true, message: '请输入名称或问题' }]"
           />
-          <button type="button" class="search-command" @click="applyDocumentFilters">
-            {{ t('aiKnowledge.search') }}
-          </button>
-        </div>
-
-        <div class="filter-strip">
-          <button type="button" @click="showFileTypeSheet = true">
-            <span>{{ selectedFileTypeLabel }}</span>
-            <van-icon name="arrow-down" />
-          </button>
-          <button type="button" @click="showParseStatusSheet = true">
-            <span>{{ selectedParseStatusLabel }}</span>
-            <van-icon name="arrow-down" />
-          </button>
-          <button type="button" @click="showEnabledSheet = true">
-            <span>{{ selectedEnabledLabel }}</span>
-            <van-icon name="arrow-down" />
-          </button>
-        </div>
-
-        <div v-if="documentLoading && documentRows.length === 0" class="document-loading">
-          <van-skeleton v-for="index in 3" :key="index" title :row="3" />
-        </div>
-        <van-empty v-else-if="documentRows.length === 0" :description="t('aiKnowledge.noDocuments')" />
-
-        <div v-else class="document-list">
-          <article v-for="document in documentRows" :key="document.id" class="document-card">
-            <header class="document-card__header">
-              <div class="document-file-icon">
-                <van-icon name="description-o" />
-              </div>
-              <div class="document-title">
-                <strong>{{ document.name }}</strong>
-                <span>{{ displayFileType(document.fileType) }} · {{ formatFileSize(document.fileSize) }}</span>
-              </div>
-            </header>
-
-            <div class="document-stats">
-              <div>
-                <span>{{ t('aiKnowledge.parseStatus') }}</span>
-                <strong class="status-text" :class="`status-text--${parseStatusTone(document.parseStatus)}`">
-                  {{ parseStatusText(document) }}
-                </strong>
-              </div>
-              <div>
-                <span>{{ t('aiKnowledge.knowledgeChunks') }}</span>
-                <strong>{{ knowledgeChunkCount(document) }} {{ t('aiKnowledge.items') }}</strong>
-              </div>
-              <div>
-                <span>{{ t('aiKnowledge.effectiveStatus') }}</span>
-                <strong
-                  class="status-text"
-                  :class="`status-text--${semanticStatusTone(semanticDocumentStatus(document))}`"
-                >
-                  {{ semanticStatusText(semanticDocumentStatus(document)) }}
-                </strong>
-              </div>
-            </div>
-
-            <p v-if="document.remark" class="document-remark">{{ document.remark }}</p>
-
-            <footer class="document-actions">
-              <button type="button" @click="openChunks(document)">
-                <van-icon name="eye-o" />
-                <span>{{ t('aiKnowledge.viewKnowledge') }}</span>
-              </button>
-              <button type="button" :disabled="reparsingDocumentId === document.id" @click="reparse(document)">
-                <van-loading v-if="reparsingDocumentId === document.id" size="14" />
-                <van-icon v-else name="replay" />
-                <span>{{ t('aiKnowledge.reparse') }}</span>
-              </button>
-              <button type="button" @click="downloadDocument(document)">
-                <van-icon name="down" />
-                <span>{{ t('aiKnowledge.download') }}</span>
-              </button>
-              <button v-if="canDelete" type="button" class="danger-action" @click="confirmDelete(document)">
-                <van-icon name="delete-o" />
-                <span>{{ t('common.delete') }}</span>
-              </button>
-            </footer>
-          </article>
-        </div>
-
-        <div v-if="documentTotal > 0" class="pagination-row">
-          <van-pagination
-            v-model="query.current"
-            :total-items="documentTotal"
-            :items-per-page="query.pageSize"
-            :show-page-size="3"
-            force-ellipses
-            @change="loadDocuments"
+          <van-field
+            v-model="form.content"
+            :label="isTerm ? '术语描述' : '示例 SQL'"
+            type="textarea"
+            rows="6"
+            :maxlength="isTerm ? 6000 : 20000"
+            :rules="[{ required: true, message: '请输入描述或 SQL' }]"
           />
-          <button type="button" class="page-size-button" @click="showDocumentPageSizeSheet = true">
-            {{ query.pageSize }} / {{ t('aiKnowledge.page') }}
-            <van-icon name="arrow-down" />
-          </button>
-        </div>
-      </section>
-
-      <section class="knowledge-section search-test-section">
-        <header class="section-heading">
-          <h2>{{ t('aiKnowledge.searchTest') }}</h2>
-          <div class="test-mode-switch" role="group" :aria-label="t('aiKnowledge.searchMode')">
-            <button
-              v-for="mode in testModeOptions"
-              :key="mode.value"
-              type="button"
-              :class="{ active: testMode === mode.value }"
-              @click="selectTestMode(mode.value)"
+          <van-field v-if="isTerm" v-model="aliases" label="同义词" type="textarea" placeholder="每行一个" />
+          <van-cell v-if="isTerm" title="所有数据源"
+            ><template #right-icon><van-switch v-model="form.allDatasources" size="22" /></template
+          ></van-cell>
+          <div v-if="!form.allDatasources" class="source-options"
+            ><h3>生效数据源</h3>
+            <van-checkbox-group v-if="isTerm" v-model="form.datasourceIds"
+              ><van-checkbox v-for="s in sourceOptions" :key="s.value" :name="s.value">{{
+                s.label
+              }}</van-checkbox></van-checkbox-group
             >
-              {{ mode.label }}
-            </button>
+            <van-radio-group v-else v-model="exampleSource"
+              ><van-radio v-for="s in sourceOptions" :key="s.value" :name="s.value">{{
+                s.label
+              }}</van-radio></van-radio-group
+            >
           </div>
-        </header>
-
-        <van-field
-          v-model="testQuestion"
-          type="textarea"
-          rows="3"
-          autosize
-          maxlength="1000"
-          show-word-limit
-          :placeholder="t('aiKnowledge.testPlaceholder')"
-          class="test-question"
-        />
-        <button type="button" class="test-command" :disabled="testLoading" @click="runSearchTest">
-          <van-loading v-if="testLoading" size="16" />
-          <van-icon v-else name="search" />
-          <span>{{ t('aiKnowledge.runTest') }}</span>
-        </button>
-
-        <div v-if="testResult" class="test-results">
-          <div class="result-alert result-alert--info">
-            {{ testResult.answerPreview || t('aiKnowledge.testCompleted') }}
-          </div>
-          <div v-if="testResult.fallbackReason" class="result-alert result-alert--warning">
-            {{ testResult.fallbackReason }}
-          </div>
-
-          <section v-if="testResult.matchedRules?.length" class="result-section">
-            <div class="result-section__heading">
-              <h3>{{ t('aiKnowledge.matchedRules') }}</h3>
-              <span>{{ testResult.retrievalMode || 'SEMANTIC_EXACT' }}</span>
-            </div>
-            <article v-for="rule in testResult.matchedRules" :key="`${rule.ruleId}-${rule.version}`" class="match-card">
-              <strong>{{ rule.term }}</strong>
-              <div class="match-meta">
-                <span>{{ matchedByText(rule.matchedBy) }}</span>
-                <span>{{ t('aiKnowledge.relevance', { score: formatScore(rule.score) }) }}</span>
-              </div>
-              <p>
-                {{ rule.target.entity }}.{{ rule.target.field }}
-                <template v-if="rule.documentName"> · {{ rule.documentName }}</template>
-                <template v-if="rule.pageNo"> · {{ t('aiKnowledge.pageNumber', { page: rule.pageNo }) }}</template>
-                <template v-if="rule.sectionPath"> · {{ rule.sectionPath }}</template>
-              </p>
-            </article>
-          </section>
-
-          <section v-if="testResult.injectedContextPreview" class="result-section">
-            <h3>{{ t('aiKnowledge.controlledContext') }}</h3>
-            <pre>{{ formatInjectedContext(testResult.injectedContextPreview) }}</pre>
-          </section>
-
-          <van-empty
-            v-if="testMode !== 'DOCUMENT' && !testResult.matchedRules?.length && !testResult.matches?.length"
-            image-size="72"
-            :description="t('aiKnowledge.noMatch')"
-          />
-
-          <section v-if="testResult.matches?.length" class="result-section">
-            <h3>{{ t('aiKnowledge.documentMatches') }}</h3>
-            <article v-for="match in testResult.matches" :key="match.chunkId" class="match-card">
-              <strong>{{ match.documentName || t('aiKnowledge.unnamedDocument') }}</strong>
-              <div class="match-meta">
-                <span v-if="match.pageNo">{{ t('aiKnowledge.pageNumber', { page: match.pageNo }) }}</span>
-                <span>{{ t('aiKnowledge.relevance', { score: formatScore(match.score) }) }}</span>
-              </div>
-              <p>{{ match.content }}</p>
-            </article>
-          </section>
-        </div>
-      </section>
+          <van-cell title="启用"
+            ><template #right-icon><van-switch v-model="form.enabled" size="22" /></template
+          ></van-cell>
+          <div class="save-command"
+            ><van-button block type="primary" native-type="submit" :loading="saving">保存</van-button></div
+          >
+        </van-form>
+      </van-popup>
+      <van-popup v-model:show="detailVisible" position="bottom" closeable class="knowledge-popup">
+        <template v-if="detail"
+          ><h2>{{ detail.name }}</h2
+          ><p class="detail-scope">{{ scopeLabel(detail) }}</p
+          ><p v-if="detail.synonyms.length" class="detail-scope">{{ detail.synonyms.join('、') }}</p>
+          <div v-if="isTerm" class="detail-content">{{ detail.content }}</div
+          ><pre v-else class="detail-content sql-content">{{
+            formatAiAgentSql(detail.content, sourceType(detail))
+          }}</pre>
+        </template>
+      </van-popup>
     </main>
-
-    <van-popup v-model:show="uploadPopupVisible" position="bottom" round closeable class="knowledge-popup">
-      <div class="popup-content upload-popup">
-        <h2>{{ t('aiKnowledge.uploadKnowledgeDocument') }}</h2>
-        <label class="field-label" for="knowledge-remark">{{ t('aiKnowledge.remark') }}</label>
-        <van-field
-          id="knowledge-remark"
-          v-model="uploadRemark"
-          type="textarea"
-          rows="2"
-          autosize
-          maxlength="500"
-          :placeholder="t('aiKnowledge.remarkPlaceholder')"
-          class="popup-field"
-        />
-        <input
-          ref="uploadInputRef"
-          type="file"
-          class="hidden-file-input"
-          accept=".jpg,.jpeg,.png,.webp,.pdf,.docx,.xls,.xlsx,.txt,.md"
-          @change="handleUploadSelection"
-        />
-        <button type="button" class="file-picker" :disabled="uploading" @click="openUploadFilePicker">
-          <van-icon :name="selectedUploadFile ? 'description-o' : 'plus'" />
-          <span>{{ selectedUploadFile?.name || t('aiKnowledge.chooseFile') }}</span>
-          <small v-if="selectedUploadFile">{{ formatFileSize(selectedUploadFile.size) }}</small>
-        </button>
-        <p class="upload-helper">{{ t('aiKnowledge.uploadHelper') }}</p>
-        <van-progress v-if="uploading" :percentage="uploadProgress" stroke-width="6" />
-        <button
-          type="button"
-          class="popup-primary-button"
-          :disabled="!selectedUploadFile || uploading"
-          @click="submitUpload"
-        >
-          <van-loading v-if="uploading" size="16" />
-          <van-icon v-else name="upgrade" />
-          <span>{{ uploading ? t('aiKnowledge.uploading') : t('aiKnowledge.upload') }}</span>
-        </button>
-      </div>
-    </van-popup>
-
-    <van-popup v-model:show="chunkPopupVisible" position="right" class="chunk-popup">
-      <div class="chunk-page">
-        <header class="chunk-page__header">
-          <button type="button" :aria-label="t('common.back')" @click="chunkPopupVisible = false">
-            <van-icon name="arrow-left" />
-          </button>
-          <div>
-            <h2>{{ t('aiKnowledge.extractedKnowledge') }}</h2>
-            <span>{{ currentDocument?.name }}</span>
-          </div>
-        </header>
-        <div class="chunk-list-wrap">
-          <div v-if="chunkLoading && chunkRows.length === 0" class="document-loading">
-            <van-skeleton v-for="index in 3" :key="index" title :row="3" />
-          </div>
-          <van-empty v-else-if="chunkRows.length === 0" :description="t('aiKnowledge.noChunks')" />
-          <div v-else class="chunk-list">
-            <article v-for="chunk in chunkRows" :key="chunk.id" class="chunk-card">
-              <header>
-                <strong>{{ chunk.title || t('aiKnowledge.chunkTitle', { index: chunk.chunkIndex }) }}</strong>
-                <span v-if="chunk.pageNo">{{ t('aiKnowledge.pageNumber', { page: chunk.pageNo }) }}</span>
-              </header>
-              <p>{{ chunk.content }}</p>
-            </article>
-          </div>
-        </div>
-        <footer v-if="chunkTotal > 0" class="chunk-pagination">
-          <van-pagination
-            v-model="chunkQuery.current"
-            :total-items="chunkTotal"
-            :items-per-page="chunkQuery.pageSize"
-            :show-page-size="3"
-            force-ellipses
-            @change="loadChunks"
-          />
-          <button type="button" class="page-size-button" @click="showChunkPageSizeSheet = true">
-            {{ chunkQuery.pageSize }} / {{ t('aiKnowledge.page') }}
-            <van-icon name="arrow-down" />
-          </button>
-        </footer>
-      </div>
-    </van-popup>
-
-    <van-action-sheet
-      v-model:show="showFileTypeSheet"
-      :title="t('aiKnowledge.fileType')"
-      :actions="fileTypeActions"
-      :cancel-text="t('common.cancel')"
-      close-on-click-action
-      @select="selectFileType"
-    />
-    <van-action-sheet
-      v-model:show="showParseStatusSheet"
-      :title="t('aiKnowledge.parseStatus')"
-      :actions="parseStatusActions"
-      :cancel-text="t('common.cancel')"
-      close-on-click-action
-      @select="selectParseStatus"
-    />
-    <van-action-sheet
-      v-model:show="showEnabledSheet"
-      :title="t('aiKnowledge.effectiveStatus')"
-      :actions="enabledActions"
-      :cancel-text="t('common.cancel')"
-      close-on-click-action
-      @select="selectEnabled"
-    />
-    <van-action-sheet
-      v-model:show="showDocumentPageSizeSheet"
-      :title="t('aiKnowledge.pageSize')"
-      :actions="documentPageSizeActions"
-      :cancel-text="t('common.cancel')"
-      close-on-click-action
-      @select="selectDocumentPageSize"
-    />
-    <van-action-sheet
-      v-model:show="showChunkPageSizeSheet"
-      :title="t('aiKnowledge.pageSize')"
-      :actions="chunkPageSizeActions"
-      :cancel-text="t('common.cancel')"
-      close-on-click-action
-      @select="selectChunkPageSize"
-    />
   </CrmPageWrapper>
 </template>
 
 <script setup lang="ts">
-  import { showConfirmDialog, showFailToast, showSuccessToast, showToast } from 'vant';
+  import { computed, onMounted, ref, watch } from 'vue';
+  import { showConfirmDialog, showFailToast, showSuccessToast } from 'vant';
 
-  import type {
-    AiKnowledgeChunkItem,
-    AiKnowledgeDocumentItem,
-    AiKnowledgeSearchMode,
-    AiKnowledgeSearchTestResult,
-    AiSemanticInjectedContext,
-  } from '@lib/shared/api/modules/aiAgent';
+  import type { AiAgentDatasourceItem } from '@lib/shared/api/modules/aiAgent';
+  import type { QueryKnowledgeItem, QueryKnowledgeKind } from '@lib/shared/api/modules/queryKnowledge';
   import { useI18n } from '@lib/shared/hooks/useI18n';
+  import { formatAiAgentSql } from '@lib/shared/utils/aiAgentSql';
 
   import CrmPageWrapper from '@/components/pure/crm-page-wrapper/index.vue';
 
   import {
-    deleteAiKnowledgeDocument,
-    getAiKnowledgeChunkPage,
-    getAiKnowledgeDocumentDetail,
-    getAiKnowledgeDocumentDownloadUrl,
-    getAiKnowledgeDocumentPage,
-    reparseAiKnowledgeDocument,
-    testAiKnowledgeSearch,
-    uploadAiKnowledgeDocument,
+    deleteQueryKnowledge,
+    enableQueryKnowledge,
+    getAiAgentDatasources,
+    getQueryKnowledge,
+    saveQueryKnowledge,
   } from '@/api/modules';
   import { hasAnyPermission } from '@/utils/permission';
 
-  import { AiKnowledgeRouteEnum, WorkbenchRouteEnum } from '@/enums/routeEnum';
-
-  interface SheetAction {
-    name: string;
-    value: string;
-    color?: string;
-  }
-
-  const MAX_UPLOAD_SIZE = 50 * 1024 * 1024;
-  const allowedExtensions = new Set(['jpg', 'jpeg', 'png', 'webp', 'pdf', 'docx', 'xls', 'xlsx', 'txt', 'md']);
-
-  defineOptions({
-    name: AiKnowledgeRouteEnum.AI_KNOWLEDGE_INDEX,
-  });
+  import { WorkbenchRouteEnum } from '@/enums/routeEnum';
 
   const { t } = useI18n();
-  const query = reactive({
-    current: 1,
-    pageSize: 20,
-    keyword: '',
-    fileType: null as string | null,
-    parseStatus: null as string | null,
-    enabled: null as number | null,
-  });
-  const documentRows = ref<AiKnowledgeDocumentItem[]>([]);
-  const documentLoading = ref(false);
-  const documentTotal = ref(0);
-  const reparsingDocumentId = ref<string | null>(null);
-
-  const showFileTypeSheet = ref(false);
-  const showParseStatusSheet = ref(false);
-  const showEnabledSheet = ref(false);
-  const showDocumentPageSizeSheet = ref(false);
-  const showChunkPageSizeSheet = ref(false);
-
-  const uploadPopupVisible = ref(false);
-  const uploadInputRef = ref<HTMLInputElement>();
-  const selectedUploadFile = ref<File | null>(null);
-  const uploadRemark = ref('');
-  const uploading = ref(false);
-  const uploadProgress = ref(0);
-
-  const chunkPopupVisible = ref(false);
-  const currentDocument = ref<AiKnowledgeDocumentItem | null>(null);
-  const chunkRows = ref<AiKnowledgeChunkItem[]>([]);
-  const chunkLoading = ref(false);
-  const chunkTotal = ref(0);
-  const chunkQuery = reactive({ current: 1, pageSize: 10 });
-
-  const testQuestion = ref('');
-  const testMode = ref<AiKnowledgeSearchMode>('AUTO');
-  const testLoading = ref(false);
-  const testResult = ref<AiKnowledgeSearchTestResult | null>(null);
-
-  const documentPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const documentPollFailures = new Map<string, number>();
-  const pollingDocumentIds = new Set<string>();
-  let pageUnmounted = false;
-
+  const kind = ref<QueryKnowledgeKind>('TERM');
+  const isTerm = computed(() => kind.value === 'TERM');
+  const keyword = ref('');
+  const rows = ref<QueryKnowledgeItem[]>([]);
+  const sources = ref<AiAgentDatasourceItem[]>([]);
+  const loading = ref(false);
+  const loadError = ref('');
+  let version = 0;
   const canDelete = computed(() => hasAnyPermission(['AGENT:DELETE']));
-  const fileTypeOptions = computed(() => [
-    { label: t('aiKnowledge.allFileTypes'), value: '' },
-    { label: 'JPG / JPEG', value: 'jpg' },
-    { label: 'PNG', value: 'png' },
-    { label: 'WebP', value: 'webp' },
-    { label: 'PDF', value: 'pdf' },
-    { label: 'Word', value: 'docx' },
-    { label: 'Excel 97-2003', value: 'xls' },
-    { label: 'Excel', value: 'xlsx' },
-    { label: 'TXT', value: 'txt' },
-    { label: 'Markdown', value: 'md' },
+  const sourceOptions = computed(() => [
+    { label: '内置 CRM', value: 'CRM' },
+    ...sources.value.map((s) => ({ label: s.name, value: s.id })),
   ]);
-  const parseStatusOptions = computed(() => [
-    { label: t('aiKnowledge.allParseStatuses'), value: '' },
-    { label: t('aiKnowledge.status.uploaded'), value: 'UPLOADED' },
-    { label: t('aiKnowledge.status.parsing'), value: 'PARSING' },
-    { label: t('aiKnowledge.status.parsed'), value: 'PARSED' },
-    { label: t('aiKnowledge.status.failed'), value: 'FAILED' },
-  ]);
-  const enabledOptions = computed(() => [
-    { label: t('aiKnowledge.allEffectiveStatuses'), value: '' },
-    { label: t('aiKnowledge.status.active'), value: '1' },
-    { label: t('aiKnowledge.status.inactive'), value: '0' },
-  ]);
-  const testModeOptions = computed<Array<{ label: string; value: AiKnowledgeSearchMode }>>(() => [
-    { label: t('aiKnowledge.mode.auto'), value: 'AUTO' },
-    { label: t('aiKnowledge.mode.semantic'), value: 'SEMANTIC_RULE' },
-    { label: t('aiKnowledge.mode.document'), value: 'DOCUMENT' },
-  ]);
-  const fileTypeActions = computed<SheetAction[]>(() =>
-    fileTypeOptions.value.map((item) => actionWithSelection(item, query.fileType || ''))
-  );
-  const parseStatusActions = computed<SheetAction[]>(() =>
-    parseStatusOptions.value.map((item) => actionWithSelection(item, query.parseStatus || ''))
-  );
-  const enabledActions = computed<SheetAction[]>(() =>
-    enabledOptions.value.map((item) => actionWithSelection(item, query.enabled === null ? '' : String(query.enabled)))
-  );
-  const documentPageSizeActions = computed<SheetAction[]>(() =>
-    [10, 20, 50, 100].map((value) =>
-      actionWithSelection(
-        { label: `${value} / ${t('aiKnowledge.page')}`, value: String(value) },
-        String(query.pageSize)
-      )
+  const filtered = computed(() =>
+    rows.value.filter((r) =>
+      `${r.name} ${r.content} ${r.synonyms.join(' ')}`.toLowerCase().includes(keyword.value.toLowerCase())
     )
   );
-  const chunkPageSizeActions = computed<SheetAction[]>(() =>
-    [10, 20, 50].map((value) =>
-      actionWithSelection(
-        { label: `${value} / ${t('aiKnowledge.page')}`, value: String(value) },
-        String(chunkQuery.pageSize)
-      )
-    )
-  );
-  const selectedFileTypeLabel = computed(
-    () =>
-      fileTypeOptions.value.find((item) => item.value === (query.fileType || ''))?.label || t('aiKnowledge.fileType')
-  );
-  const selectedParseStatusLabel = computed(
-    () =>
-      parseStatusOptions.value.find((item) => item.value === (query.parseStatus || ''))?.label ||
-      t('aiKnowledge.parseStatus')
-  );
-  const selectedEnabledLabel = computed(
-    () =>
-      enabledOptions.value.find((item) => item.value === (query.enabled === null ? '' : String(query.enabled)))
-        ?.label || t('aiKnowledge.effectiveStatus')
-  );
-
-  function actionWithSelection(item: { label: string; value: string }, selectedValue: string): SheetAction {
-    return {
-      name: item.label,
-      value: item.value,
-      color: item.value === selectedValue ? 'var(--primary-8)' : undefined,
-    };
+  const blank = (): QueryKnowledgeItem => ({
+    kind: kind.value,
+    name: '',
+    content: '',
+    synonyms: [],
+    allDatasources: isTerm.value,
+    datasourceIds: [],
+    enabled: true,
+    revision: 0,
+  });
+  const form = ref<QueryKnowledgeItem>(blank());
+  const aliases = ref('');
+  const editorVisible = ref(false);
+  const saving = ref(false);
+  const exampleSource = computed({
+    get: () => form.value.datasourceIds[0],
+    set: (s: string) => {
+      form.value.datasourceIds = s ? [s] : [];
+    },
+  });
+  const detail = ref<QueryKnowledgeItem | null>(null);
+  const detailVisible = ref(false);
+  function scopeLabel(item: QueryKnowledgeItem) {
+    return item.allDatasources
+      ? '所有数据源'
+      : item.datasourceIds
+          .map((id) => sourceOptions.value.find((s) => s.value === id)?.label || '数据源不可用')
+          .join('、');
   }
-
-  async function loadDocuments() {
-    documentLoading.value = true;
+  function sourceType(item: QueryKnowledgeItem) {
+    return sources.value.find((s) => s.id === item.datasourceIds[0])?.type || 'MYSQL';
+  }
+  function openDetail(item: QueryKnowledgeItem) {
+    detail.value = item;
+    detailVisible.value = true;
+  }
+  function edit(item?: QueryKnowledgeItem) {
+    form.value = item ? JSON.parse(JSON.stringify(item)) : blank();
+    aliases.value = form.value.synonyms.join('\n');
+    editorVisible.value = true;
+  }
+  async function load() {
+    const token = ++version;
+    loading.value = true;
+    loadError.value = '';
     try {
-      const result = await getAiKnowledgeDocumentPage({
-        current: query.current,
-        pageSize: query.pageSize,
-        keyword: query.keyword.trim() || undefined,
-        fileType: query.fileType || undefined,
-        parseStatus: query.parseStatus || undefined,
-        enabled: query.enabled,
-      });
-      documentRows.value = result.list || [];
-      documentTotal.value = result.total || 0;
-      documentRows.value
-        .filter((document) => isParsePending(document.parseStatus))
-        .forEach((document) => scheduleDocumentPoll(document.id));
-    } finally {
-      documentLoading.value = false;
-    }
-  }
-
-  function applyDocumentFilters() {
-    query.current = 1;
-    loadDocuments();
-  }
-
-  function selectFileType(action: SheetAction) {
-    query.fileType = action.value || null;
-    applyDocumentFilters();
-  }
-
-  function selectParseStatus(action: SheetAction) {
-    query.parseStatus = action.value || null;
-    applyDocumentFilters();
-  }
-
-  function selectEnabled(action: SheetAction) {
-    query.enabled = action.value === '' ? null : Number(action.value);
-    applyDocumentFilters();
-  }
-
-  function selectDocumentPageSize(action: SheetAction) {
-    query.pageSize = Number(action.value);
-    query.current = 1;
-    loadDocuments();
-  }
-
-  function selectChunkPageSize(action: SheetAction) {
-    chunkQuery.pageSize = Number(action.value);
-    chunkQuery.current = 1;
-    loadChunks();
-  }
-
-  function openUploadPopup() {
-    selectedUploadFile.value = null;
-    uploadRemark.value = '';
-    uploadProgress.value = 0;
-    uploadPopupVisible.value = true;
-  }
-
-  function openUploadFilePicker() {
-    if (!uploadInputRef.value) return;
-    uploadInputRef.value.value = '';
-    uploadInputRef.value.click();
-  }
-
-  function handleUploadSelection(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    const extension = fileExtension(file.name);
-    if (!allowedExtensions.has(extension)) {
-      showToast(t('aiKnowledge.unsupportedFile'));
-      return;
-    }
-    if (file.size > MAX_UPLOAD_SIZE) {
-      showToast(t('aiKnowledge.fileTooLarge'));
-      return;
-    }
-    selectedUploadFile.value = file;
-  }
-
-  async function submitUpload() {
-    const file = selectedUploadFile.value;
-    if (!file || uploading.value) return;
-    uploading.value = true;
-    uploadProgress.value = 30;
-    try {
-      const uploadedDocument = await uploadAiKnowledgeDocument(file, uploadRemark.value.trim() || undefined);
-      uploadProgress.value = 100;
-      showSuccessToast(t('aiKnowledge.uploadSuccess'));
-      uploadPopupVisible.value = false;
-      await loadDocuments();
-      if (uploadedDocument?.id && isParsePending(uploadedDocument.parseStatus)) {
-        scheduleDocumentPoll(uploadedDocument.id, 500);
+      const data = await getQueryKnowledge(kind.value);
+      if (token === version) rows.value = Array.isArray(data) ? data : [];
+    } catch {
+      if (token === version) {
+        rows.value = [];
+        loadError.value = '加载失败，请刷新重试';
       }
-    } catch {
-      showFailToast(t('aiKnowledge.uploadFailed'));
     } finally {
-      uploading.value = false;
+      if (token === version) loading.value = false;
     }
   }
-
-  async function openChunks(document: AiKnowledgeDocumentItem) {
-    currentDocument.value = document;
-    chunkRows.value = [];
-    chunkQuery.current = 1;
-    chunkPopupVisible.value = true;
-    await loadChunks();
-  }
-
-  async function loadChunks() {
-    if (!currentDocument.value) return;
-    chunkLoading.value = true;
-    try {
-      const result = await getAiKnowledgeChunkPage({
-        current: chunkQuery.current,
-        pageSize: chunkQuery.pageSize,
-        documentId: currentDocument.value.id,
-      });
-      chunkRows.value = result.list || [];
-      chunkTotal.value = result.total || 0;
-    } finally {
-      chunkLoading.value = false;
-    }
-  }
-
-  async function reparse(document: AiKnowledgeDocumentItem) {
-    if (reparsingDocumentId.value) return;
-    reparsingDocumentId.value = document.id;
-    try {
-      await reparseAiKnowledgeDocument(document.id);
-      showSuccessToast(t('aiKnowledge.reparseStarted'));
-      scheduleDocumentPoll(document.id, 500);
-      await loadDocuments();
-    } finally {
-      reparsingDocumentId.value = null;
-    }
-  }
-
-  function downloadDocument(document: AiKnowledgeDocumentItem) {
-    window.open(getAiKnowledgeDocumentDownloadUrl(document.id), '_blank');
-  }
-
-  async function confirmDelete(document: AiKnowledgeDocumentItem) {
-    try {
-      await showConfirmDialog({
-        title: t('aiKnowledge.deleteDocument'),
-        message: t('aiKnowledge.deleteConfirm', { name: document.name }),
-        confirmButtonText: t('common.delete'),
-        confirmButtonColor: 'var(--error-1)',
-      });
-      await deleteAiKnowledgeDocument(document.id);
-      showSuccessToast(t('aiKnowledge.deleteSuccess'));
-      if (documentRows.value.length === 1 && query.current > 1) query.current -= 1;
-      await loadDocuments();
-    } catch {
-      // Canceling the confirmation does not require feedback.
-    }
-  }
-
-  function selectTestMode(mode: AiKnowledgeSearchMode) {
-    testMode.value = mode;
-    testResult.value = null;
-  }
-
-  async function runSearchTest() {
-    const question = testQuestion.value.trim();
-    if (!question) {
-      showToast(t('aiKnowledge.enterQuestion'));
+  async function save() {
+    if (!form.value.name.trim() || !form.value.content.trim()) return;
+    if (!form.value.allDatasources && !form.value.datasourceIds.length) {
+      showFailToast('请选择生效数据源');
       return;
     }
-    testLoading.value = true;
+    form.value.synonyms = isTerm.value
+      ? aliases.value
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    if (form.value.allDatasources) form.value.datasourceIds = [];
+    saving.value = true;
     try {
-      testResult.value = await testAiKnowledgeSearch(question, 5, testMode.value);
-    } finally {
-      testLoading.value = false;
-    }
-  }
-
-  function fileExtension(fileName: string) {
-    return fileName.split('.').pop()?.toLocaleLowerCase() || '';
-  }
-
-  function displayFileType(fileType: string) {
-    return fileType?.toLocaleUpperCase() || '-';
-  }
-
-  function formatFileSize(size?: number) {
-    const value = size || 0;
-    if (value < 1024) return `${value} B`;
-    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-    return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  }
-
-  function parseStatusText(document: AiKnowledgeDocumentItem) {
-    return (
-      parseStatusOptions.value.find((item) => item.value === document.parseStatus)?.label || document.parseStatus || '-'
-    );
-  }
-
-  function parseStatusTone(status: string) {
-    if (status === 'PARSED') return 'success';
-    if (status === 'FAILED') return 'danger';
-    if (status === 'PARSING') return 'warning';
-    return 'neutral';
-  }
-
-  function normalizedRuleStats(document: AiKnowledgeDocumentItem) {
-    return (
-      document.ruleStats || {
-        total: document.chunkCount || 0,
-        pending: 0,
-        approved: 0,
-        rejected: 0,
-        invalid: 0,
-      }
-    );
-  }
-
-  function knowledgeChunkCount(document: AiKnowledgeDocumentItem) {
-    const stats = normalizedRuleStats(document);
-    return stats.approved || document.chunkCount || 0;
-  }
-
-  function semanticDocumentStatus(document: AiKnowledgeDocumentItem) {
-    if (isParsePending(document.parseStatus)) return 'PARSING';
-    if (document.parseStatus === 'FAILED') return 'FAILED';
-    if (document.enabled) return 'ACTIVE';
-    return document.semanticStatus || 'INACTIVE';
-  }
-
-  function semanticStatusText(status: string) {
-    const labels: Record<string, string> = {
-      PARSING: t('aiKnowledge.status.extracting'),
-      FAILED: t('aiKnowledge.status.failedShort'),
-      ACTIVE: t('aiKnowledge.status.active'),
-      INACTIVE: t('aiKnowledge.status.inactive'),
-    };
-    return labels[status] || status;
-  }
-
-  function semanticStatusTone(status: string) {
-    if (status === 'ACTIVE') return 'success';
-    if (status === 'PARSING') return 'warning';
-    if (status === 'FAILED') return 'danger';
-    return 'neutral';
-  }
-
-  function isParsePending(status: string) {
-    return status === 'UPLOADED' || status === 'PARSING';
-  }
-
-  function scheduleDocumentPoll(documentId: string, delay = 2500) {
-    if (pageUnmounted || documentPollTimers.has(documentId) || pollingDocumentIds.has(documentId)) return;
-    const timer = setTimeout(() => {
-      documentPollTimers.delete(documentId);
-      pollDocumentDetail(documentId);
-    }, delay);
-    documentPollTimers.set(documentId, timer);
-  }
-
-  async function pollDocumentDetail(documentId: string) {
-    if (pageUnmounted || pollingDocumentIds.has(documentId)) return;
-    pollingDocumentIds.add(documentId);
-    let continuePolling = false;
-    try {
-      const document = await getAiKnowledgeDocumentDetail(documentId);
-      documentPollFailures.delete(documentId);
-      updateDocumentRow(document);
-      continuePolling = isParsePending(document.parseStatus);
-      if (!continuePolling) await loadDocuments();
+      await saveQueryKnowledge(form.value);
+      editorVisible.value = false;
+      showSuccessToast('保存成功');
+      await load();
     } catch {
-      const failures = (documentPollFailures.get(documentId) || 0) + 1;
-      documentPollFailures.set(documentId, failures);
-      continuePolling = failures < 3;
-      if (!continuePolling) showToast(t('aiKnowledge.refreshFailed'));
+      /* Shared API client displays the error. */
     } finally {
-      pollingDocumentIds.delete(documentId);
-      if (continuePolling) scheduleDocumentPoll(documentId);
+      saving.value = false;
     }
   }
-
-  function updateDocumentRow(document: AiKnowledgeDocumentItem) {
-    const index = documentRows.value.findIndex((item) => item.id === document.id);
-    if (index >= 0) documentRows.value.splice(index, 1, document);
+  async function toggle(item: QueryKnowledgeItem, enabled: boolean) {
+    try {
+      await enableQueryKnowledge(item, enabled);
+      await load();
+    } catch {
+      /* Preserve saved state. */
+    }
   }
-
-  function clearDocumentPolls() {
-    pageUnmounted = true;
-    documentPollTimers.forEach((timer) => clearTimeout(timer));
-    documentPollTimers.clear();
-    documentPollFailures.clear();
-    pollingDocumentIds.clear();
+  async function remove(item: QueryKnowledgeItem) {
+    try {
+      await showConfirmDialog({ title: '删除知识', message: `确定删除“${item.name}”吗？` });
+    } catch {
+      return;
+    }
+    try {
+      await deleteQueryKnowledge([item]);
+      showSuccessToast('已删除');
+      await load();
+    } catch {
+      /* Shared API client displays the error. */
+    }
   }
-
-  function matchedByText(matchedBy: string) {
-    if (matchedBy === 'CANONICAL_TERM') return t('aiKnowledge.canonicalMatch');
-    if (matchedBy === 'ALIAS') return t('aiKnowledge.aliasMatch');
-    return matchedBy;
-  }
-
-  function formatScore(score: number) {
-    return Number(score || 0).toFixed(1);
-  }
-
-  function formatInjectedContext(context: AiSemanticInjectedContext) {
-    return JSON.stringify(context, null, 2);
-  }
-
-  onMounted(loadDocuments);
-  onBeforeUnmount(clearDocumentPolls);
+  watch(kind, () => {
+    keyword.value = '';
+    editorVisible.value = false;
+    detailVisible.value = false;
+    load();
+  });
+  onMounted(async () => {
+    load();
+    try {
+      const data = await getAiAgentDatasources();
+      sources.value = Array.isArray(data) ? data : [];
+    } catch {
+      /* Shared API client displays the error. */
+    }
+  });
 </script>
 
-<style lang="less" scoped>
-  .knowledge-page {
-    padding: 12px;
+<style scoped lang="less">
+  .query-knowledge-mobile {
     min-height: 100%;
-    background: var(--text-n9);
+    background: #ffffff;
   }
-  .knowledge-summary,
-  .knowledge-section {
-    background: var(--text-n10);
-  }
-  .knowledge-summary {
+  .list-toolbar {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding: 14px;
-    border-radius: 7px;
+    align-items: center;
     gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #edf0f2;
   }
-  .knowledge-summary > div {
-    min-width: 0;
+  .list-toolbar > span {
     flex: 1;
-  }
-  .knowledge-summary h1,
-  .knowledge-summary p,
-  .section-heading h2,
-  .popup-content h2,
-  .result-section h3 {
-    margin: 0;
-  }
-  .knowledge-summary h1 {
-    font-size: 18px;
-    font-weight: 600;
-    line-height: 26px;
-    color: var(--text-n1);
-  }
-  .knowledge-summary p {
-    margin-top: 5px;
-    font-size: 12px;
-    line-height: 19px;
-    color: var(--text-n4);
-  }
-  .primary-command,
-  .search-command,
-  .test-command,
-  .popup-primary-button {
-    display: inline-flex;
-    justify-content: center;
-    align-items: center;
-    border: 0;
-    border-radius: 5px;
-    color: #ffffff;
-    background: var(--primary-8);
-    gap: 5px;
-  }
-  .primary-command {
-    padding: 0 10px;
-    min-width: 92px;
-    height: 38px;
     font-size: 13px;
-    flex-shrink: 0;
+    color: #67717c;
   }
-  .knowledge-section {
-    margin-top: 12px;
-    padding: 12px;
-    border-radius: 7px;
+  .knowledge-row {
+    padding: 16px;
+    border-bottom: 1px solid #edf0f2;
   }
-  .document-search-row {
-    display: grid;
-    align-items: center;
-    grid-template-columns: minmax(0, 1fr) 58px;
-    gap: 7px;
-  }
-  .document-search-row :deep(.van-search) {
+  .row-title {
     padding: 0;
-  }
-  .search-command {
-    height: 38px;
-    font-size: 13px;
-  }
-  .filter-strip {
-    display: grid;
-    margin-top: 9px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-  }
-  .filter-strip button,
-  .page-size-button {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    overflow: hidden;
-    min-width: 0;
-    height: 36px;
-    font-size: 12px;
-    border: 1px solid var(--text-n7);
-    border-radius: 5px;
-    color: var(--text-n3);
-    background: var(--text-n10);
-    gap: 4px;
-  }
-  .filter-strip button span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .document-loading {
-    display: flex;
-    margin-top: 12px;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .document-list {
-    display: flex;
-    margin-top: 12px;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .document-card {
-    overflow: hidden;
-    border: 1px solid var(--text-n8);
-    border-radius: 6px;
-  }
-  .document-card__header {
-    display: flex;
-    align-items: center;
-    padding: 11px 11px 9px;
-    min-width: 0;
-    gap: 9px;
-  }
-  .document-file-icon {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 36px;
-    height: 36px;
-    font-size: 19px;
-    border-radius: 5px;
-    color: var(--primary-8);
-    background: var(--primary-7);
-    flex-shrink: 0;
-  }
-  .document-title {
-    display: flex;
-    overflow: hidden;
-    min-width: 0;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .document-title strong {
-    overflow: hidden;
-    font-size: 14px;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-n1);
-  }
-  .document-title span,
-  .document-stats span {
-    font-size: 11px;
-    color: var(--text-n4);
-  }
-  .document-stats {
-    display: grid;
-    padding: 9px 11px;
-    border-top: 1px solid var(--text-n8);
-    border-bottom: 1px solid var(--text-n8);
-    background: var(--text-n9);
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .document-stats > div {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .document-stats strong {
-    overflow: hidden;
-    font-size: 12px;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-n2);
-  }
-  .status-text--success {
-    color: var(--success-1) !important;
-  }
-  .status-text--warning {
-    color: var(--warning-1) !important;
-  }
-  .status-text--danger {
-    color: var(--error-1) !important;
-  }
-  .status-text--neutral {
-    color: var(--text-n3) !important;
-  }
-  .document-remark {
-    margin: 0;
-    padding: 9px 11px 0;
-    font-size: 12px;
-    line-height: 18px;
-    color: var(--text-n3);
-    overflow-wrap: anywhere;
-  }
-  .document-actions {
-    display: grid;
-    padding: 7px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-  }
-  .document-actions button {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    padding: 0 3px;
-    min-width: 0;
-    height: 34px;
-    font-size: 11px;
+    font-size: 15px;
+    font-weight: 600;
     border: 0;
-    border-radius: 4px;
-    white-space: nowrap;
-    color: var(--primary-8);
+    text-align: left;
+    color: #009fa7;
     background: transparent;
-    gap: 3px;
+    overflow-wrap: anywhere;
   }
-  .document-actions button:disabled {
-    opacity: 0.5;
-  }
-  .document-actions .danger-action {
-    color: var(--error-1);
-  }
-  .pagination-row,
-  .chunk-pagination {
-    display: flex;
-    align-items: center;
-    margin-top: 12px;
-    gap: 8px;
-  }
-  .pagination-row :deep(.van-pagination),
-  .chunk-pagination :deep(.van-pagination) {
-    min-width: 0;
-    flex: 1;
-  }
-  .page-size-button {
-    padding: 0 8px;
-    flex-shrink: 0;
-  }
-  .section-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-  }
-  .section-heading h2 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-n1);
-  }
-  .test-mode-switch {
-    display: grid;
+  .knowledge-row p {
     overflow: hidden;
-    border: 1px solid var(--text-n7);
-    border-radius: 5px;
-    grid-template-columns: repeat(3, auto);
-  }
-  .test-mode-switch button {
-    padding: 0 7px;
-    height: 30px;
-    font-size: 11px;
-    border: 0;
-    border-right: 1px solid var(--text-n7);
-    white-space: nowrap;
-    color: var(--text-n3);
-    background: var(--text-n10);
-  }
-  .test-mode-switch button:last-child {
-    border-right: 0;
-  }
-  .test-mode-switch button.active {
-    color: #ffffff;
-    background: var(--primary-8);
-  }
-  .test-question {
-    margin-top: 11px;
-    border: 1px solid var(--text-n7);
-    border-radius: 5px;
-  }
-  .test-command {
-    margin-top: 9px;
-    width: 100%;
-    height: 40px;
+    margin: 8px 0;
+    max-height: 66px;
     font-size: 13px;
-  }
-  .test-command:disabled,
-  .popup-primary-button:disabled {
-    opacity: 0.5;
-  }
-  .test-results {
-    display: flex;
-    margin-top: 12px;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .result-alert {
-    padding: 10px;
-    font-size: 12px;
-    border-radius: 5px;
-    line-height: 19px;
+    color: #46515d;
+    line-height: 1.7;
     overflow-wrap: anywhere;
   }
-  .result-alert--info {
-    color: var(--primary-8);
-    background: var(--primary-7);
-  }
-  .result-alert--warning {
-    color: var(--warning-1);
-    background: var(--warning-5);
-  }
-  .result-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .result-section h3 {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-n1);
-  }
-  .result-section__heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-  }
-  .result-section__heading > span {
-    padding: 3px 6px;
-    font-size: 10px;
-    border-radius: 4px;
-    color: var(--success-1);
-    background: var(--success-5);
-  }
-  .match-card {
-    padding: 10px;
-    border: 1px solid var(--text-n8);
-    border-radius: 5px;
-  }
-  .match-card > strong {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-n1);
-  }
-  .match-meta {
-    display: flex;
-    margin-top: 4px;
-    flex-wrap: wrap;
-    font-size: 11px;
-    color: var(--text-n4);
-    gap: 8px;
-  }
-  .match-card p {
-    margin: 7px 0 0;
-    font-size: 12px;
-    line-height: 19px;
-    color: var(--text-n2);
-    overflow-wrap: anywhere;
-  }
-  .result-section pre {
-    overflow: auto;
-    margin: 0;
-    padding: 10px;
-    max-height: 260px;
-    font-size: 11px;
-    font-family: Consolas, Monaco, monospace;
-    border: 1px solid var(--text-n8);
-    border-radius: 5px;
-    white-space: pre-wrap;
-    color: var(--text-n2);
-    background: var(--text-n9);
-    line-height: 18px;
-    overflow-wrap: anywhere;
-  }
-  :global(.knowledge-popup) {
-    max-height: 88vh;
-  }
-  .popup-content {
-    padding: 18px 16px max(18px, env(safe-area-inset-bottom));
-  }
-  .popup-content h2 {
-    padding-right: 30px;
-    font-size: 17px;
-    font-weight: 600;
-    color: var(--text-n1);
-  }
-  .field-label {
+  .knowledge-row small {
     display: block;
-    margin: 18px 0 7px;
-    font-size: 13px;
-    color: var(--text-n2);
-  }
-  .popup-field {
-    border: 1px solid var(--text-n7);
-    border-radius: 5px;
-  }
-  .hidden-file-input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-  }
-  .file-picker {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    margin-top: 12px;
-    padding: 12px;
-    width: 100%;
-    min-height: 62px;
-    border: 1px dashed var(--primary-8);
-    border-radius: 6px;
-    color: var(--primary-8);
-    background: var(--primary-7);
-    flex-direction: column;
-    gap: 5px;
-  }
-  .file-picker > span {
-    overflow: hidden;
-    max-width: 100%;
-    font-size: 13px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .file-picker small {
-    color: var(--text-n4);
-  }
-  .upload-helper {
-    margin: 8px 0 12px;
-    font-size: 11px;
-    line-height: 18px;
-    color: var(--text-n4);
-  }
-  .popup-primary-button {
-    margin-top: 14px;
-    width: 100%;
-    height: 42px;
-    font-size: 14px;
-  }
-  :global(.chunk-popup) {
-    width: 100%;
-    height: 100%;
-  }
-  .chunk-page {
-    display: flex;
-    overflow: hidden;
-    height: 100%;
-    background: var(--text-n9);
-    flex-direction: column;
-  }
-  .chunk-page__header {
-    display: flex;
-    align-items: center;
-    padding: 7px 12px;
-    min-height: 54px;
-    border-bottom: 1px solid var(--text-n8);
-    background: var(--text-n10);
-    gap: 9px;
-    flex-shrink: 0;
-  }
-  .chunk-page__header button {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 38px;
-    height: 38px;
-    font-size: 18px;
-    border: 0;
-    color: var(--text-n1);
-    background: transparent;
-  }
-  .chunk-page__header > div {
-    display: flex;
-    overflow: hidden;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .chunk-page__header h2 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-n1);
-  }
-  .chunk-page__header span {
-    overflow: hidden;
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-n4);
-  }
-  .chunk-list-wrap {
-    overflow-y: auto;
-    padding: 12px;
-    min-height: 0;
-    flex: 1;
-  }
-  .chunk-list {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-  }
-  .chunk-card {
-    padding: 11px;
-    border: 1px solid var(--text-n8);
-    border-radius: 6px;
-    background: var(--text-n10);
-  }
-  .chunk-card header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  .chunk-card strong {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-n1);
-  }
-  .chunk-card header span {
-    font-size: 11px;
-    white-space: nowrap;
-    color: var(--text-n4);
-  }
-  .chunk-card p {
-    margin: 8px 0 0;
-    font-size: 12px;
-    white-space: pre-wrap;
-    color: var(--text-n2);
-    line-height: 19px;
+    color: #67717c;
     overflow-wrap: anywhere;
   }
-  .chunk-pagination {
-    margin: 0;
-    padding: 8px 10px max(8px, env(safe-area-inset-bottom));
-    border-top: 1px solid var(--text-n8);
-    background: var(--text-n10);
-    flex-shrink: 0;
+  .row-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 16px;
+    margin-top: 12px;
   }
-
-  @media (max-width: 340px) {
-    .knowledge-summary {
-      flex-direction: column;
-    }
-    .primary-command {
-      width: 100%;
-    }
-    .document-actions {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .section-heading {
-      align-items: flex-start;
-      flex-direction: column;
-    }
+  .knowledge-popup {
+    overflow: auto;
+    max-height: 90vh;
+  }
+  h2 {
+    margin: 20px 48px 20px 16px;
+    font-size: 18px;
+    overflow-wrap: anywhere;
+  }
+  h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+  }
+  .source-options,
+  .save-command {
+    padding: 16px;
+  }
+  .source-options :deep(.van-checkbox),
+  .source-options :deep(.van-radio) {
+    margin-bottom: 12px;
+  }
+  .detail-scope {
+    padding: 0 16px;
+    font-size: 13px;
+    color: #67717c;
+    overflow-wrap: anywhere;
+  }
+  .detail-content {
+    margin: 16px;
+    font-size: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.8;
+  }
+  .sql-content {
+    overflow: auto;
+    padding: 12px;
+    font-family: Consolas, monospace;
+    background: #f4f6f8;
   }
 </style>

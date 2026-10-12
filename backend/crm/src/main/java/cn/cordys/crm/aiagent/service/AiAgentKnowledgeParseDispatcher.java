@@ -6,13 +6,12 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Component
+// Not a Spring bean: historical document parsing must not resume on startup.
 @Slf4j
 public class AiAgentKnowledgeParseDispatcher {
 

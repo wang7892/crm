@@ -2,8 +2,10 @@ package cn.cordys.crm.aiagent.mapper;
 
 import cn.cordys.crm.aiagent.domain.AiKnowledgeChunk;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeDocument;
+import cn.cordys.crm.aiagent.domain.AiKnowledgeDocumentVersion;
 import cn.cordys.crm.aiagent.domain.AiKnowledgeParseJob;
 import cn.cordys.crm.aiagent.dto.request.AiKnowledgeDocumentPageRequest;
+import cn.cordys.crm.aiagent.dto.request.AiKnowledgeVersionPageRequest;
 import cn.cordys.crm.aiagent.dto.request.AiSemanticRulePageRequest;
 import org.apache.ibatis.annotations.Param;
 
@@ -28,6 +30,34 @@ public interface AiAgentKnowledgeMapper {
 
     AiKnowledgeDocument getKnowledgeDocumentForUpdate(@Param("documentId") String documentId,
                                                        @Param("orgId") String orgId);
+
+    List<AiKnowledgeDocumentVersion> listDocumentVersions(@Param("request") AiKnowledgeVersionPageRequest request,
+                                                          @Param("orgId") String orgId);
+
+    AiKnowledgeDocumentVersion getActiveDocumentVersion(@Param("documentId") String documentId,
+                                                         @Param("orgId") String orgId);
+
+    AiKnowledgeDocumentVersion getDocumentVersion(@Param("versionId") String versionId,
+                                                   @Param("orgId") String orgId);
+
+    AiKnowledgeDocumentVersion getDocumentVersionForUpdate(@Param("versionId") String versionId,
+                                                            @Param("orgId") String orgId);
+
+    int maxDocumentVersion(@Param("documentId") String documentId,
+                           @Param("orgId") String orgId);
+
+    int updateDocumentVersionState(@Param("versionId") String versionId,
+                                   @Param("orgId") String orgId,
+                                   @Param("status") String status,
+                                   @Param("errorMessage") String errorMessage,
+                                   @Param("updateUser") String updateUser,
+                                   @Param("updateTime") long updateTime);
+
+    int archiveActiveDocumentVersions(@Param("documentId") String documentId,
+                                      @Param("orgId") String orgId,
+                                      @Param("exceptVersionId") String exceptVersionId,
+                                      @Param("updateUser") String updateUser,
+                                      @Param("updateTime") long updateTime);
 
     int claimParseJob(@Param("jobId") String jobId,
                       @Param("now") long now);
@@ -130,4 +160,7 @@ public interface AiAgentKnowledgeMapper {
 
     int deleteChunksByDocumentId(@Param("documentId") String documentId,
                                  @Param("orgId") String orgId);
+
+    int deleteDocumentVersions(@Param("documentId") String documentId,
+                               @Param("orgId") String orgId);
 }

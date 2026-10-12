@@ -48,6 +48,15 @@ public class AiAgentSqlBuilder {
         sql.append(permissionSql.whereSql());
         appendFilters(sql, params, plan, entity, context);
         appendGroupBy(sql, plan, entity);
+        if (plan.getTopN() != null) {
+            String partition = plan.getRankPartitions().isEmpty() ? ""
+                    : "PARTITION BY " + String.join(", ", plan.getRankPartitions()) + " ";
+            String ranking = "SELECT agent_groups.*, ROW_NUMBER() OVER (" + partition + "ORDER BY "
+                    + String.join(", ", aggregateOrders(plan)) + ") AS ranking_position FROM (" + sql + ") agent_groups";
+            sql = new StringBuilder("SELECT * FROM (" + ranking + ") agent_ranked WHERE ranking_position <= " + plan.getTopN());
+        }
+        // Count the identical filtered result (or grouped result), before pagination.
+        String countSql = "SELECT COUNT(*) FROM (" + sql + ") agent_result_count";
         appendOrderBy(sql, plan, entity);
         appendLimit(sql, plan);
 
@@ -58,7 +67,8 @@ public class AiAgentSqlBuilder {
                 entity,
                 plan,
                 fieldLabels(entity),
-                fieldMasks(entity)
+                fieldMasks(entity),
+                countSql
         );
     }
 
@@ -83,6 +93,8 @@ public class AiAgentSqlBuilder {
             String function = StringUtils.lowerCase(metric.getFunction(), Locale.ROOT);
             if (StringUtils.equals(function, "count")) {
                 selects.add("COUNT(1) AS " + alias);
+            } else if (StringUtils.equals(function, "count_distinct")) {
+                selects.add("COUNT(DISTINCT " + field.expression() + ") AS " + alias);
             } else {
                 selects.add(function.toUpperCase(Locale.ROOT) + "(" + field.expression() + ") AS " + alias);
             }
@@ -99,6 +111,11 @@ public class AiAgentSqlBuilder {
         for (AiAgentQueryFilter filter : plan.getFilters()) {
             AiAgentSemanticSchemaService.FieldSpec field = entity.findField(filter.getField()).orElseThrow();
             String operator = StringUtils.lowerCase(filter.getOperator(), Locale.ROOT);
+            if (StringUtils.equals(operator, "between")
+                    && isCurrentTimeWindow(filter.getValue())
+                    && isAllTimeWindow(context)) {
+                continue;
+            }
             if (appendSpecialFilter(sql, params, field, operator, filter.getValue(), index)) {
                 index++;
                 continue;
@@ -177,12 +194,24 @@ public class AiAgentSqlBuilder {
         } else if (rawValue instanceof Collection<?> collection && collection.size() >= 2) {
             List<?> values = new ArrayList<>(collection);
             start = coerceValue(field, values.get(0), context, true);
-            end = coerceValue(field, values.get(1), context, false);
+            Object endValue = values.get(1);
+            if ((field.valueKind() == AiAgentSemanticSchemaService.ValueKind.EPOCH_MILLIS
+                    || field.valueKind() == AiAgentSemanticSchemaService.ValueKind.SQL_TIMESTAMP)
+                    && endValue instanceof String text && text.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                endValue = LocalDate.parse(text).plusDays(1).toString();
+            }
+            end = coerceValue(field, endValue, context, false);
         } else {
             throw new IllegalArgumentException("between 过滤需要两个值或 CURRENT_TIME_WINDOW");
         }
-        sql.append(" AND ").append(field.expression()).append(" BETWEEN :").append(paramName).append("Start")
-                .append(" AND :").append(paramName).append("End");
+        if (field.valueKind() == AiAgentSemanticSchemaService.ValueKind.EPOCH_MILLIS
+                || field.valueKind() == AiAgentSemanticSchemaService.ValueKind.SQL_TIMESTAMP) {
+            sql.append(" AND ").append(field.expression()).append(" >= :").append(paramName).append("Start")
+                    .append(" AND ").append(field.expression()).append(" < :").append(paramName).append("End");
+        } else {
+            sql.append(" AND ").append(field.expression()).append(" BETWEEN :").append(paramName).append("Start")
+                    .append(" AND :").append(paramName).append("End");
+        }
         params.put(paramName + "Start", start);
         params.put(paramName + "End", end);
     }
@@ -199,24 +228,48 @@ public class AiAgentSqlBuilder {
     }
 
     private void appendOrderBy(StringBuilder sql, AiAgentQueryPlan plan, AiAgentSemanticSchemaService.EntitySpec entity) {
-        if (plan.getOrderBy() == null || plan.getOrderBy().isEmpty()) {
+        if (!StringUtils.equals(plan.getQueryType(), "LIST")) {
+            if (plan.getGroupBy() != null && !plan.getGroupBy().isEmpty()) {
+                List<String> orders = new ArrayList<>();
+                plan.getRankPartitions().forEach(field -> orders.add(field + " ASC"));
+                orders.addAll(aggregateOrders(plan));
+                sql.append(" ORDER BY ").append(String.join(", ", orders));
+            }
             return;
         }
         List<String> orders = new ArrayList<>();
-        for (AiAgentQueryOrder order : plan.getOrderBy()) {
+        for (AiAgentQueryOrder order : plan.getOrderBy() == null ? List.<AiAgentQueryOrder>of() : plan.getOrderBy()) {
             AiAgentSemanticSchemaService.FieldSpec field = entity.findField(order.getField()).orElseThrow();
             orders.add(field.expression() + " " + (StringUtils.equals(order.getDirection(), "asc") ? "ASC" : "DESC"));
+        }
+        // Stable tie-breaker prevents different pages from repeating an arbitrary LIMIT subset.
+        if (plan.getOrderBy() == null || plan.getOrderBy().stream().noneMatch(order -> "id".equals(order.getField()))) {
+            entity.findField("id").ifPresent(field -> orders.add(field.expression() + " ASC"));
         }
         if (!orders.isEmpty()) {
             sql.append(" ORDER BY ").append(String.join(", ", orders));
         }
     }
 
+    private List<String> aggregateOrders(AiAgentQueryPlan plan) {
+        List<String> orders = new ArrayList<>();
+        for (AiAgentQueryOrder order : plan.getOrderBy()) {
+            orders.add(order.getField() + ("asc".equals(order.getDirection()) ? " ASC" : " DESC"));
+        }
+        plan.getGroupBy().stream().filter(field -> plan.getOrderBy().stream().noneMatch(order -> field.equals(order.getField())))
+                .forEach(field -> orders.add(field + " ASC"));
+        return orders;
+    }
+
     private void appendLimit(StringBuilder sql, AiAgentQueryPlan plan) {
+        if (Integer.valueOf(AiAgentResultWindow.UNLIMITED).equals(plan.getLimit())) return;
         if (StringUtils.equals(plan.getQueryType(), "COUNT") && (plan.getGroupBy() == null || plan.getGroupBy().isEmpty())) {
             return;
         }
         sql.append(" LIMIT ").append(plan.getLimit());
+        if (plan.getOffset() != null && plan.getOffset() > 0) {
+            sql.append(" OFFSET ").append(plan.getOffset());
+        }
     }
 
     private List<Object> coerceCollection(AiAgentSemanticSchemaService.FieldSpec field, Object value, AiAgentContext context) {
@@ -261,16 +314,20 @@ public class AiAgentSqlBuilder {
         }
         String text = StringUtils.defaultString(String.valueOf(value)).trim();
         try {
-            if (text.length() >= 10 && text.charAt(4) == '-') {
-                LocalDate date = LocalDate.parse(text.substring(0, 10));
-                if (!startOfDay) {
-                    date = date.plusDays(1);
+            if (text.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                return LocalDate.parse(text).atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
+            }
+            if (text.contains("T") || text.contains(" ")) {
+                String iso = text.replace(' ', 'T');
+                try {
+                    return Instant.parse(iso).toEpochMilli();
+                } catch (java.time.format.DateTimeParseException ignored) {
+                    return java.time.LocalDateTime.parse(iso).atZone(AGENT_ZONE).toInstant().toEpochMilli();
                 }
-                return date.atStartOfDay(AGENT_ZONE).toInstant().toEpochMilli();
             }
             return Long.parseLong(text);
         } catch (Exception ignored) {
-            return 0L;
+            throw new IllegalArgumentException("日期格式无效：" + text);
         }
     }
 
@@ -281,24 +338,18 @@ public class AiAgentSqlBuilder {
         if (value instanceof Number number) {
             return new Timestamp(number.longValue());
         }
-        String text = StringUtils.defaultString(String.valueOf(value)).trim();
-        try {
-            if (text.length() >= 10 && text.charAt(4) == '-') {
-                LocalDate date = LocalDate.parse(text.substring(0, 10));
-                if (!startOfDay) {
-                    date = date.plusDays(1);
-                }
-                return Timestamp.from(date.atStartOfDay(AGENT_ZONE).toInstant());
-            }
-            return Timestamp.from(Instant.parse(text));
-        } catch (Exception ignored) {
-            return null;
-        }
+        return new Timestamp(toEpochMillis(value, startOfDay));
     }
 
     private boolean isCurrentTimeWindow(Object value) {
         return StringUtils.equalsIgnoreCase(StringUtils.defaultString(value == null ? null : String.valueOf(value)).trim(),
                 "CURRENT_TIME_WINDOW");
+    }
+
+    private boolean isAllTimeWindow(AiAgentContext context) {
+        return context != null
+                && context.getTimeWindow() != null
+                && StringUtils.equals(context.getTimeWindow().label(), "全部");
     }
 
     private Map<String, String> fieldLabels(AiAgentSemanticSchemaService.EntitySpec entity) {
@@ -337,7 +388,14 @@ public class AiAgentSqlBuilder {
             AiAgentSemanticSchemaService.EntitySpec entity,
             AiAgentQueryPlan plan,
             Map<String, String> fieldLabels,
-            Map<String, String> fieldMasks
+            Map<String, String> fieldMasks,
+            String countSql
     ) {
+        public BuiltQuery(String sql, Map<String, Object> params,
+                          AiAgentSemanticSchemaService.DataSourceKind dataSourceKind,
+                          AiAgentSemanticSchemaService.EntitySpec entity, AiAgentQueryPlan plan,
+                          Map<String, String> fieldLabels, Map<String, String> fieldMasks) {
+            this(sql, params, dataSourceKind, entity, plan, fieldLabels, fieldMasks, null);
+        }
     }
 }

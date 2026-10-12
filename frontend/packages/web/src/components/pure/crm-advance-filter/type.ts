@@ -6,7 +6,7 @@ import { SelectedUsersItem } from '@lib/shared/models/system/module';
 
 import type { DataSourceProps } from '../../business/crm-data-source-select/type';
 import type { UserTagSelectorProps } from '../../business/crm-user-tag-selector/type';
-import { InternalRowData } from 'naive-ui/es/data-table/src/interface';
+import type { InternalRowData } from 'naive-ui/es/data-table/src/interface';
 
 export interface ScopeProps {
   disabled: boolean;

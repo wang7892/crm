@@ -1,9 +1,9 @@
+import type { QueryKnowledgeItem, QueryKnowledgeKind, QueryKnowledgeMatches } from './queryKnowledge';
 import type { CordysAxios } from '@lib/shared/api/http/Axios';
-import type { Result } from '@lib/shared/types/axios';
 import {
+  AiAgentAttachmentChatUrl,
   AiAgentAudioTranscriptionQueryUrl,
   AiAgentAudioTranscriptionsUrl,
-  AiAgentAttachmentChatUrl,
   AiAgentCancelChatUrl,
   AiAgentChatUrl,
   AiAgentDeleteSessionUrl,
@@ -15,10 +15,15 @@ import {
   AiKnowledgeDocumentDetailUrl,
   AiKnowledgeDocumentDisableUrl,
   AiKnowledgeDocumentDownloadUrl,
+  AiKnowledgeDocumentEditUrl,
   AiKnowledgeDocumentEnableUrl,
   AiKnowledgeDocumentPageUrl,
   AiKnowledgeDocumentReparseUrl,
   AiKnowledgeDocumentUploadUrl,
+  AiKnowledgeDocumentVersionDeleteUrl,
+  AiKnowledgeDocumentVersionDetailUrl,
+  AiKnowledgeDocumentVersionPageUrl,
+  AiKnowledgeDocumentVersionRestoreUrl,
   AiKnowledgeSearchTestUrl,
   AiSemanticRuleBatchReviewUrl,
   AiSemanticRulePageUrl,
@@ -26,15 +31,24 @@ import {
   AiSemanticRuleSaveUrl,
   AiSemanticRuleSchemaOptionsUrl,
 } from '@lib/shared/api/requrls/aiAgent';
+import { getToken } from '@lib/shared/method/auth';
+import { getLocalStorage } from '@lib/shared/method/local-storage';
+import type { Result } from '@lib/shared/types/axios';
+import { type AiAgentStreamEvent, readAiAgentStream } from '@lib/shared/utils/aiAgentStream';
 
 export interface AiAgentChatParams {
   requestId?: string;
   sessionId?: string;
+  continueFromMessageId?: string;
+  referenceMessageId?: string;
+  action?: 'QUERY' | 'ANALYSIS' | 'PREDICT' | 'REGENERATE';
   question: string;
   stream?: boolean;
+  limitRows?: boolean;
   timeRange?: string;
   dataScope?: string;
   llmProvider?: string;
+  datasourceId?: string;
   context?: Record<string, unknown>;
 }
 
@@ -54,16 +68,75 @@ export interface AiAgentCitation {
   updatedAt?: string;
 }
 
+export interface AiAgentPageInfo {
+  total?: number | null;
+  offset: number;
+  returned: number;
+  remaining?: number | null;
+  hasMore: boolean;
+  continuable: boolean;
+  unit: string;
+}
+
+export interface AiAgentProcessDetail {
+  type: string;
+  title: string;
+  content: string;
+}
+
+export interface AiAgentProcessStep {
+  name: string;
+  summary: string;
+  details?: AiAgentProcessDetail[];
+  durationMs?: number | null;
+  status?: 'RUNNING' | 'SUCCESS' | 'FAILED' | null;
+}
+
 export interface AiAgentChatResult {
+  datasourceId?: string;
+  datasourceName?: string;
+  datasourceType?: string;
   sessionId: string;
   messageId: string;
   answer: string;
+  reasoningContent?: string;
+  resultTable?: AiAgentResultTable;
+  predictionTable?: AiAgentResultTable;
+  recommendedQuestions?: string[];
+  queryQuestion?: string;
+  queryError?: string;
+  chartConfig?: Record<string, unknown>;
+  modelCalls?: AiAgentModelCall[];
+  durationMs?: number | null;
+  totalTokens?: number | null;
   intent?: string;
+  llmProvider?: string;
+  llmModel?: string;
+  pageInfo?: AiAgentPageInfo;
+  sqlQueries?: string[];
+  charts?: AiAgentChart[];
+  processSteps?: AiAgentProcessStep[];
   points?: string[];
   evidence?: string[];
   warnings?: string[];
   tools?: AiAgentToolCall[];
   citations?: AiAgentCitation[];
+}
+
+export interface AiAgentResultTable {
+  columns: { key: string; label: string; type: string }[];
+  rows: Record<string, unknown>[];
+}
+
+export interface AiAgentModelCall {
+  stage: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  status: string;
 }
 
 export interface AiAgentAudioTranscriptionResult {
@@ -120,6 +193,46 @@ export interface AiKnowledgeDocumentItem {
   semanticStatus?: string;
   ruleStats?: AiSemanticRuleStats;
   remark?: string;
+  activeVersionId?: string;
+  activeVersion?: number;
+  latestVersion?: number;
+  knowledgeAvailable?: boolean;
+  createTime?: number;
+  updateTime?: number;
+}
+
+export interface AiKnowledgeDocumentEditResult {
+  documentId: string;
+  name: string;
+  originalName: string;
+  fileType: string;
+  remark?: string;
+  content: string;
+  activeVersion: number;
+  revision: number;
+  parseStatus: string;
+}
+
+export interface AiKnowledgeDocumentEditParams {
+  name: string;
+  remark?: string;
+  content: string;
+  expectedRevision: number;
+}
+
+export interface AiKnowledgeDocumentVersionItem {
+  id: string;
+  documentId: string;
+  version: number;
+  name: string;
+  remark?: string;
+  content?: string;
+  status: string;
+  source: string;
+  sourceVersion?: number;
+  errorMessage?: string;
+  createUser?: string;
+  createUserName?: string;
   createTime?: number;
   updateTime?: number;
 }
@@ -358,9 +471,156 @@ export interface AiAgentMessageItem {
   createTime?: number;
 }
 
+export type AiAgentDatasourceType = 'MYSQL' | 'POSTGRESQL' | 'ORACLE' | 'SQLSERVER' | 'FILE';
+
+export interface AiAgentDatasourceTable {
+  name: string;
+  comment?: string;
+  columns: { name: string; type: string; comment?: string }[];
+  relations?: AiAgentDatasourceRelation[];
+}
+
+export interface AiAgentChart {
+  title: string;
+  type: 'column' | 'bar' | 'line' | 'pie';
+  predictionStart?: number;
+  dimension: string;
+  categories: string[];
+  series: { name: string; values: Array<number | null> }[];
+  partial: boolean;
+  coverage: string;
+}
+
+export interface AiAgentDatasourceRelation {
+  sourceTable: string;
+  sourceColumn: string;
+  targetTable: string;
+  targetColumn: string;
+}
+
+export interface AiAgentDatasourceConfig {
+  id?: string;
+  name: string;
+  type: AiAgentDatasourceType;
+  host?: string;
+  port?: number | null;
+  database?: string;
+  schema?: string;
+  username?: string;
+  password?: string;
+  ssl?: boolean;
+  selectedTables: string[];
+  revision?: number;
+  metadata?: AiAgentDatasourceTable[];
+  relations?: AiAgentDatasourceRelation[];
+}
+
+export interface AiAgentDatasourceItem extends AiAgentDatasourceConfig {
+  id: string;
+  revision: number;
+  updateTime: number;
+  passwordConfigured: boolean;
+  tableCount: number;
+  tables: AiAgentDatasourceTable[];
+  relations?: AiAgentDatasourceRelation[];
+}
+
 export default function useAiAgentApi(CDR: CordysAxios) {
+  const queryKnowledgeUrl = '/ai-agent/query-knowledge';
+  function getQueryKnowledge(kind: QueryKnowledgeKind) {
+    return CDR.get<QueryKnowledgeItem[]>({ url: queryKnowledgeUrl, params: { kind } });
+  }
+  function saveQueryKnowledge(data: QueryKnowledgeItem) {
+    return CDR.post<QueryKnowledgeItem>({ url: queryKnowledgeUrl, data });
+  }
+  function enableQueryKnowledge(item: QueryKnowledgeItem, enabled: boolean) {
+    return CDR.post<QueryKnowledgeItem>({
+      url: `${queryKnowledgeUrl}/${item.id}/enabled`,
+      data: { revision: item.revision, enabled },
+    });
+  }
+  function deleteQueryKnowledge(items: QueryKnowledgeItem[]) {
+    return CDR.post<void>({
+      url: `${queryKnowledgeUrl}/delete`,
+      data: items.map((i) => ({ id: i.id, revision: i.revision })),
+    });
+  }
+  function testQueryKnowledge(question: string, datasourceId: string) {
+    return CDR.post<QueryKnowledgeMatches>({ url: `${queryKnowledgeUrl}/search`, data: { question, datasourceId } });
+  }
+  function exportQueryKnowledge(kind: QueryKnowledgeKind, ids: string[], template = false) {
+    return CDR.get<{ data: Blob }>(
+      {
+        url: `${queryKnowledgeUrl}/export`,
+        params: { kind, ...(ids.length ? { ids: ids.join(',') } : {}), template },
+        responseType: 'blob',
+      },
+      { isTransformResponse: false, isReturnNativeResponse: true }
+    );
+  }
+  async function importQueryKnowledge(kind: QueryKnowledgeKind, file: File) {
+    const response = await CDR.uploadFile<Result<{ imported: number }>>(
+      { url: `${queryKnowledgeUrl}/import`, params: { kind } },
+      { fileList: [file] },
+      'file'
+    );
+    if (!response?.data) throw new Error(response?.message || '导入接口未返回有效结果');
+    return response.data;
+  }
+  const datasourceUrl = '/ai-agent/datasources';
+  function getAiAgentDatasources() {
+    return CDR.get<AiAgentDatasourceItem[]>({ url: datasourceUrl }, { noErrorTip: true });
+  }
+  function saveAiAgentDatasource(data: AiAgentDatasourceConfig) {
+    return CDR.post<AiAgentDatasourceItem>({ url: datasourceUrl, data });
+  }
+  function testAiAgentDatasource(data: AiAgentDatasourceConfig) {
+    return CDR.post<void>({ url: `${datasourceUrl}/test`, data });
+  }
+  function getAiAgentDatasourceTables(data: AiAgentDatasourceConfig) {
+    return CDR.post<AiAgentDatasourceTable[]>({ url: `${datasourceUrl}/tables`, data });
+  }
+  function deleteAiAgentDatasource(id: string) {
+    return CDR.delete<void>({ url: `${datasourceUrl}/${id}` });
+  }
+  async function uploadAiAgentDatasource(name: string, file: File, encoding: string) {
+    const response = await CDR.uploadFile<Result<AiAgentDatasourceItem>>(
+      { url: `${datasourceUrl}/upload`, params: { name, encoding } },
+      { fileList: [file] },
+      'file'
+    );
+    if (!response?.data) throw new Error(response?.message || '文件接口未返回有效数据源');
+    return response.data;
+  }
   function chatAiAgent(data: AiAgentChatParams, signal?: AbortSignal) {
     return CDR.post<AiAgentChatResult>({ url: AiAgentChatUrl, data, signal }, { noErrorTip: true });
+  }
+
+  async function streamAiAgent(
+    data: AiAgentChatParams,
+    onEvent: (event: AiAgentStreamEvent) => void,
+    signal?: AbortSignal
+  ): Promise<AiAgentChatResult> {
+    const token = getToken();
+    const app = getLocalStorage<{ orgId?: string }>('app', true);
+    const headers = new Headers({ 'Content-Type': 'application/json', 'Accept': 'text/event-stream' });
+    headers.set('Accept-Language', localStorage.getItem('CRM-locale') || 'zh-CN');
+    if (token?.sessionId) headers.set('X-AUTH-TOKEN', token.sessionId);
+    if (token?.csrfToken) headers.set('CSRF-TOKEN', token.csrfToken);
+    if (app?.orgId) headers.set('Organization-Id', app.orgId);
+    const response = await fetch(CDR.axiosInstance.getUri({ url: `${AiAgentChatUrl}/stream` }), {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+      signal,
+      body: JSON.stringify({ ...data, stream: true }),
+    });
+    // Only unsupported endpoints can be retried without risking duplicate stored turns or queries.
+    if ([404, 405, 406, 415].includes(response.status)) return chatAiAgent({ ...data, stream: false }, signal);
+    if (!response.ok) throw new Error(`问答请求失败（HTTP ${response.status}）`);
+    if (!response.headers.get('Content-Type')?.includes('text/event-stream') || !response.body)
+      throw new Error('流式接口未返回有效数据，请重新登录或检查后端版本');
+    return readAiAgentStream<AiAgentChatResult>(response.body, onEvent);
   }
 
   async function chatAiAgentWithAttachments(data: AiAgentChatParams, files: File[], signal?: AbortSignal) {
@@ -377,6 +637,17 @@ export default function useAiAgentApi(CDR: CordysAxios) {
 
   function cancelAiAgentChat(requestId: string) {
     return CDR.post<void>({ url: `${AiAgentCancelChatUrl}/${requestId}` }, { noErrorTip: true });
+  }
+
+  function exportAiAgentResult(sessionId: string, messageId: string, datasourceId?: string) {
+    return CDR.post<Blob>(
+      {
+        url: '/ai-agent/result/export',
+        data: { sessionId, referenceMessageId: messageId, question: '导出查询结果', datasourceId },
+        responseType: 'blob',
+      },
+      { isTransformResponse: false }
+    );
   }
 
   function transcribeAiAgentAudio(file: File, language?: AiAgentAudioLanguage) {
@@ -416,6 +687,36 @@ export default function useAiAgentApi(CDR: CordysAxios) {
 
   function getAiKnowledgeDocumentDetail(id: string) {
     return CDR.get<AiKnowledgeDocumentItem>({ url: `${AiKnowledgeDocumentDetailUrl}/${id}` }, { noErrorTip: true });
+  }
+
+  function getAiKnowledgeDocumentEditable(id: string) {
+    return CDR.get<AiKnowledgeDocumentEditResult>({ url: `${AiKnowledgeDocumentEditUrl}/${id}` });
+  }
+
+  function editAiKnowledgeDocument(id: string, data: AiKnowledgeDocumentEditParams) {
+    return CDR.post<AiKnowledgeDocumentItem>({ url: `${AiKnowledgeDocumentEditUrl}/${id}`, data });
+  }
+
+  function getAiKnowledgeDocumentVersions(data: { documentId: string; current: number; pageSize: number }) {
+    return CDR.post<AiAgentPager<AiKnowledgeDocumentVersionItem>>({
+      url: AiKnowledgeDocumentVersionPageUrl,
+      data,
+    });
+  }
+
+  function getAiKnowledgeDocumentVersionDetail(id: string) {
+    return CDR.get<AiKnowledgeDocumentVersionItem>({ url: `${AiKnowledgeDocumentVersionDetailUrl}/${id}` });
+  }
+
+  function restoreAiKnowledgeDocumentVersion(id: string, expectedRevision: number) {
+    return CDR.post<AiKnowledgeDocumentItem>({
+      url: `${AiKnowledgeDocumentVersionRestoreUrl}/${id}`,
+      data: { expectedRevision },
+    });
+  }
+
+  function deleteAiKnowledgeDocumentVersion(id: string) {
+    return CDR.post<void>({ url: `${AiKnowledgeDocumentVersionDeleteUrl}/${id}` });
   }
 
   function uploadAiKnowledgeDocument(file: File, remark?: string) {
@@ -475,9 +776,24 @@ export default function useAiAgentApi(CDR: CordysAxios) {
   }
 
   return {
+    getQueryKnowledge,
+    saveQueryKnowledge,
+    enableQueryKnowledge,
+    deleteQueryKnowledge,
+    testQueryKnowledge,
+    exportQueryKnowledge,
+    importQueryKnowledge,
+    getAiAgentDatasources,
+    saveAiAgentDatasource,
+    testAiAgentDatasource,
+    getAiAgentDatasourceTables,
+    deleteAiAgentDatasource,
+    uploadAiAgentDatasource,
     chatAiAgent,
+    streamAiAgent,
     chatAiAgentWithAttachments,
     cancelAiAgentChat,
+    exportAiAgentResult,
     transcribeAiAgentAudio,
     getAiAgentAudioTranscription,
     deleteAiAgentSession,
@@ -486,6 +802,12 @@ export default function useAiAgentApi(CDR: CordysAxios) {
     getAiAgentMessages,
     getAiKnowledgeDocumentPage,
     getAiKnowledgeDocumentDetail,
+    getAiKnowledgeDocumentEditable,
+    editAiKnowledgeDocument,
+    getAiKnowledgeDocumentVersions,
+    getAiKnowledgeDocumentVersionDetail,
+    restoreAiKnowledgeDocumentVersion,
+    deleteAiKnowledgeDocumentVersion,
     uploadAiKnowledgeDocument,
     getAiKnowledgeChunkPage,
     reparseAiKnowledgeDocument,

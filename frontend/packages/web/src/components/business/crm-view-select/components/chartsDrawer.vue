@@ -146,7 +146,7 @@
   import useViewChartParams from '@/hooks/useViewChartParams';
   import useViewStore from '@/store/modules/view';
 
-  import { InternalRowData } from 'naive-ui/es/data-table/src/interface';
+  import type { InternalRowData } from 'naive-ui/es/data-table/src/interface';
 
   const props = defineProps<{
     type: TabType;

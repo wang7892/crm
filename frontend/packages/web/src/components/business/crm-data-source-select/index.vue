@@ -68,7 +68,7 @@
   import dataSourceTable from './dataSourceTable.vue';
 
   import type { FormCreateField } from '../crm-form-create/types';
-  import { InternalRowData, RowData, RowKey } from 'naive-ui/es/data-table/src/interface';
+  import type { InternalRowData, RowData, RowKey } from 'naive-ui/es/data-table/src/interface';
 
   interface DataSourceTableProps {
     dataSourceType: FieldDataSourceTypeEnum;

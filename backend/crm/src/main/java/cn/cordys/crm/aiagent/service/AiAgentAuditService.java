@@ -7,6 +7,9 @@ import cn.cordys.crm.aiagent.domain.AiAgentFeedback;
 import cn.cordys.crm.aiagent.domain.AiAgentMessage;
 import cn.cordys.crm.aiagent.domain.AiAgentSession;
 import cn.cordys.crm.aiagent.domain.AiAgentToolCallLog;
+import cn.cordys.crm.aiagent.dto.AiAgentContext;
+import cn.cordys.crm.aiagent.dto.AiAgentConversationSnapshot;
+import cn.cordys.crm.aiagent.dto.AiAgentQueryContinuation;
 import cn.cordys.crm.aiagent.dto.request.AiAgentFeedbackRequest;
 import cn.cordys.crm.aiagent.dto.response.AiAgentMessageResponse;
 import cn.cordys.crm.aiagent.dto.response.AiAgentSessionResponse;
@@ -17,6 +20,7 @@ import cn.cordys.security.SessionUtils;
 import jakarta.annotation.Resource;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -41,6 +45,8 @@ public class AiAgentAuditService {
     @Resource
     private AiAgentInternalMapper aiAgentInternalMapper;
 
+    /** Session creation/update must commit before the remote model call starts. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public AiAgentSession ensureSession(String sessionId, String question, String userId, String orgId) {
         if (StringUtils.isNotBlank(sessionId)) {
             AiAgentSession existing = aiAgentSessionMapper.selectByPrimaryKey(sessionId);
@@ -65,6 +71,7 @@ public class AiAgentAuditService {
         return session;
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public AiAgentMessage saveMessage(String sessionId, String role, String content, String intent,
                                       Object evidence, String userId) {
         long now = System.currentTimeMillis();
@@ -83,6 +90,7 @@ public class AiAgentAuditService {
         return message;
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void saveToolLogs(String messageId, List<AiAgentToolCallDTO> toolCalls, String userId) {
         if (toolCalls == null || toolCalls.isEmpty()) {
             return;
@@ -133,6 +141,52 @@ public class AiAgentAuditService {
                 .toList();
     }
 
+    public AiAgentQueryContinuation loadContinuation(String messageId, String sessionId, AiAgentContext context) {
+        AiAgentSession session = aiAgentSessionMapper.selectByPrimaryKey(sessionId);
+        if (session == null || !Objects.equals(session.getUserId(), context.getUserId())
+                || !Objects.equals(session.getOrganizationId(), context.getOrganizationId())) {
+            throw new IllegalArgumentException("无法继续查看该会话，请重新查询。");
+        }
+        AiAgentMessage message = aiAgentMessageMapper.selectByPrimaryKey(messageId);
+        if (message == null || !Objects.equals(message.getSessionId(), sessionId) || !"assistant".equals(message.getRole())) {
+            throw new IllegalArgumentException("未找到可继续查看的查询，请重新查询。");
+        }
+        Map<String, Object> evidence = JSON.parseToMap(StringUtils.defaultIfBlank(message.getEvidenceJson(), "{}"));
+        Object stored = evidence.get("conversation");
+        AiAgentConversationSnapshot snapshot = stored == null ? null
+                : JSON.parseObject(JSON.toJSONString(stored), AiAgentConversationSnapshot.class);
+        if (snapshot == null || snapshot.getContinuation() == null) {
+            throw new IllegalArgumentException("该结果没有可继续查看的记录，请重新查询。");
+        }
+        if (!AiAgentConversationService.permissionFingerprint(context).equals(snapshot.getPermissionFingerprint())) {
+            throw new IllegalArgumentException("当前数据权限已变化，请重新查询后查看完整结果。");
+        }
+        return snapshot.getContinuation();
+    }
+
+    public cn.cordys.crm.aiagent.dto.response.AiAgentChatResponse loadQueryResponse(String messageId, String sessionId, AiAgentContext context) {
+        AiAgentSession session = aiAgentSessionMapper.selectByPrimaryKey(sessionId);
+        AiAgentMessage message = aiAgentMessageMapper.selectByPrimaryKey(messageId);
+        if (session == null || message == null || !Objects.equals(session.getUserId(), context.getUserId())
+                || !Objects.equals(session.getOrganizationId(), context.getOrganizationId())
+                || !Objects.equals(message.getSessionId(), sessionId) || !"assistant".equals(message.getRole()))
+            throw new IllegalArgumentException("无法访问该查询结果。");
+        var evidence = JSON.parseToMap(StringUtils.defaultIfBlank(message.getEvidenceJson(), "{}"));
+        var snapshot = JSON.parseObject(JSON.toJSONString(evidence.get("conversation")), AiAgentConversationSnapshot.class);
+        if (snapshot == null || !AiAgentConversationService.permissionFingerprint(context).equals(snapshot.getPermissionFingerprint()))
+            throw new IllegalArgumentException("当前数据权限或数据源已变化，请重新查询。");
+        var response = JSON.parseObject(JSON.toJSONString(evidence.get("response")), cn.cordys.crm.aiagent.dto.response.AiAgentChatResponse.class);
+        if (response == null || StringUtils.isBlank(response.getQueryQuestion())) throw new IllegalArgumentException("该记录不是可操作的查询结果。");
+        return response;
+    }
+
+    public String latestContinuationMessage(String sessionId, AiAgentContext context) {
+        return aiAgentInternalMapper.listRecentConversationMessages(sessionId, context.getOrganizationId(),
+                        context.getUserId(), 10).stream()
+                .filter(message -> "assistant".equals(message.getRole())).findFirst()
+                .map(AiAgentMessage::getId).orElse(null);
+    }
+
     public void deleteCurrentUserSession(String sessionId) {
         if (StringUtils.isBlank(sessionId)) {
             return;
@@ -145,6 +199,7 @@ public class AiAgentAuditService {
         aiAgentInternalMapper.deleteSession(sessionId, orgId, userId);
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void touch(String sessionId, String userId) {
         AiAgentSession session = new AiAgentSession();
         session.setId(sessionId);
@@ -233,9 +288,22 @@ public class AiAgentAuditService {
         response.setRole(message.getRole());
         response.setContent(message.getContent());
         response.setIntent(message.getIntent());
-        response.setEvidenceJson(message.getEvidenceJson());
+        response.setEvidenceJson(publicEvidence(message.getEvidenceJson()));
         response.setCreateTime(message.getCreateTime());
         return response;
+    }
+
+    private String publicEvidence(String evidenceJson) {
+        if (StringUtils.isBlank(evidenceJson)) {
+            return evidenceJson;
+        }
+        try {
+            Map<String, Object> evidence = JSON.parseToMap(evidenceJson);
+            evidence.remove("conversation");
+            return JSON.toJSONString(evidence);
+        } catch (RuntimeException ignored) {
+            return evidenceJson;
+        }
     }
 
     public Map<String, Object> responseEvidenceSnapshot(Object response) {

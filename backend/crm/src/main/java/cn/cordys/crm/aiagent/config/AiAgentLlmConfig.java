@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 @EnableConfigurationProperties({
         AiAgentLlmProperties.class,
+        AiAgentConversationProperties.class,
         AiAgentSpeechProperties.class,
         AiAgentBosProperties.class,
         AiAgentSqlProperties.class,

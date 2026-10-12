@@ -12,6 +12,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -46,15 +47,16 @@ class AiAgentKnowledgeParseWorkerTest {
         AiKnowledgeParseJob job = job();
         AiKnowledgeDocument document = document();
         AiKnowledgeChunk chunk = chunk();
+        AiAgentKnowledgeService.PreparedParse prepared = new AiAgentKnowledgeService.PreparedParse(List.of(chunk));
         when(persistenceService.findJob("job-1")).thenReturn(job);
         when(persistenceService.claim("job-1")).thenReturn(
                 new AiAgentKnowledgeParsePersistenceService.ClaimedParseJob(job, document));
         when(knowledgeService.prepareParse(document, "org-1", "user-1"))
-                .thenReturn(new AiAgentKnowledgeService.PreparedParse(List.of(chunk)));
+                .thenReturn(prepared);
 
         worker.process("job-1");
 
-        verify(persistenceService).completeAndActivate("job-1", List.of(chunk));
+        verify(persistenceService).completeAndActivate("job-1", prepared);
         verify(lock).unlock();
     }
 
@@ -68,7 +70,7 @@ class AiAgentKnowledgeParseWorkerTest {
         verify(knowledgeService, never()).prepareParse(
                 org.mockito.ArgumentMatchers.any(), anyString(), anyString());
         verify(persistenceService, never()).completeAndActivate(
-                anyString(), org.mockito.ArgumentMatchers.anyList());
+                anyString(), any(AiAgentKnowledgeService.PreparedParse.class));
     }
 
     @Test
@@ -86,7 +88,7 @@ class AiAgentKnowledgeParseWorkerTest {
         verify(persistenceService).retryOrFail(
                 eq("job-1"), eq("temporary failure"), org.mockito.ArgumentMatchers.contains("temporary failure"));
         verify(persistenceService, never()).completeAndActivate(
-                anyString(), org.mockito.ArgumentMatchers.anyList());
+                anyString(), any(AiAgentKnowledgeService.PreparedParse.class));
     }
 
     private AiKnowledgeParseJob job() {

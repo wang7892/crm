@@ -32,4 +32,10 @@ public class AiKnowledgeDocument extends BaseModel {
     private Integer enabled;
     @Schema(description = "备注")
     private String remark;
+    @Schema(description = "当前生效的知识正文版本 ID")
+    private String activeVersionId;
+    @Schema(description = "当前生效的知识正文版本号")
+    private Integer activeVersion;
+    @Schema(description = "最新知识正文版本号")
+    private Integer latestVersion;
 }
